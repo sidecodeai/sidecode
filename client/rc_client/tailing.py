@@ -74,7 +74,9 @@ class FileTail:
                 continue
             try:
                 row = json.loads(line)
-            except json.JSONDecodeError:
+            except ValueError:
+                # Not JSON, or not even UTF-8: the rest of a row that a mark put
+                # at a file's end landed inside, a character's bytes and all.
                 continue
             if isinstance(row, dict):
                 rows.append(row)

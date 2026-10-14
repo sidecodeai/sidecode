@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
+import threading
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
+from rc_client import attachments
 from rc_client import daemon as daemon_module
 from rc_client.agents.base import SessionRunner
 from rc_client.agents.claude import transcripts
@@ -461,3 +465,68 @@ async def test_a_second_update_while_one_runs_is_a_conflict(
     reply = await update_request(server, "d" * 64, "u8")
     assert reply["error"]["message"] == "an update is already running"
     release.set()
+
+
+# ------------------------------------------------- A49: the attachments sweep
+
+
+@pytest.fixture
+def week_old_attachment() -> Path:
+    """A file an earlier run left, there before the daemon starts."""
+    path = attachments.state_root() / "sess-old" / "aaaaaaaaaaaa" / "shot.png"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"old")
+    moment = time.time() - 8 * 24 * 3600
+    os.utime(path, (moment, moment))
+    return path
+
+
+async def test_the_attachments_are_swept_as_the_daemon_starts(
+    week_old_attachment: Path, running_daemon: tuple[Daemon, FakeGateway]
+) -> None:
+    async def gone() -> None:
+        while week_old_attachment.exists():
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(gone(), timeout=5)
+
+
+async def test_the_sweep_repeats_off_the_event_loop_and_outlives_a_failure(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    threads: list[bool] = []
+
+    def sweep() -> attachments.Swept:
+        threads.append(threading.current_thread() is threading.main_thread())
+        if len(threads) == 1:
+            raise PermissionError("/somewhere/private/holiday.png")
+        return attachments.Swept()
+
+    monkeypatch.setattr(attachments, "sweep", sweep)
+    monkeypatch.setattr(attachments, "SWEEP_INTERVAL", 0.01)
+    daemon = Daemon(
+        Config(
+            gateway_origin="http://127.0.0.1:8787",
+            device_id="dev-1",
+            device_token="tok-1",
+            name="test-device",
+        )
+    )
+    task = asyncio.create_task(daemon._sweep_loop())
+
+    async def repeated() -> None:
+        while len(threads) < 3:
+            await asyncio.sleep(0.01)
+
+    try:
+        await asyncio.wait_for(repeated(), timeout=5)
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        daemon.registry.close()
+    assert not any(threads), "a sweep never runs on the event loop's thread"
+    [failure] = [
+        record for record in caplog.records if record.getMessage() == "attachment sweep failed"
+    ]
+    assert failure.__dict__["context"] == {"error": "PermissionError"}, "and names no file"

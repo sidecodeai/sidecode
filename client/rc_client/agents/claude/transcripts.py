@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ...attachments import split_prompt
 from ...diffs import from_tool_input
 from ...models import now_ms
 from ...sessions.limits import LimitStop, claude_row_limit
@@ -484,17 +485,17 @@ class TranscriptTailer:
         self.limit = None
 
     def _publish(self, row: dict[str, Any], text: str, source: str) -> list[Emit]:
+        """The bubble, with the paths of a device's attachments taken off the words (A49)."""
         self.last_message = text
-        return [
-            Emit(
-                "user_message",
-                {
-                    "block_id": str(row.get("uuid") or f"user:{now_ms()}"),
-                    "text": text,
-                    "source": source,
-                },
-            )
-        ]
+        said, files = split_prompt(text)
+        fields: dict[str, Any] = {
+            "block_id": str(row.get("uuid") or f"user:{now_ms()}"),
+            "text": said,
+            "source": source,
+        }
+        if files:
+            fields["attachments"] = files
+        return [Emit("user_message", fields)]
 
     def _assistant(self, row: dict[str, Any]) -> list[Emit]:
         """One content block of one assistant message, and whether it ended the turn.

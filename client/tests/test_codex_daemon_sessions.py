@@ -20,6 +20,7 @@ from rc_client.procscan import OpenPaths, Proc, Scan
 from rc_client.registry import Registry
 from rc_client.sessions.hub import SessionEntry, SessionHub
 from tests.fake_codex_daemon import FakeDaemon, FakeTerminals
+from tests.helpers import drained
 
 THREAD = "01a08bde-23d6-7262-a563-68dcfb2c4b59"
 
@@ -1590,6 +1591,7 @@ async def test_a_scan_that_could_not_finish_is_never_permission_to_restart(
 
 
 CHILD = "01a08c41-77e2-7d10-9f34-2b5c8ae61d02"
+INTERRUPT_REQUEST = "5e0c2a9d-71b4-4f36-a8e2-3d9b6c1f0a47"
 
 
 def child_row(parent: str = THREAD, thread_id: str = CHILD, **extra: Any) -> dict[str, Any]:
@@ -1840,6 +1842,44 @@ async def test_stopping_a_turn_its_subagents_hold_open_ends_it(harness: Harness)
     assert harness.hub.entry(THREAD).session.state == "idle"
     # There is no turn on this thread to stop: the parent's own turn is over.
     assert harness.daemon.sent("turn/interrupt") == []
+
+
+async def test_interrupt_and_send_on_a_turn_its_subagents_hold_open_sends(
+    harness: Harness,
+) -> None:
+    """Stopping the held turn ends it inline, inside the send that holds the lock.
+
+    The turn's end only schedules the drain, so the send goes on to deliver
+    its own message, and the one already held waits for that turn (A43).
+    """
+    await working_parent(harness)
+    await harness.daemon.notify(
+        "turn/completed", {"threadId": THREAD, "turn": {"id": "turn-1", "status": "completed"}}
+    )
+    await asyncio.sleep(0.1)
+    queued = await harness.hub.send(
+        {"id": STEER_REQUEST, "session_id": THREAD, "text": "and this too", "mode": "queue"}
+    )
+    assert queued["accepted"] == "queued"
+
+    result = await asyncio.wait_for(
+        harness.hub.send(
+            {
+                "id": INTERRUPT_REQUEST,
+                "session_id": THREAD,
+                "text": "this instead",
+                "mode": "interrupt",
+            }
+        ),
+        timeout=2,
+    )
+
+    assert result == {"accepted": "sent"}
+    assert harness.events("turn_completed")[-1]["stop_reason"] == "interrupted"
+    assert harness.daemon.sent("turn/start")[-1]["input"][0]["text"] == "this instead"
+    entry = harness.hub.entry(THREAD)
+    await drained(entry)
+    assert [item["id"] for item in entry.queue] == [STEER_REQUEST]
 
 
 async def test_a_subagent_that_says_nothing_for_long_enough_lets_the_turn_end(

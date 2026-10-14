@@ -15,8 +15,18 @@ import asyncio
 import contextlib
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
+from ...attachments import (
+    Attachment,
+    describe,
+    drop,
+    is_session_file,
+    store,
+    wire_attachments,
+    without_paths,
+)
 from ...child_env import sanitized_child_env
 from ...errors import RcError
 from ...logging_setup import logger
@@ -24,12 +34,19 @@ from ...models import UNSET, Command, SpeedSetting, now_ms
 from ...sessions.channel import SessionChannel
 from ..base import Emit
 from . import cursor
-from .acp import GrokAgent, GrokTransport
+from .acp import GrokAgent, GrokError, GrokTransport
 from .catalog import GrokCatalog
 from .commands import advertised, recall, remember
 from .echoes import EchoLog
 from .leader import LeaderClient, SessionRoute
-from .translate import SETTINGS, GrokTranslator, config_settings, session_update, stop_reason
+from .translate import (
+    SETTINGS,
+    GrokTranslator,
+    config_settings,
+    session_update,
+    stop_reason,
+    text_of,
+)
 
 log = logger("rc_client.grok")
 
@@ -47,6 +64,16 @@ PERMISSION_REQUEST = "session/request_permission"
 ALWAYS_APPROVE = "enable-always-approve"
 # What an approval that somebody else answered resolves as (A28, as for Codex).
 ELSEWHERE = "elsewhere"
+# The JSON-RPC errors that say a request was refused as it stood: it was never
+# taken up, so a prompt answered with one was never read either.
+REFUSED_REQUEST = (-32600, -32601, -32602)
+# The one option an attachment read is answered with: this call, nothing more.
+ALLOW_ONCE = "allow-once"
+# What Grok's own `read_file` may carry in `rawInput`: where the file is, how
+# much of it to read, and the variant it names itself by. A key outside these
+# is something this device does not understand, and is asked about.
+READ_PATH_KEYS = ("target_file", "file_path", "path")
+READ_OTHER_KEYS = ("variant", "pages", "format", "offset", "limit")
 
 # ACP option kinds, and how firmly each reads in an app.
 _OPTION_STYLES = {
@@ -100,6 +127,8 @@ class GrokRunner:
         )
         self._echoes = EchoLog()
         self._turn: asyncio.Task[None] | None = None
+        # The turn-end callback a finished prompt task set going.
+        self._turn_over: asyncio.Future[None] | None = None
         self._turn_started_at = 0
         self._interrupting = False
         self._closed = False
@@ -112,6 +141,8 @@ class GrokRunner:
         # from: everything at or below it is history the apps already have.
         self._cursor = 0
         self._resume_from = 0
+        # The prompt most recently sent, which hears whatever Grok says next.
+        self._prompt: _Prompt | None = None
 
     # ------------------------------------------------------------- lifecycle
 
@@ -306,9 +337,13 @@ class GrokRunner:
         self._advance(params)
         if self._replayed(params):
             return
+        if self._prompt is not None:
+            self._prompt.heard = True
         if await self._interaction(method, params):
             return
         if self._note_commands(method, params):
+            return
+        if self._own_echo(method, params):
             return
         completion: dict[str, Any] | None = None
         for emit in self._translator.notification(method, params):
@@ -342,16 +377,22 @@ class GrokRunner:
         index = cursor.index_of(params)
         return bool(index) and index <= self._resume_from
 
-    async def _terminal_message(self, emit: Emit) -> None:
-        """A prompt somebody typed, unless it is the echo of one we sent.
+    def _own_echo(self, method: str, params: dict[str, Any]) -> bool:
+        """Whether this row is the leader's echo of a prompt this device sent.
 
         Every client of the leader sees every prompt and none of them says who
         sent it, so the device drops the echo of its own and publishes the rest
-        as the terminal messages they are.
+        as the terminal messages they are. The echo is matched before the
+        translator takes the attachment paths off it: the prompt as sent, paths
+        and all, is the closest thing to an author the row carries (A49).
         """
-        text = str(emit.fields.get("text") or "")
-        if self._echoes.claim(text):
-            return
+        found = session_update(method, params)
+        if found is None or found[0] != "user_message_chunk":
+            return False
+        return self._echoes.claim(text_of(found[1].get("content")))
+
+    async def _terminal_message(self, emit: Emit) -> None:
+        """A prompt somebody typed at the TUI: it starts a turn there."""
         await self._apply(emit)
         if self.channel.session.turn is None:
             self._turn_started_at = now_ms()
@@ -418,7 +459,9 @@ class GrokRunner:
         await self.channel.end_turn(
             reason, duration, dict(usage) if isinstance(usage, dict) else None
         )
-        if self._on_turn_end is not None:
+        if self._on_turn_end is not None and not self.local_turn:
+            # A prompt of this device's is only over once its request has
+            # answered, which `_prompt_answered` reports.
             await self._on_turn_end()
 
     # --------------------------------------------------------------- driving
@@ -454,40 +497,67 @@ class GrokRunner:
         transport = self._transport
         if transport is None or self._session_id is None:
             raise RcError("agent_unavailable", "the Grok session is not connected")
-        if attachments:
-            # `promptCapabilities.image` is false on this build, so there is
-            # nowhere for a file to go; the hub refuses before this is reached.
-            raise RcError("unsupported", "grok sessions cannot carry attachments")
+        # `promptCapabilities.image` is false on this build, so a file travels
+        # as a path in the prompt and Grok opens it with `read_file` (A49).
+        written = await store(self.channel.session.session_id, attachments)
+        prompt = describe(text, written)
+        try:
+            await self._announce(text, prompt, written, source, block_id)
+        except Exception:
+            await drop(written)
+            raise
+        self._prompt = sent = _Prompt(written)
+        # `session/prompt` only answers when the turn is over, so it runs as a
+        # task: the hub's caller must come back as soon as the prompt is in.
+        self._turn = asyncio.create_task(self._run_turn(transport, prompt, sent), name="grok-turn")
+        self._turn.add_done_callback(self._prompt_answered)
+
+    def _prompt_answered(self, turn: asyncio.Task[None]) -> None:
+        """The prompt's task is done, so the session is idle for its queue at last.
+
+        Its turn ended inside the task, usually on the `turn_completed` that
+        comes before the answer, while the runner still counted as busy; a
+        queue drained then would have found nothing it could send (A43). A
+        task cancelled by `close` ends nothing: the session is going.
+        """
+        if turn.cancelled() or self._on_turn_end is None:
+            return
+        self._turn_over = asyncio.ensure_future(self._on_turn_end())
+
+    async def _announce(
+        self, text: str, prompt: str, written: list[Attachment], source: str, block_id: str | None
+    ) -> None:
+        """The bubble and the turn's start, before Grok is asked anything."""
         if self.attached:
             # The leader will echo this prompt back to every client, this one
             # included; the bubble below is the one the apps keep.
-            self._echoes.remember(text)
+            self._echoes.remember(prompt)
         await self.channel.emit(
             "user_message",
             block_id=block_id or f"user:{uuid.uuid4()}",
             text=text,
             source=source,
+            **({"attachments": wire_attachments(written)} if written else {}),
         )
         self._turn_started_at = now_ms()
         await self.channel.begin_turn(source)
-        # `session/prompt` only answers when the turn is over, so it runs as a
-        # task: the hub's caller must come back as soon as the prompt is in.
-        self._turn = asyncio.create_task(self._run_turn(transport, text), name="grok-turn")
 
-    async def _run_turn(self, transport: GrokTransport, text: str) -> None:
+    async def _run_turn(self, transport: GrokTransport, prompt: str, sent: _Prompt) -> None:
         try:
             result = await transport.request(
                 "session/prompt",
-                {"sessionId": self._session_id, "prompt": [{"type": "text", "text": text}]},
+                {"sessionId": self._session_id, "prompt": [{"type": "text", "text": prompt}]},
                 timeout=None,
             )
         except asyncio.CancelledError:
             raise
-        except RcError as exc:
-            await self._fail_turn(exc.message)
-            return
         except Exception as exc:
-            await self._fail_turn(str(exc))
+            if sent.refused(exc):
+                # Grok turned the prompt down as it stood and said nothing of
+                # it, so nothing will open its files (A49). Any other failure
+                # may come after it read them; those wait for the age limit.
+                await drop(sent.written)
+            await self._fail_turn(exc.message if isinstance(exc, RcError) else str(exc))
             return
         # The `turn_completed` notification normally ends the turn; this closes
         # one the agent answered without sending it.
@@ -503,7 +573,8 @@ class GrokRunner:
             return
         for emit in self._translator.close_streams():
             await self._apply(emit)
-        await self.channel.error(message[:2000])
+        # Paths off before the cut, so no half of one survives it (A49).
+        await self.channel.error(without_paths(message)[:2000])
         await self._finish_turn({"stop_reason": "error", "duration_ms": 0})
 
     async def interrupt(self) -> bool:
@@ -647,10 +718,14 @@ class GrokRunner:
         raise RcError("unsupported", f"unhandled grok request {method}")
 
     async def _handle_permission(self, params: dict[str, Any]) -> dict[str, Any]:
-        request_id = str(uuid.uuid4())
-        options = _approval_options(params.get("options"))
         call = params.get("toolCall")
         call = call if isinstance(call, dict) else {}
+        allow = _allow_once(params.get("options"))
+        if allow and self._reads_session_file(call):
+            # A49: an attachment the prompt named, which is the session's own.
+            return {"outcome": {"outcome": "selected", "optionId": allow}}
+        request_id = str(uuid.uuid4())
+        options = _approval_options(params.get("options"))
         tool_call_id = str(call.get("toolCallId") or "")
         if tool_call_id:
             self._tool_calls[tool_call_id] = request_id
@@ -699,6 +774,26 @@ class GrokRunner:
             return {"outcome": {"outcome": "cancelled"}}
         return {"outcome": {"outcome": "selected", "optionId": option_id}}
 
+    def _reads_session_file(self, call: dict[str, Any]) -> bool:
+        """Whether the call is Grok's own `read_file` of this session's files alone (A49).
+
+        Every path the call names, in `rawInput` and in `locations`, has to be
+        one of them; another tool, an unknown key or one path elsewhere means
+        the request is asked about as any other.
+        """
+        raw = call.get("rawInput")
+        named = _tool_input(call)
+        if not _is_read_file(call) or not isinstance(raw, dict) or named is None:
+            return False
+        known = {*READ_PATH_KEYS, *READ_OTHER_KEYS}
+        if not set(raw) <= known or not set(named) <= known:
+            return False
+        locations = call.get("locations") or []
+        paths = [given[key] for given in (raw, named) for key in READ_PATH_KEYS if key in given]
+        paths += [place.get("path") if isinstance(place, dict) else None for place in locations]
+        session_id = self.channel.session.session_id
+        return bool(paths) and all(is_session_file(session_id, path) for path in paths)
+
     async def _wait_for(self, request_id: str) -> dict[str, Any] | None:
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         self._pending[request_id] = future
@@ -724,6 +819,19 @@ class GrokRunner:
     async def answer(self, request_id: str, answers: dict[str, Any]) -> bool:
         """Grok asks its questions through a tool, not through ACP; nothing waits here."""
         return False
+
+
+@dataclass(slots=True)
+class _Prompt:
+    """One prompt that went out, its files, and whether Grok has said anything since."""
+
+    written: list[Attachment]
+    heard: bool = False
+
+    def refused(self, error: Exception) -> bool:
+        """Whether the prompt's error says Grok never took it up."""
+        code = error.rpc_code if isinstance(error, GrokError) else None
+        return not self.heard and code in REFUSED_REQUEST
 
 
 def _approval_options(options: Any) -> list[dict[str, str]]:
@@ -759,6 +867,40 @@ def _approval_options(options: Any) -> list[dict[str, str]]:
     if "danger" not in styles:
         styled[-1]["style"] = "danger"
     return styled
+
+
+def _is_read_file(call: dict[str, Any]) -> bool:
+    """Grok's own `read_file`, by the name `_meta` gives it or else by its variant."""
+    if call.get("kind") not in (None, "read"):
+        return False
+    meta = call.get("_meta")
+    tool = meta.get("x.ai/tool") if isinstance(meta, dict) else None
+    raw = call.get("rawInput")
+    variant = raw.get("variant") if isinstance(raw, dict) else None
+    if tool is None:
+        return variant == "ReadFile"
+    builtin = isinstance(tool, dict) and tool.get("namespace") == "grok_build"
+    return builtin and tool.get("name") == "read_file" and variant in (None, "ReadFile")
+
+
+def _tool_input(call: dict[str, Any]) -> dict[str, Any] | None:
+    """The input `_meta["x.ai/tool"]` repeats, empty when absent and `None` when unreadable."""
+    meta = call.get("_meta")
+    tool = meta.get("x.ai/tool") if isinstance(meta, dict) else None
+    named = tool.get("input", {}) if isinstance(tool, dict) else {}
+    return named if isinstance(named, dict) else None
+
+
+def _allow_once(options: Any) -> str | None:
+    """Grok's `allow-once`, if offered; never another option of the same kind.
+
+    `enable-always-approve` calls itself `allow_once` too, so the kind is not
+    enough to tell the two apart.
+    """
+    for option in options or []:
+        if isinstance(option, dict) and (option.get("optionId") or option.get("id")) == ALLOW_ONCE:
+            return ALLOW_ONCE
+    return None
 
 
 def _permission_title(call: dict[str, Any]) -> str:

@@ -9,7 +9,7 @@ import signal
 import socket
 from typing import Any
 
-from . import __version__
+from . import __version__, attachments
 from . import config as config_module
 from .agents.codex.daemon.service import CodexDaemonService
 from .agents.codex.runtime import resolve_binary as resolve_codex
@@ -80,6 +80,7 @@ class Daemon:
         self._refresh_task: asyncio.Task[None] | None = None
         self._lag_task: asyncio.Task[None] | None = None
         self._update_task: asyncio.Task[None] | None = None
+        self._sweep_task: asyncio.Task[None] | None = None
 
     # ------------------------------------------------------------- lifecycle
 
@@ -106,6 +107,7 @@ class Daemon:
         self.hub.resumes.start()
         self._refresh_task = asyncio.create_task(self._refresh_loop())
         self._lag_task = asyncio.create_task(watch_loop_lag(), name="loop-lag")
+        self._sweep_task = asyncio.create_task(self._sweep_loop(), name="attachment-sweep")
         try:
             await self._wait_for_stop()
         finally:
@@ -147,7 +149,7 @@ class Daemon:
                     loop.remove_signal_handler(signal_number)
 
     async def shutdown(self) -> None:
-        for name in ("_refresh_task", "_lag_task", "_update_task"):
+        for name in ("_refresh_task", "_lag_task", "_update_task", "_sweep_task"):
             task: asyncio.Task[None] | None = getattr(self, name)
             if task is not None:
                 task.cancel()
@@ -178,6 +180,19 @@ class Daemon:
                 await self._publish(
                     {"type": "agents.updated", "agents": [info.to_dict() for info in agents]}
                 )
+
+    async def _sweep_loop(self) -> None:
+        """Keep the attachments within their age and size, from start-up on (A49).
+
+        A failure is reported by type alone: what a file error says names the
+        file, and the file is something the person sent.
+        """
+        while True:
+            try:
+                await asyncio.to_thread(attachments.sweep)
+            except Exception as exc:
+                log.warning("attachment sweep failed", error=type(exc).__name__)
+            await asyncio.sleep(attachments.SWEEP_INTERVAL)
 
     async def _codex_mode_changed(self) -> None:
         """The shared daemon appeared: apps learn about it through `agents.updated`."""

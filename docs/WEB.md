@@ -785,7 +785,7 @@ over to send" and "Device offline".
 | --- | --- |
 | Composer | Enabled, exactly as for `remote`. Send label and queue are unchanged |
 | Take over | Never shown. The device is already attached |
-| Stop | Shown only when the agent lists the `interrupt` capability **and** the device reports `shared_interrupt`. A Claude channel cannot interrupt, so Stop and "Interrupt & send" both disappear |
+| Stop | Shown only when the agent lists the `interrupt` capability **and** the device reports `shared_interrupt`. A Claude channel reports it since A42, because the device types Escape into the terminal; where it is false, Stop and "Interrupt & send" both disappear |
 | Model / permission mode / effort | Shown when the agent reports `shared_settings`; otherwise not rendered at all, and nothing explains their absence. The title is always editable |
 | Attachments | Shown when the agent reports `shared_attachments`; otherwise the button and its file input are not rendered, and pasted files are ignored quietly |
 | Attached bar | None. The header's "terminal · attached" is the only place the attachment is named |
@@ -798,7 +798,7 @@ agent-specific logic:
 
 | Agent | `attach` | `shared_interrupt` | `shared_settings` | `shared_attachments` |
 | --- | --- | --- | --- | --- |
-| Claude, through the channel shim | `channel` | false | false | false |
+| Claude, through the channel shim | `channel` | true (A42) | true, `model` and `effort` only (A40) | true (A49) |
 | Codex, through the app-server daemon | `daemon` | true | true | true |
 
 Sending uses the protocol's own modes. On a running shared session `auto` steers when the agent
@@ -860,7 +860,7 @@ The one line under the hint is worded per `attach` (`src/features/chat/attach.ts
 `leader` (A28) "Run rc-client grok setup on the device, then restart Grok to attach its sessions";
 with `attach_ready` true every kind says the CLI was started without the attachment and must be
 restarted. A shared Grok session needs nothing of its own: `shared_interrupt` shows Stop,
-`shared_settings` the pickers, and `shared_attachments: false` hides the attachment button.
+`shared_settings` the pickers, and `shared_attachments` the attachment button (A49).
 
 ### Settings the device can type (A40)
 

@@ -335,17 +335,19 @@ branching on the agent id:
 
 | Agent | `attach` | `shared_interrupt` | `shared_settings` | `shared_attachments` |
 | --- | --- | --- | --- | --- |
-| Claude, through the channel shim and its pseudo-terminal | `channel` | false | true — `model` and `effort` only (`shared_settings_keys`, A40) | false |
+| Claude, through the channel shim and its pseudo-terminal | `channel` | true — Escape typed into the terminal (A42) | true — `model` and `effort` only (`shared_settings_keys`, A40) | true — files the injected words name (A49) |
 | Codex, through the app-server daemon | `daemon` | true | true | true |
 | pi, through the device's extension | `extension` | true | true | true |
-| Grok Build, through its leader process | `leader` | true | true | false |
+| Grok Build, through its leader process | `leader` | true | true | true — files the prompt names (A49) |
 
 `shared_interrupt` maps to `turn/interrupt`, which works whoever started the turn. `shared_settings`
 maps to `thread/settings/update`, so changing the model, the permission mode or the reasoning effort
 from a phone changes the thread for everyone attached to it. `shared_attachments` is true because the
-daemon accepts image inputs. And because Codex advertises `steer`, a message sent into a running
-shared turn joins that turn through `turn/steer` instead of waiting for it — the one thing an
-attached Claude session cannot do. A deliberately queued message on a Codex session waits in the
+daemon accepts image inputs; a Claude channel and Grok's leader take no image, so the device writes
+each file to disk and the words the agent receives name it, and the agent opens it itself (A49).
+And because Codex advertises `steer`, a message sent into a running shared turn joins that turn
+through `turn/steer` instead of waiting for it — the one thing an attached Claude session cannot
+do. A deliberately queued message on a Codex session waits in the
 queue as it does anywhere else (A19). `attach_ready` is set from a real handshake on the socket, not from the
 socket file existing, because a stale socket is exactly the case the hint text exists for.
 
@@ -739,7 +741,7 @@ deliberately absent: a device is one person's machine.
 
 ## The contract
 
-`protocol/PROTOCOL.md` is normative. Its amendments (A1…A47, dated at the end of it) are all part
+`protocol/PROTOCOL.md` is normative. Its amendments (A1…A49, dated at the end of it) are all part
 of the frozen contract; the first eleven, which shaped the architecture above, are:
 
 | Amendment | Ruling |

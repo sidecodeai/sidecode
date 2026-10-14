@@ -8,6 +8,16 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from claude_agent_sdk import (
+    AssistantMessage,
+    ResultMessage,
+    StreamEvent,
+    TextBlock,
+    ThinkingBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    UserMessage,
+)
 
 from rc_client.agents.claude import transcripts
 from rc_client.agents.claude.adapter import ClaudeRunner
@@ -23,8 +33,9 @@ from rc_client.config import (
 from rc_client.models import Session
 from rc_client.registry import Registry
 from rc_client.sessions.channel import SessionChannel
+from rc_client.sessions.hub import SessionHub
 from rc_client.sessions.mirror import MirrorService
-from tests.test_hub import FakeRunner, add_session, build_hub
+from tests.test_hub import FakeRunner, add_session, agent_info, build_hub
 
 
 async def _publish(frame: dict[str, Any]) -> None:
@@ -148,6 +159,60 @@ async def test_a_terminal_session_is_still_adopted(
     mirror._adopt_claude(transcripts.discover())
     assert "terminal-1" in mirror._claude
     assert hub.entries["terminal-1"].session.origin == "terminal"
+    registry.close()
+
+
+def _append_rows(path: Path, *texts: str) -> None:
+    """User rows as a CLI would add them, one per text."""
+    with path.open("a", encoding="utf-8") as handle:
+        for text in texts:
+            row = {"type": "user", "uuid": f"row-{text}", "message": {"content": text}}
+            handle.write(json.dumps(row) + "\n")
+
+
+def _terminal_words(frames: list[dict[str, Any]]) -> list[str]:
+    return [
+        frame["event"]["text"]
+        for frame in frames
+        if frame.get("type") == "session.event"
+        and frame["event"]["kind"] == "user_message"
+        and frame["event"]["source"] == "terminal"
+    ]
+
+
+async def test_a_terminal_session_the_device_drove_is_not_read_again_after_a_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What the runner published while it drove the session is not the terminal's."""
+    projects = tmp_path / "projects"
+    workdir = tmp_path / "repo"
+    workdir.mkdir()
+    path = _write_transcript(projects, "terminal-1", workdir)
+    monkeypatch.setattr(transcripts, "PROJECTS_DIR", projects)
+    hub, frames, registry = build_hub(tmp_path)
+    mirror = MirrorService(hub)
+    mirror._adopt_claude(transcripts.discover())
+    await mirror.tail_once()
+    assert _terminal_words(frames) == ["hello from the terminal"]
+
+    entry = hub.entries["terminal-1"]
+    entry.runner = FakeRunner(entry.channel)
+    _append_rows(path, "sent from the app")
+    await mirror.tail_once()
+    entry.runner = None
+    _append_rows(path, "typed after the device let go")
+
+    again: list[dict[str, Any]] = []
+
+    async def publish(frame: dict[str, Any]) -> None:
+        again.append(frame)
+
+    restarted = SessionHub(registry, publish, "dev-1", agent_info)
+    restarted.load()
+    revived = MirrorService(restarted)
+    revived._adopt_claude(transcripts.discover())
+    await revived.tail_once()
+    assert _terminal_words(again) == ["typed after the device let go"]
     registry.close()
 
 
@@ -541,3 +606,131 @@ async def test_a_codex_steer_the_turn_never_read_lands_at_its_end(tmp_path: Path
     order = kinds(frames)
     assert order.index("user_message") < order.index("notice") < order.index("turn_completed")
     runner.channel.registry.close()
+
+
+# ----------------------------------------------------- one answer, one block
+
+# The two API messages of a turn that reads an image before it answers.
+READ_MESSAGE = "msg_read"
+ANSWER_MESSAGE = "msg_answer"
+
+
+def sdk_event(kind: str, **fields: Any) -> StreamEvent:
+    return StreamEvent(uuid="u", session_id="s1", event={"type": kind, **fields})
+
+
+def block_started(index: int, kind: str) -> StreamEvent:
+    return sdk_event("content_block_start", index=index, content_block={"type": kind})
+
+
+def block_delta(index: int, kind: str, **payload: Any) -> StreamEvent:
+    return sdk_event("content_block_delta", index=index, delta={"type": kind, **payload})
+
+
+def finished(block: Any, message_id: str) -> AssistantMessage:
+    """One block of a finished message, handed over alone as the CLI does."""
+    return AssistantMessage(content=[block], model="claude-haiku-5-5", message_id=message_id)
+
+
+def hidden_thought(message_id: str) -> list[Any]:
+    """A thinking block whose words the CLI never shows: empty deltas, a signature."""
+    return [
+        block_started(0, "thinking"),
+        block_delta(0, "thinking_delta", thinking=""),
+        block_delta(0, "thinking_delta", thinking=""),
+        block_delta(0, "signature_delta", signature="sig"),
+        finished(ThinkingBlock(thinking="", signature="sig"), message_id),
+        sdk_event("content_block_stop", index=0),
+    ]
+
+
+def result(output_tokens: int) -> ResultMessage:
+    return ResultMessage(
+        subtype="success",
+        duration_ms=3401,
+        duration_api_ms=3000,
+        is_error=False,
+        num_turns=2,
+        session_id="s1",
+        usage={"input_tokens": 4, "output_tokens": output_tokens},
+    )
+
+
+def image_turn(path: str) -> list[Any]:
+    """A turn as the SDK delivers it, message for message: think, Read, think, answer at 1."""
+    image = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": ""}}
+    read = ToolUseBlock(id="toolu_read", name="Read", input={"file_path": path})
+    return [
+        sdk_event("message_start", message={"id": READ_MESSAGE}),
+        *hidden_thought(READ_MESSAGE),
+        block_started(1, "tool_use"),
+        block_delta(1, "input_json_delta", partial_json=json.dumps({"file_path": path})),
+        finished(read, READ_MESSAGE),
+        sdk_event("content_block_stop", index=1),
+        sdk_event("message_delta"),
+        sdk_event("message_stop"),
+        UserMessage(content=[ToolResultBlock(tool_use_id="toolu_read", content=[image])]),
+        sdk_event("message_start", message={"id": ANSWER_MESSAGE}),
+        *hidden_thought(ANSWER_MESSAGE),
+        block_started(1, "text"),
+        block_delta(1, "text_delta", text="7391"),
+        finished(TextBlock(text="7391"), ANSWER_MESSAGE),
+        sdk_event("content_block_stop", index=1),
+        sdk_event("message_delta"),
+        sdk_event("message_stop"),
+        result(290),
+    ]
+
+
+def plain_turn() -> list[Any]:
+    """A turn with no thinking: the answer at index 0."""
+    return [
+        sdk_event("message_start", message={"id": "msg_ready"}),
+        block_started(0, "text"),
+        block_delta(0, "text_delta", text="READY"),
+        finished(TextBlock(text="READY"), "msg_ready"),
+        sdk_event("content_block_stop", index=0),
+        sdk_event("message_delta"),
+        sdk_event("message_stop"),
+        result(4),
+    ]
+
+
+async def replay(tmp_path: Path, turn: list[Any]) -> list[dict[str, Any]]:
+    """What the apps receive for one turn, coalescing included."""
+    frames: list[dict[str, Any]] = []
+    runner = claude_runner(tmp_path, frames)
+    await runner.channel.begin_turn("remote")
+    for message in turn:
+        await runner._consume(message)
+    await runner.channel.close()
+    runner.channel.registry.close()
+    return [frame["event"] for frame in frames if frame.get("type") == "session.event"]
+
+
+async def test_an_answer_after_reading_an_image_is_one_finished_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The answer once arrived finished under one block and still streaming under another."""
+    monkeypatch.setattr(transcripts, "PROJECTS_DIR", tmp_path / "projects")
+    events = await replay(tmp_path, image_turn("/state/attachments/s1/0a1b2c3d4e5f/image.png"))
+
+    answer = [event for event in events if event["kind"] == "assistant_text"]
+    assert len({event["block_id"] for event in answer}) == 1, "one answer, one block"
+    assert (answer[-1]["text"], answer[-1]["done"]) == ("7391", True)
+    assert [event["kind"] for event in events].count("thinking") == 0, "an unshown thought"
+    assert [event["kind"] for event in events].count("turn_completed") == 1
+
+
+async def test_a_plain_answer_is_still_one_streamed_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(transcripts, "PROJECTS_DIR", tmp_path / "projects")
+    events = await replay(tmp_path, plain_turn())
+
+    answer = [event for event in events if event["kind"] == "assistant_text"]
+    assert [(event.get("delta"), event["done"]) for event in answer] == [
+        ("READY", False),
+        (None, True),
+    ]
+    assert len({event["block_id"] for event in answer}) == 1

@@ -22,7 +22,7 @@ from rc_client.registry import Registry
 from rc_client.sessions.channel import SessionChannel
 from rc_client.sessions.hub import SessionEntry
 from rc_client.tailing import READ_CHUNK, FileTail
-from tests.helpers import event_validator
+from tests.helpers import drain, event_validator
 from tests.test_hub import FakeRunner, add_session, build_hub
 
 # ------------------------------------------------------------------ finding 2
@@ -297,7 +297,7 @@ async def test_queued_messages_keep_their_attachments(tmp_path: Path) -> None:
     ]
 
     await runner.finish()
-    await hub.drain_queue(entry)
+    await drain(hub, entry)
     assert runner.attachments[-1] == [attachment]
     registry.close()
 

@@ -75,9 +75,10 @@ EFFORT_COMMAND = "/effort"
 COMPACT_COMMAND = "/compact"
 
 # What the CLI prints when it has taken the change, matched loosely: the rest
-# of the sentence says where it was saved, which is what we are avoiding.
+# of the sentence says where it was saved, which is what we are avoiding. The
+# effort answer goes on to name the level, and that has to be the one asked for.
 MODEL_CONFIRMS = "set model"
-EFFORT_CONFIRMS = "set effort"
+EFFORT_CONFIRMS = "set effort level to"
 
 # Our model ids against the words the picker draws. The rows carry more than
 # the name ("Opus (1M context)", "Default (recommended)"), so only the first
@@ -99,17 +100,24 @@ _ROW = re.compile(rf"(\d)\.[ \t]+({_NAMES})\b")
 # (`> Opus (1M context)`), so the number is optional and the name decides.
 _CURRENT = re.compile(rf"{HIGHLIGHT}[ \t\u00a0]{{0,4}}(?:\d\.[ \t]{{0,4}})?({_NAMES})\b")
 
-# The slider's levels, left to right. It has one more than the device offers,
-# so the walk is "all the way left, then right to the level asked for".
+# The slider's levels, left to right. Claude Code 2.1.278 drew one more past
+# them; 2.1.299 draws these five, fewer for a model whose effort is capped, and
+# keeps Ultracode apart as a toggle on Tab, which the device never presses. Both
+# stop at their ends, so the walk is "all the way left, then right to the level
+# asked for", and a capped slider stops short, which its answer then says.
 EFFORT_ORDER = ("low", "medium", "high", "xhigh", "max")
 EFFORT_STEPS = 6
-# The one line of the slider's footer that nothing else prints.
-EFFORT_HINT = "s for this session only"
+# What only the open slider draws, old and new. The TUI rewrites only the cells
+# that changed and the screen text marks each jump with one space, so a word the
+# screen already half showed reads "se sion": any one of these whole will do.
+EFFORT_HINTS = ("\u2190/\u2192 to adjust", "s for this session only", "Smarter", "Ultracode")
 # On a conversation with cached history the CLI asks once more before it
 # switches ("Switch model? … 1. Yes, switch to … 2. No, go back"), with the yes
 # row highlighted. A fresh session never asks, so a scratch-home check never
-# meets it. Enter takes the highlighted yes.
+# meets it. Enter takes the highlighted yes. 2.1.299 asks the same about a new
+# effort level, under a title of its own.
 SWITCH_PROMPT = "Switch model?"
+EFFORT_PROMPTS = ("Change effort level?", "Yes, switch to")
 PROMPT_TIMEOUT = 1.5
 
 
@@ -165,6 +173,11 @@ def read_picker(text: str) -> Picker:
     return Picker(rows=rows, current=found[-1] if found else None)
 
 
+def _shows(text: str, marks: tuple[str, ...]) -> bool:
+    """Whether the screen shows any of these, whole."""
+    return any(mark in text for mark in marks)
+
+
 class Typist:
     """One script of keystrokes into one terminal, from one request."""
 
@@ -186,7 +199,7 @@ class Typist:
             await self.link.keys(MODEL_COMMAND + ENTER, clear=True)
             await self._walk_to(name)
             await self.link.keys(THIS_SESSION, clear=True)
-            await self._accept(SWITCH_PROMPT)
+            await self._accept((SWITCH_PROMPT,))
             await self._confirmed(pending)
         except RcError:
             await self._give_up(pending)
@@ -198,12 +211,13 @@ class Typist:
         if level not in EFFORT_ORDER:
             raise RcError("bad_request", f"unknown effort for claude: {level}")
         await self._gate()
-        pending = self.control.expect(self.entry, EFFORT_COMMAND, EFFORT_CONFIRMS)
+        pending = self.control.expect(self.entry, EFFORT_COMMAND, f"{EFFORT_CONFIRMS} {level}")
         try:
             await self.link.keys(EFFORT_COMMAND + ENTER, clear=True)
-            await self._wait_for_text(EFFORT_HINT, "the effort slider did not open")
+            await self._wait_for_text(EFFORT_HINTS, "the effort slider did not open")
             await self.link.keys(LEFT * EFFORT_STEPS + RIGHT * EFFORT_ORDER.index(level))
-            await self.link.keys(THIS_SESSION)
+            await self.link.keys(THIS_SESSION, clear=True)
+            await self._accept(EFFORT_PROMPTS)
             await self._confirmed(pending)
         except RcError:
             await self._give_up(pending)
@@ -281,7 +295,7 @@ class Typist:
             raise RcError("conflict", "the model picker did not open")
         return picker
 
-    async def _accept(self, prompt: str) -> None:
+    async def _accept(self, prompts: tuple[str, ...]) -> None:
         """Press Enter on a confirmation the CLI may put up, if it does.
 
         The prompt's yes row is the highlighted one, so Enter is the answer;
@@ -289,15 +303,15 @@ class Typist:
         """
         deadline = time.monotonic() + PROMPT_TIMEOUT
         while time.monotonic() < deadline:
-            if prompt in (await self.link.screen()).text:
+            if _shows((await self.link.screen()).text, prompts):
                 await self.link.keys(ENTER)
                 return
             await asyncio.sleep(POLL_INTERVAL)
 
-    async def _wait_for_text(self, needle: str, failure: str) -> None:
+    async def _wait_for_text(self, needles: tuple[str, ...], failure: str) -> None:
         deadline = time.monotonic() + PICKER_TIMEOUT
         while time.monotonic() < deadline:
-            if needle in (await self.link.screen()).text:
+            if _shows((await self.link.screen()).text, needles):
                 return
             await asyncio.sleep(POLL_INTERVAL)
         raise RcError("conflict", failure)

@@ -859,8 +859,10 @@ decides whether the app can page backwards.
 
 The attachment fields are the whole story an app needs: nothing in this protocol is specific to
 one agent's attachment mechanism. Claude reports `attach: "channel"` with `shared_attachments`
-false, because a channel cannot carry bytes, and `shared_settings` true with `shared_settings_keys:
-["model", "effort"]` (A40): the device's shim runs the CLI inside a pseudo-terminal the device owns
+true whenever `attach_ready` is (A49): a channel carries text and no bytes, so the device writes each
+file to disk and the words it injects name it, as 4.8 describes. It reports `shared_settings` true
+with `shared_settings_keys: ["model", "effort"]` (A40): the device's shim runs the CLI inside a
+pseudo-terminal the device owns
 and types the change into it as the person would — the terminal shows `/model` or `/effort` and
 the answer — so the model and the effort are the device's to change while the permission mode stays
 the terminal's; the same typing runs `/compact`, so Claude carries the `commands` capability (A27);
@@ -877,8 +879,9 @@ the pi process and can abort its turn, change its model and thinking level, and 
 than from a handshake — the leader is started on demand by whichever client comes first, the TUI or
 the device, so there is nothing to handshake with before then — with `shared_interrupt` and
 `shared_settings` true, because `session/cancel` and `session/set_config_option` from any client of
-the leader act on the session everyone is in, and `shared_attachments` false, because its prompts
-take no images (A28). `fixtures/objects/agent.claude-attach.json`,
+the leader act on the session everyone is in (A28), and `shared_attachments` true with capability
+`attachments`, because its prompts, which take no images, name files the device wrote (4.8, A49).
+`fixtures/objects/agent.claude-attach.json`,
 `fixtures/objects/agent.codex-daemon.json`, `fixtures/objects/agent.pi.json` and
 `fixtures/objects/agent.grok.json` are the four worked examples.
 
@@ -1156,6 +1159,23 @@ Two shapes carry the same idea in opposite directions.
 | Device to app (`user_message`) | `Attachment` | `name`, `mime`, `size` |
 
 Bytes travel up only. A `user_message` event reports metadata, never the payload.
+
+How the bytes reach the agent is the device's business (A49). Codex takes images as image inputs and
+pi as image content. Claude Code and Grok Build take no image in a prompt — a Claude channel carries
+text, and Grok answers `promptCapabilities.image: false` — so for them the device writes each file
+under its own state directory, one folder per message, and the prompt the agent receives ends with
+`Attached files:` and one `- name: path` line per file, which the agent opens with its own file tool;
+this holds on a `remote` and a `shared` session alike. No path reaches an app: the `user_message`
+carries the words the person typed and the `Attachment` metadata, and a user row the device reads
+back from the agent's own record — a Claude transcript, Grok's update log, the leader's replay or
+echo — whose prompt ends that way is published as the words before that list and an `Attachment`
+per file, `mime` taken from the name and `size` 0 once the file is gone; a title or an `error` the
+agent words itself shows a file's name where it quoted a path. The device's echo of its own prompt
+on Grok's leader is recognised as its own and is never a second block. The agent opening one of
+those files with its own read tool asks nobody: the device allows that read itself, for the
+session's own files only, and raises no `approval` block. The files are the device's to delete: a
+message that will not reach the agent takes its folder with it, a deleted session all of its
+folders, and none is kept longer than a week.
 
 ### 4.9 LabeledId
 
@@ -2708,7 +2728,7 @@ are never listed either: they change a terminal the app cannot see.
 
 | Request | Behaviour |
 | --- | --- |
-| `session.send` | Accepted whatever `mode` says; `steered` never applies. When the session is idle the device injects at once, replies `accepted: "sent"` and emits `user_message {delivery: "delivered"}`. When a turn is running, `auto` and `queue` alike, the device holds the message locally, replies `accepted: "queued"` with a `queued_id` and emits a `queue` event listing it — no `user_message` yet (A19) — then injects it once the transcript shows the turn ended and emits the block with `delivery: "delivered"`. `session.queue_remove` works on held items. Attachments are refused with `unsupported` ("attachments cannot be delivered to a terminal session"). |
+| `session.send` | Accepted whatever `mode` says; `steered` never applies. When the session is idle the device injects at once, replies `accepted: "sent"` and emits `user_message {delivery: "delivered"}`. When a turn is running, `auto` and `queue` alike, the device holds the message locally, replies `accepted: "queued"` with a `queued_id` and emits a `queue` event listing it — no `user_message` yet (A19) — then injects it once the transcript shows the turn ended and emits the block with `delivery: "delivered"`. `session.queue_remove` works on held items. Attachments are delivered as files the injected words name (4.8, A49), held or not, when the agent reports `shared_attachments: true`, and are refused with `unsupported` ("attachments cannot be delivered to a terminal session") when it does not. |
 | `session.approve` | Relays the option the block offered. An `option_id` the block did not offer, `elsewhere` included, is `bad_request`. Replying to a request the terminal already answered is a no-op returning `{}`. |
 | `session.answer` | Supported for a `question` block the device raised through its `PermissionRequest` hook (A20): the answer goes to the CLI as the tool's own answers and the block resolves with `by: "remote"`. Answering a question the terminal already answered is a no-op returning `{}`. A question the device did not raise has no block to answer. |
 | `session.stop` | `unsupported` unless the agent lists capability `interrupt` **and** reports `shared_interrupt: true`. Message: "stop it in the terminal". Claude reports it since A42: the device types Escape into the CLI's terminal while a turn runs; with an approval or a question on screen it answers `conflict` ("answer the prompt first"), and with no turn running it returns `{}` and types nothing. |
@@ -2968,11 +2988,12 @@ the device interrupts the turn if one is running, ends what it holds for the age
 process, pi's process, the Codex thread (archived in Codex as well), the Grok leader session — and
 only then records the choice, so the reply and the publish carry `archived: true`, `control:
 "none"` and `state: "stopped"` together, and nothing of the session runs on the machine afterwards.
-A message the agent still sends while it is being closed does not revive it. The device clears
-`archived` on its own the moment the session comes back to life — a turn starts in it, from an app
-or from a terminal, or a terminal attaches to it again — and publishes the session with `archived:
-false` (amendment A15). An archived session therefore never runs, and apps need no rule of their
-own for it: the row moves out of the Archive when the device's `session.updated` arrives.
+A message the agent still sends while it is being closed does not revive it. Messages held for the
+session (5.12) are discarded, never sent: the device publishes an empty `queue` with the close. The
+device clears `archived` on its own the moment the session comes back to life — a turn starts in it,
+from an app or from a terminal, or a terminal attaches to it again — and publishes the session with
+`archived: false` (amendment A15). An archived session therefore never runs, and apps need no rule
+of their own for it: the row moves out of the Archive when the device's `session.updated` arrives.
 
 `fixtures/app/session.archive.json`
 
@@ -3810,6 +3831,10 @@ one app connection that asked. The gateway relays bytes and never reads them.
 - [ ] Offers exactly `allow` and `deny` on an approval relayed through a Claude channel, offers the
       options the Codex daemon lists for that request, resolves either with `decision.by: "terminal"`
       when the terminal answered first, and expires it when the CLI exits or the attachment drops.
+- [ ] Hands an agent that takes no image in a prompt — Claude Code, Grok Build — each attachment as
+      a file its prompt names, publishes the typed words and `Attachment` metadata and never a
+      path, reads its own prompt back the same way from the agent's records, and deletes the files
+      of a message that cannot reach the agent any more (4.8, A49).
 - [ ] Reports `shared_settings` and `shared_attachments` truthfully per agent, and honours them:
       `session.set` and `session.send` attachments succeed on a `shared` session exactly when the
       matching flag is true and are refused with `unsupported` when it is false.
@@ -4515,3 +4540,24 @@ pair alongside its own originators and the existing `cli` and `exec` sources, bo
 index and in rollout discovery. `vscode` by itself remains foreign, and a non-string `source`
 still excludes every subagent, including one whose parent is a terminal TUI. Nothing changes on
 the wire: the existing session summaries and events reach every app unchanged. See 4.4 and 9.2.
+
+**2026-10-14 A49 — Claude Code and Grok Build take attachments as files the prompt names.** A
+shared Claude session refused every attachment, because a channel carries text alone, and Grok
+Build took none on any session, because it answers `promptCapabilities.image: false`. The device
+now writes each attachment of a `session.send` for either agent to a folder of its own on the
+device and appends `Attached files:` and one `- name: path` line per file to the prompt, which the
+agent opens with its own file tool (Claude's `Read`, Grok's `read_file`, both of which read
+images); on a `shared` Claude session the injected words carry the list, and on Grok's leader the
+prompt does. Claude reports `shared_attachments` true whenever `attach_ready` is; Grok adds
+capability `attachments` and reports `shared_attachments` true. The `user_message` keeps the typed
+words and `attachments` metadata, a held message's `queue` entry counts its files as before (A43),
+and a prompt the device reads back from the agent's own record is published the same way, so no
+path ever reaches an app; a title or an `error` the agent words itself names a file where it quoted
+a path, and the leader's echo of the device's own prompt is recognised and never becomes a second
+block. The agent reading one of the session's own files with its own read tool is
+allowed by the device without an `approval` block. The files are kept a week at most and deleted
+sooner when the message can no longer reach the agent or the session is deleted. The same change
+states what A39's close does with held messages: they are discarded, never sent, and the device
+publishes an empty `queue` with the close. Nothing else changes on the wire;
+`fixtures/objects/agent.claude-attach.json` and `agent.grok.json` show the new values. See 4.2,
+4.8, 6.3 and 9.

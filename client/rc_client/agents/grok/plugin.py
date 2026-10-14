@@ -21,12 +21,14 @@ PERMISSION_MODES = [
     Choice("plan", "Plan mode"),
     Choice("bypassPermissions", "Bypass permissions"),
 ]
-# No `attachments`: this build answers `promptCapabilities.image: false`, so a
-# prompt has nowhere to carry one. No `steer`: a prompt sent mid-turn queues.
+# `attachments` although this build answers `promptCapabilities.image: false`:
+# the device writes each file to disk and the prompt names it, and Grok opens it
+# with `read_file` (A49). No `steer`: a prompt sent mid-turn queues.
 CAPABILITIES = [
     "worktree",
     "interrupt",
     "queue",
+    "attachments",
     "effort",
     "history",
     "commands",
@@ -57,10 +59,11 @@ async def detect(context: DetectContext) -> AgentInfo:
         attach="leader",
         attach_ready=leader.config_ready(),
         # `session/cancel` and `session/set_config_option` from any client act
-        # on the session every client is in; prompts carry no images.
+        # on the session every client is in, and a prompt names its files on
+        # the leader as it does anywhere else (A49).
         shared_interrupt=True,
         shared_settings=True,
-        shared_attachments=False,
+        shared_attachments=True,
         accounts=accounts,
     )
 

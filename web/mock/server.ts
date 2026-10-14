@@ -1797,7 +1797,8 @@ function sharedSend(
   const sessionId = session.session_id;
   const agent = agentFor(session);
   const attachments = Array.isArray(frame.attachments) ? frame.attachments : [];
-  // A11 §4.2: the daemon takes image inputs; the Claude channel does not.
+  // A11 §4.2: the daemon takes image inputs; A49: the Claude channel and Grok's
+  // leader take files the prompt names. An agent that does not say so takes none.
   if (attachments.length > 0 && agent?.shared_attachments !== true) {
     return replyError(conn, id, 'unsupported', 'attachments cannot be delivered to a terminal session');
   }

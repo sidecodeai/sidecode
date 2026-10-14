@@ -552,7 +552,7 @@ class CodexDaemonService:
         session = entry.session
 
         async def on_turn_end() -> None:
-            await self.hub.drain_queue(entry)
+            self.hub.schedule_drain(entry)
 
         async def on_control_change() -> None:
             await self.publish_control(entry)

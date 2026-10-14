@@ -30,6 +30,9 @@ from rc_client.sessions.attach import Attachment
 from rc_client.sessions.channel import SessionChannel
 from rc_client.sessions.hub import SessionHub
 from rc_client.sessions.mirror import MirrorService
+from tests.helpers import drained
+from tests.test_app_defects import StubSDK
+from tests.test_hub import add_session, build_hub
 
 # ------------------------------------------------------------------- the rule
 
@@ -370,10 +373,12 @@ async def test_a_held_message_waits_for_the_subagents_as_it_waits_for_a_turn(
 
     mirrored.write([assistant("end_turn")])
     await mirrored.mirror.tail_once()
+    await drained(mirrored.hub.entry("sess-1"))
     assert mirrored.hub.entry("sess-1").queue != []
 
     write_agent(mirrored.subagents, "agent-1", [assistant("end_turn")])
     await mirrored.mirror.tail_once()
+    await drained(mirrored.hub.entry("sess-1"))
     assert mirrored.hub.entry("sess-1").queue == []
 
 
@@ -588,3 +593,41 @@ async def test_a_turn_the_person_interrupted_is_never_held(driven: DrivenHarness
 
     assert driven.runner._hold is None
     assert [event["stop_reason"] for event in driven.events("turn_completed")] == ["interrupted"]
+
+
+async def test_interrupt_and_send_on_a_held_turn_sends_the_new_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stopping a held turn ends it inline, inside the send that holds the lock.
+
+    The turn's end only schedules the drain, so the send goes on to deliver
+    its own message, and the one already held waits for that turn (A43).
+    """
+    projects = tmp_path / "projects"
+    (projects / "repo").mkdir(parents=True)
+    (projects / "repo" / "sess-1.jsonl").write_bytes(b"")
+    write_agent(projects / "repo" / "sess-1" / "subagents", "agent-1", [assistant("tool_use")])
+    monkeypatch.setattr(transcripts, "PROJECTS_DIR", projects)
+    hub, _, registry = build_hub(tmp_path)
+    entry = add_session(hub)
+    runner = await hub._build_runner(entry, hub.agent_info("claude"), resume=None)
+    assert isinstance(runner, ClaudeRunner)
+    sdk = StubSDK()
+    runner._client = sdk  # type: ignore[assignment]
+    entry.runner = runner
+    await hub.send({"id": "req-1", "session_id": "sess-1", "text": "go"})
+    await runner._finish_turn(dict(RESULT))
+    assert runner._hold is not None
+    await hub.send({"id": "req-2", "session_id": "sess-1", "text": "later", "mode": "queue"})
+
+    result = await asyncio.wait_for(
+        hub.send({"id": "req-3", "session_id": "sess-1", "text": "now", "mode": "interrupt"}),
+        timeout=2,
+    )
+
+    assert result == {"accepted": "sent"}
+    assert sdk.prompts == ["go", "now"]
+    await drained(entry)
+    assert [item["id"] for item in entry.queue] == ["req-2"]
+    await entry.channel.close()
+    registry.close()

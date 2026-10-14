@@ -11,11 +11,13 @@ import asyncio
 import json
 import os
 import urllib.parse
+import uuid
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from rc_client import attachments
 from rc_client.agents.claude import transcripts as claude_transcripts
 from rc_client.agents.codex import rollouts as codex_rollouts
 from rc_client.agents.grok import cursor as grok_cursor
@@ -32,6 +34,8 @@ from tests.test_grok_runner import Peer, Recorder, shim, wait_for
 SESSION = "01a09b4f-1b25-7e92-b96b-356d292ff2d0"
 CWD = "/Users/me/dev/gateway"
 TOOL_CALL = "call-e5a20e6a-35fc-40c3-b31f-8d5114d01af4-0"
+SHOT = {"name": "shot.png", "mime": "image/png", "data_base64": "aGVsbG8="}
+SHOT_SHOWN = {"name": "shot.png", "mime": "image/png", "size": 5}
 # The replay in `fixtures/grok/resume.jsonl` carries these counters.
 PROMPT_INDEX = 4
 REPLY_INDEX = 35
@@ -148,7 +152,13 @@ def control_of(entry: SessionEntry) -> str:
 def build(tmp_path: Path) -> tuple[SessionHub, Recorder, GrokLeaderService]:
     registry = Registry(tmp_path / "state.sqlite3")
     recorder = Recorder()
-    info = AgentInfo(agent="grok", available=True, path="/unused")
+    info = AgentInfo(
+        agent="grok",
+        available=True,
+        path="/unused",
+        capabilities=["attachments"],
+        shared_attachments=True,
+    )
     hub = SessionHub(registry, recorder, "d1", lambda: [info])
     service = GrokLeaderService(hub)
     hub.grok_leader = service
@@ -392,6 +402,31 @@ async def test_the_device_s_own_prompt_is_not_echoed_back_as_a_second_bubble(
     await service.stop()
 
 
+async def test_a_message_queued_during_a_device_turn_follows_it_once(
+    home: Path, tmp_path: Path
+) -> None:
+    """On the leader too the queue waits for the prompt's answer (A28, A43)."""
+    register(home)
+    binary, peer = leader_peer(tmp_path)
+    hub, recorder, service = build(tmp_path)
+    grok_cursor.write(hub.registry, SESSION, 999)
+    await service.tick(binary)
+
+    one, two = str(uuid.uuid4()), str(uuid.uuid4())
+    first = await hub.send({"id": one, "session_id": SESSION, "text": "one"})
+    second = await hub.send({"id": two, "session_id": SESSION, "text": "two"})
+    assert (first["accepted"], second["accepted"]) == ("sent", "queued")
+
+    await wait_for(lambda: len(recorder.events("turn_completed")) == 2, timeout=5)
+    await asyncio.sleep(0.2)
+    assert [call["prompt"][0]["text"] for call in peer.calls("session/prompt")] == ["one", "two"]
+    bubbles = [(event["block_id"], event["text"]) for event in recorder.events("user_message")]
+    assert bubbles == [(one, "one"), (two, "two")]
+    assert len(recorder.events("turn_completed")) == 2
+    assert hub.entries[SESSION].queue == []
+    await service.stop()
+
+
 async def test_a_prompt_typed_at_the_terminal_arrives_as_a_terminal_message(
     home: Path, tmp_path: Path
 ) -> None:
@@ -415,6 +450,64 @@ async def test_a_prompt_typed_at_the_terminal_arrives_as_a_terminal_message(
     assert typed["text"] == "hello"
     assert typed["source"] == "terminal"
     assert hub.entries[SESSION].session.turn is not None
+    await service.stop()
+
+
+async def test_a_prompt_with_files_is_echoed_back_as_one_bubble_without_paths(
+    home: Path, tmp_path: Path
+) -> None:
+    """A49: the leader echoes the prompt as sent, paths and all, and it is ours."""
+    register(home)
+    binary, peer = leader_peer(tmp_path)
+    hub, recorder, service = build(tmp_path)
+    grok_cursor.write(hub.registry, SESSION, 999)
+    await service.tick(binary)
+    assert hub.entries[SESSION].session.control == "shared"
+
+    result = await hub.send(
+        {"id": "req-1", "session_id": SESSION, "text": "look", "attachments": [SHOT]}
+    )
+    await wait_for(lambda: recorder.events("turn_completed"))
+
+    assert result == {"accepted": "sent"}
+    [folder] = (attachments.state_root() / SESSION).iterdir()
+    prompt = peer.params("session/prompt")["prompt"][0]["text"]
+    assert prompt == f"look\n\nAttached files:\n- shot.png: {folder / 'shot.png'}"
+    [bubble] = recorder.events("user_message")
+    assert (bubble["text"], bubble["source"]) == ("look", "remote")
+    assert bubble["attachments"] == [SHOT_SHOWN]
+    assert str(attachments.state_root()) not in json.dumps(recorder.frames)
+    await service.stop()
+
+
+async def test_a_prompt_with_files_from_elsewhere_is_shown_without_its_paths(
+    home: Path, tmp_path: Path
+) -> None:
+    """One the leader replays or another client sent: the words and the names only."""
+    register(home)
+    binary, peer = leader_peer(tmp_path)
+    hub, recorder, service = build(tmp_path)
+    grok_cursor.write(hub.registry, SESSION, 999)
+    await service.tick(binary)
+    written = attachments.materialise(SESSION, [SHOT])
+
+    inject(
+        peer,
+        "10-attached.json",
+        notification(
+            SESSION,
+            {
+                "sessionUpdate": "user_message_chunk",
+                "content": {"type": "text", "text": attachments.describe("look", written)},
+            },
+            {"eventId": f"{SESSION}-1001", "promptId": "p-1"},
+        ),
+    )
+    await wait_for(lambda: recorder.events("user_message"))
+    [bubble] = recorder.events("user_message")
+    assert (bubble["text"], bubble["source"]) == ("look", "terminal")
+    assert bubble["attachments"] == [SHOT_SHOWN]
+    assert str(attachments.state_root()) not in json.dumps(recorder.frames)
     await service.stop()
 
 

@@ -74,6 +74,55 @@ def test_thinking_deltas_and_finalisation_share_a_block() -> None:
     assert final[1].fields == {"block_id": "msg_2:1", "text": "why not", "done": True}
 
 
+def block_start(index: int, kind: str) -> StreamEvent:
+    return stream({"type": "content_block_start", "index": index, "content_block": {"type": kind}})
+
+
+def text_delta(index: int, text: str) -> StreamEvent:
+    delta = {"type": "text_delta", "text": text}
+    return stream({"type": "content_block_delta", "index": index, "delta": delta})
+
+
+def test_a_finished_block_after_a_hidden_thought_keeps_its_streamed_index() -> None:
+    """The CLI hands a finished message over one block at a time, each at position 0."""
+    translator = ClaudeTranslator()
+    translator.feed(stream({"type": "message_start", "message": {"id": "msg_7"}}))
+    translator.feed(block_start(0, "thinking"))
+    assert translator.feed(assistant([ThinkingBlock(thinking="", signature="s")], "msg_7")) == []
+    translator.feed(block_start(1, "text"))
+    [delta] = translator.feed(text_delta(1, "7391"))
+    [final] = translator.feed(assistant([TextBlock(text="7391")], message_id="msg_7"))
+
+    assert delta.fields["block_id"] == final.fields["block_id"] == "msg_7:1"
+    assert final.fields == {"block_id": "msg_7:1", "text": "7391", "done": True}
+
+
+def test_a_message_finished_in_one_piece_keeps_its_positions() -> None:
+    translator = ClaudeTranslator()
+    translator.feed(stream({"type": "message_start", "message": {"id": "msg_8"}}))
+    for index, kind in enumerate(("thinking", "text", "text")):
+        translator.feed(block_start(index, kind))
+    emits = translator.feed(
+        assistant(
+            [
+                ThinkingBlock(thinking="hmm", signature="s"),
+                TextBlock(text="one"),
+                TextBlock(text="two"),
+            ],
+            message_id="msg_8",
+        )
+    )
+    assert [emit.fields["block_id"] for emit in emits] == ["msg_8:0", "msg_8:1", "msg_8:2"]
+
+
+def test_pieces_of_a_message_that_never_streamed_still_get_blocks_of_their_own() -> None:
+    translator = ClaudeTranslator()
+    thought = translator.feed(assistant([ThinkingBlock(thinking="hmm", signature="s")], "msg_6"))
+    answer = translator.feed(assistant([TextBlock(text="done")], message_id="msg_6"))
+    assert thought[0].fields["block_id"] == "msg_6:0"
+    assert answer[0].fields["block_id"] == "msg_6:1"
+
+
 def test_tool_use_and_result_share_the_tool_id_as_block_id() -> None:
     translator = ClaudeTranslator(cwd="/repo")
     call = translator.feed(

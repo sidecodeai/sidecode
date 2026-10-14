@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from ..attachments import without_paths
 from ..models import title_from_message, title_from_text
 from ..registry import Registry
 
@@ -71,7 +72,8 @@ async def from_prompt(channel: SessionChannel, text: str) -> bool:
 
 
 async def _apply(channel: SessionChannel, text: str) -> bool:
-    title = title_from_text(text)
+    # An agent's summary may quote the prompt, attachment paths and all (A49).
+    title = title_from_text(without_paths(text))
     if not title or title == channel.session.title:
         return False
     await channel.set_meta(title=title)

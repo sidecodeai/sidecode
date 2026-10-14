@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from ...attachments import is_session_file
+
 _KIND_BY_TOOL = {
     "Bash": "shell",
     "BashOutput": "shell",
@@ -67,6 +69,15 @@ def tool_title(tool: str, tool_input: dict[str, Any], cwd: str | None = None) ->
         if isinstance(value, str) and value.strip():
             return os.path.basename(value) if key.endswith("path") else value.splitlines()[0][:200]
     return tool
+
+
+def reads_session_file(session_id: str, tool: str, tool_input: dict[str, Any]) -> bool:
+    """Whether the call only reads a file the device wrote for this session (A49).
+
+    That is the agent opening an attachment its prompt named, which it is
+    allowed without asking anybody.
+    """
+    return tool == "Read" and is_session_file(session_id, tool_input.get("file_path"))
 
 
 def todos_from_input(tool_input: dict[str, Any]) -> list[dict[str, str]]:

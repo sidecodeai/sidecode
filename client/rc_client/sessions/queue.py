@@ -6,12 +6,15 @@ the entry had, so the device holds that message in front of every entry with a
 later one: it waits where it was, however the queue moved meanwhile. A message
 the device puts back itself, an injection the CLI absorbed or the bridge
 refused, goes back under its own `ts` the same way. Anything else joins the end.
+A message that leaves the queue without being delivered takes its files with it
+(A49).
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from .. import attachments
 from ..errors import RcError
 from ..models import now_ms
 
@@ -61,3 +64,14 @@ def snapshot_entry(item: dict[str, Any]) -> dict[str, Any]:
     if files:
         entry["attachments"] = files
     return entry
+
+
+async def release(item: dict[str, Any]) -> None:
+    """Delete the files a held message wrote, which no longer wait for delivery here.
+
+    Only a message held for an attached terminal has any: it writes them when it
+    is sent, so they are ready the moment the CLI is, and keeps the bytes it came
+    with, so whatever delivers it later can write them again. A message held for
+    a session the device drives writes its files only as it goes out.
+    """
+    await attachments.drop(item.pop("written", None) or [])

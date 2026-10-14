@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from rc_client import attachments
 from rc_client.agents.claude import transcripts
 from rc_client.errors import RcError
 from rc_client.models import AgentInfo, Choice
@@ -15,6 +19,7 @@ from rc_client.sessions.attach import Attachment, HookQuestion
 from rc_client.sessions.hub import SessionEntry, SessionHub
 from rc_client.sessions.limits import TurnEnd
 from rc_client.sessions.shared import SharedState
+from tests.helpers import drained, tick
 
 QUESTION_TOOL = "AskUserQuestion"
 QUESTION_INPUT = {
@@ -93,10 +98,11 @@ def agents() -> list[AgentInfo]:
             path="/bin/claude",
             models=[Choice("default", "Default")],
             default_model="default",
-            capabilities=["takeover", "interrupt", "queue", "history"],
+            capabilities=["takeover", "interrupt", "queue", "attachments", "history"],
             attach="channel",
             attach_ready=True,
             shared_interrupt=False,
+            shared_attachments=True,
         )
     ]
 
@@ -154,9 +160,9 @@ async def test_registering_creates_a_shared_session_and_announces_the_control_ch
 async def test_a_shared_session_is_never_readonly(harness: Harness) -> None:
     entry = await harness.attach()
     states = [entry.session.state]
-    await harness.hub.shared.tick(entry, running=True)
+    await tick(harness.hub, entry, running=True)
     states.append(entry.session.state)
-    await harness.hub.shared.tick(entry, running=False)
+    await tick(harness.hub, entry, running=False)
     states.append(entry.session.state)
     assert states == ["idle", "running", "idle"]
     assert "readonly" not in states
@@ -182,7 +188,7 @@ async def test_sending_mid_turn_holds_the_message_until_the_transcript_goes_idle
     harness: Harness,
 ) -> None:
     entry = await harness.attach()
-    await harness.hub.shared.tick(entry, running=True)
+    await tick(harness.hub, entry, running=True)
 
     result = await harness.hub.send({"id": "req-2", "session_id": "sess-1", "text": "later"})
     assert result == {"accepted": "queued", "queued_id": "req-2"}
@@ -193,7 +199,7 @@ async def test_sending_mid_turn_holds_the_message_until_the_transcript_goes_idle
         {"id": "req-2", "text": "later", "ts": entry.queue[0]["ts"]}
     ]
 
-    await harness.hub.shared.tick(entry, running=False)
+    await tick(harness.hub, entry, running=False)
     assert [text for _, text in harness.attachment.injected] == ["later"]
     bubbles = harness.events("user_message")
     assert len(bubbles) == 1
@@ -212,12 +218,12 @@ async def test_only_one_message_is_in_flight_until_the_transcript_confirms_it(
     assert [item["text"] for item in entry.queue] == ["two"]
 
     # The transcript has not caught up yet, so a tick must not release the second.
-    await harness.hub.shared.tick(entry, running=False)
+    await tick(harness.hub, entry, running=False)
     assert [text for _, text in harness.attachment.injected] == ["one"]
 
     message_id, _ = harness.attachment.injected[0]
     await harness.hub.shared.echo_delivered(entry, message_id)
-    await harness.hub.shared.tick(entry, running=False)
+    await tick(harness.hub, entry, running=False)
     assert [text for _, text in harness.attachment.injected] == ["one", "two"]
 
 
@@ -264,7 +270,7 @@ async def test_an_absorbed_injection_is_marked_and_re_sent_once(harness: Harness
     assert bubbles[-1]["block_id"] == bubbles[0]["block_id"]
     assert [item["text"] for item in entry.queue] == ["do it"]
 
-    await harness.hub.shared.tick(entry, running=False)
+    await tick(harness.hub, entry, running=False)
     assert [text for _, text in harness.attachment.injected] == ["do it", "do it"]
     assert harness.events("user_message")[-1]["delivery"] == "delivered"
 
@@ -405,7 +411,7 @@ async def test_closing_the_bridge_with_a_live_cli_leaves_the_session_to_the_term
 
 async def test_messages_still_pending_survive_the_detachment(harness: Harness) -> None:
     entry = await harness.attach()
-    await harness.hub.shared.tick(entry, running=True)
+    await tick(harness.hub, entry, running=True)
     await harness.hub.send({"id": "req-4", "session_id": "sess-1", "text": "afterwards"})
     await harness.hub.shared.closed(entry, harness.attachment, "none")
 
@@ -428,16 +434,6 @@ async def test_the_requests_a_shared_session_refuses(harness: Harness) -> None:
     assert raised.value.code == "conflict"
     assert raised.value.message == "already attached"
 
-    with pytest.raises(RcError) as raised:
-        await harness.hub.send(
-            {
-                "session_id": "sess-1",
-                "text": "look",
-                "attachments": [{"name": "a.png", "mime": "image/png", "data_base64": "aGk="}],
-            }
-        )
-    assert raised.value.code == "unsupported"
-
 
 async def test_the_title_can_still_be_changed_on_a_shared_session(harness: Harness) -> None:
     await harness.attach()
@@ -447,10 +443,10 @@ async def test_the_title_can_still_be_changed_on_a_shared_session(harness: Harne
 
 async def test_a_pending_message_can_be_removed_from_the_queue(harness: Harness) -> None:
     entry = await harness.attach()
-    await harness.hub.shared.tick(entry, running=True)
+    await tick(harness.hub, entry, running=True)
     await harness.hub.send({"id": "req-5", "session_id": "sess-1", "text": "never mind"})
     await harness.hub.queue_remove({"session_id": "sess-1", "queued_id": "req-5"})
-    await harness.hub.shared.tick(entry, running=False)
+    await tick(harness.hub, entry, running=False)
     assert harness.attachment.injected == []
 
 
@@ -465,7 +461,7 @@ async def test_an_injected_turn_opens_and_closes_a_turn_for_the_apps(harness: Ha
 
     message_id, _ = harness.attachment.injected[0]
     await harness.hub.shared.echo_delivered(entry, message_id)
-    await harness.hub.shared.tick(entry, running=False)
+    await tick(harness.hub, entry, running=False)
     turns.append(entry.session.turn)
     assert [turn is not None for turn in turns] == [True, False]
     assert harness.events("turn_completed")[-1]["stop_reason"] == "completed"
@@ -473,9 +469,9 @@ async def test_an_injected_turn_opens_and_closes_a_turn_for_the_apps(harness: Ha
 
 async def test_a_turn_the_terminal_started_is_labelled_as_such(harness: Harness) -> None:
     entry = await harness.attach()
-    await harness.hub.shared.tick(entry, running=True)
+    await tick(harness.hub, entry, running=True)
     assert harness.events("turn_started")[-1]["trigger"] == "terminal"
-    await harness.hub.shared.tick(entry, running=False)
+    await tick(harness.hub, entry, running=False)
     assert harness.events("turn_completed")[-1]["stop_reason"] == "completed"
 
 
@@ -492,10 +488,10 @@ async def test_a_turn_another_agent_started_is_labelled_agent(harness: Harness) 
     )
     assert reader.turn_trigger == "agent"
 
-    await harness.hub.shared.tick(entry, reader.busy, reader.turn_trigger)
+    await tick(harness.hub, entry, reader.busy, reader.turn_trigger)
     assert harness.events("turn_started")[-1]["trigger"] == "agent"
 
-    await harness.hub.shared.tick(entry, running=False)
+    await tick(harness.hub, entry, running=False)
     assert harness.events("turn_completed")[-1]["stop_reason"] == "completed"
 
 
@@ -506,8 +502,12 @@ async def test_a_turn_the_person_interrupted_is_closed_as_interrupted(harness: H
     reader.translate(
         {"type": "user", "uuid": "row-typed", "message": {"role": "user", "content": "go"}}
     )
-    await harness.hub.shared.tick(
-        entry, reader.busy, reader.turn_trigger, TurnEnd(reader.stop_reason, reader.limit)
+    await tick(
+        harness.hub,
+        entry,
+        reader.busy,
+        reader.turn_trigger,
+        TurnEnd(reader.stop_reason, reader.limit),
     )
     assert harness.events("turn_started")[-1]["trigger"] == "terminal"
     starts = len(harness.events("turn_started"))
@@ -523,8 +523,12 @@ async def test_a_turn_the_person_interrupted_is_closed_as_interrupted(harness: H
         }
     )
     assert reader.busy is False
-    await harness.hub.shared.tick(
-        entry, reader.busy, reader.turn_trigger, TurnEnd(reader.stop_reason, reader.limit)
+    await tick(
+        harness.hub,
+        entry,
+        reader.busy,
+        reader.turn_trigger,
+        TurnEnd(reader.stop_reason, reader.limit),
     )
     assert harness.events("turn_completed")[-1]["stop_reason"] == "interrupted"
     assert len(harness.events("turn_started")) == starts
@@ -535,7 +539,7 @@ async def test_a_turn_still_open_when_the_bridge_leaves_is_closed_as_stopped(
     harness: Harness,
 ) -> None:
     entry = await harness.attach()
-    await harness.hub.shared.tick(entry, running=True)
+    await tick(harness.hub, entry, running=True)
     await harness.hub.shared.closed(entry, harness.attachment, "none")
     assert entry.session.turn is None
     assert harness.events("turn_completed")[-1]["stop_reason"] == "stopped"
@@ -581,12 +585,12 @@ async def test_a_held_message_is_queued_and_delivered_under_the_request_id(
     harness: Harness,
 ) -> None:
     entry = await harness.attach()
-    await harness.hub.shared.tick(entry, running=True)
+    await tick(harness.hub, entry, running=True)
     result = await harness.hub.send({"id": SEND_REQUEST, "session_id": "sess-1", "text": "later"})
 
     assert result == {"accepted": "queued", "queued_id": SEND_REQUEST}
     assert harness.events("queue")[-1]["pending"][0]["id"] == SEND_REQUEST
-    await harness.hub.shared.tick(entry, running=False)
+    await tick(harness.hub, entry, running=False)
     bubbles = harness.events("user_message")
     assert [bubble["block_id"] for bubble in bubbles] == [SEND_REQUEST]
     assert [bubble["delivery"] for bubble in bubbles] == ["delivered"]
@@ -600,11 +604,11 @@ async def test_a_held_message_is_issued_after_the_turn_it_waited_for(
 ) -> None:
     """Its `first_seq` comes from the injection, so it lands where the terminal shows it."""
     entry = await harness.attach()
-    await harness.hub.shared.tick(entry, running=True)
+    await tick(harness.hub, entry, running=True)
     await harness.hub.send({"id": "req-19", "session_id": "sess-1", "text": "later"})
     await entry.channel.emit("assistant_text", block_id="msg-1", text="working", done=True)
 
-    await harness.hub.shared.tick(entry, running=False)
+    await tick(harness.hub, entry, running=False)
     bubble = harness.events("user_message")[-1]
     said = harness.events("assistant_text")[-1]
     assert bubble["first_seq"] == bubble["seq"], "the block exists from the injection, not before"
@@ -619,16 +623,16 @@ async def test_a_held_message_waits_for_the_row_that_really_ends_the_turn(
     entry = await harness.attach()
     tailer = transcripts.TranscriptTailer(path="/nonexistent", cwd="/repo")
     tailer.awaiting_reply = True
-    await harness.hub.shared.tick(entry, running=tailer.busy)
+    await tick(harness.hub, entry, running=tailer.busy)
     await harness.hub.send({"id": "req-34", "session_id": "sess-1", "text": "ping"})
     assert harness.attachment.injected == []
 
     tailer.translate(assistant_row([{"type": "text", "text": "Reading it now."}], "tool_use"))
-    await harness.hub.shared.tick(entry, running=tailer.busy)
+    await tick(harness.hub, entry, running=tailer.busy)
     assert harness.attachment.injected == [], "the turn had only paused to call a tool"
 
     tailer.translate(assistant_row([{"type": "text", "text": "Done."}], "end_turn"))
-    await harness.hub.shared.tick(entry, running=tailer.busy)
+    await tick(harness.hub, entry, running=tailer.busy)
     assert [text for _, text in harness.attachment.injected] == ["ping"]
 
 
@@ -637,7 +641,7 @@ async def test_a_message_held_across_a_detachment_is_never_shown_twice(
 ) -> None:
     """No block was published while it waited, so the resume path publishes the first."""
     entry = await harness.attach()
-    await harness.hub.shared.tick(entry, running=True)
+    await tick(harness.hub, entry, running=True)
     await harness.hub.send({"id": SEND_REQUEST, "session_id": "sess-1", "text": "afterwards"})
     await harness.hub.shared.closed(entry, harness.attachment, "none")
 
@@ -654,7 +658,7 @@ async def test_a_question_from_the_hook_is_raised_as_a_block_and_answered_remote
     harness: Harness,
 ) -> None:
     entry = await harness.attach()
-    await harness.hub.shared.tick(entry, running=True)
+    await tick(harness.hub, entry, running=True)
     hook = FakeHookQuestion()
     await harness.hub.attach_question(hook)
 
@@ -823,7 +827,7 @@ async def test_a_message_sent_while_a_question_is_open_is_queued_not_injected(
             "answers": {"q0": ["o0"]},
         }
     )
-    await harness.hub.shared.tick(entry, running=False)
+    await tick(harness.hub, entry, running=False)
     assert [text for _, text in harness.attachment.injected] == ["and then"]
 
 
@@ -858,3 +862,424 @@ async def test_the_answer_row_in_the_transcript_is_recognised() -> None:
     )
     assert [emit.kind for emit in emits] == ["tool_call", transcripts.QUESTION_ANSWERED]
     assert emits[1].fields == {"answers": {PROMPT: "Clamp it"}}
+
+
+# ------------------------------------------- A49: files ride in the words as paths
+
+
+SHOT = {"name": "shot.png", "mime": "image/png", "data_base64": "aGVsbG8="}
+NOTES = {"name": "notes.txt", "mime": "text/plain", "data_base64": "aGk="}
+SHOT_SHOWN = {"name": "shot.png", "mime": "image/png", "size": 5}
+
+
+def message_folders() -> list[Path]:
+    folder = attachments.state_root() / "sess-1"
+    return sorted(folder.iterdir()) if folder.is_dir() else []
+
+
+async def test_files_reach_the_terminal_as_paths_and_the_apps_as_names(
+    harness: Harness,
+) -> None:
+    entry = await harness.attach()
+    result = await harness.hub.send(
+        {"id": "req-a", "session_id": "sess-1", "text": "look", "attachments": [SHOT, NOTES]}
+    )
+
+    assert result == {"accepted": "sent"}
+    [folder] = message_folders()
+    message_id, prompt = harness.attachment.injected[0]
+    assert prompt == (
+        f"look\n\nAttached files:\n- shot.png: {folder / 'shot.png'}\n"
+        f"- notes.txt: {folder / 'notes.txt'}"
+    )
+    assert (folder / "shot.png").read_bytes() == b"hello"
+    [bubble] = harness.events("user_message")
+    assert (bubble["text"], bubble["delivery"]) == ("look", "delivered")
+    assert bubble["attachments"] == [
+        SHOT_SHOWN,
+        {"name": "notes.txt", "mime": "text/plain", "size": 2},
+    ]
+    assert str(attachments.state_root()) not in json.dumps(harness.frames)
+    assert entry.session.title == "look"
+
+    # Delivered: the files stay where the words point, the bytes are let go.
+    await harness.hub.shared.echo_delivered(entry, message_id)
+    assert entry.shared is not None
+    assert "data_base64" not in json.dumps(entry.shared.sent[message_id]["attachments"])
+    assert (folder / "shot.png").exists()
+
+
+async def test_a_held_message_has_its_files_ready_and_the_queue_counts_them(
+    harness: Harness,
+) -> None:
+    entry = await harness.attach()
+    await tick(harness.hub, entry, running=True)
+    result = await harness.hub.send(
+        {"id": "req-b", "session_id": "sess-1", "text": "later", "attachments": [SHOT, SHOT]}
+    )
+
+    assert result == {"accepted": "queued", "queued_id": "req-b"}
+    assert harness.attachment.injected == []
+    [folder] = message_folders()
+    assert sorted(path.name for path in folder.iterdir()) == ["shot-2.png", "shot.png"]
+    assert harness.events("queue")[-1]["pending"] == [
+        {"id": "req-b", "text": "later", "ts": entry.queue[0]["ts"], "attachments": 2}
+    ]
+
+    await tick(harness.hub, entry, running=False)
+    _, prompt = harness.attachment.injected[0]
+    assert prompt == (
+        f"later\n\nAttached files:\n- shot.png: {folder / 'shot.png'}\n"
+        f"- shot-2.png: {folder / 'shot-2.png'}"
+    )
+    [bubble] = harness.events("user_message")
+    assert [item["name"] for item in bubble["attachments"]] == ["shot.png", "shot-2.png"]
+    assert harness.events("queue")[-1]["pending"] == []
+
+
+async def test_a_held_message_taken_out_of_the_queue_takes_its_files(harness: Harness) -> None:
+    entry = await harness.attach()
+    await tick(harness.hub, entry, running=True)
+    await harness.hub.send(
+        {"id": "req-c", "session_id": "sess-1", "text": "never mind", "attachments": [SHOT]}
+    )
+    [folder] = message_folders()
+
+    await harness.hub.queue_remove({"session_id": "sess-1", "queued_id": "req-c"})
+
+    assert not folder.exists()
+    assert entry.queue == []
+
+
+async def test_a_detachment_deletes_held_files_and_delivery_writes_them_again(
+    harness: Harness,
+) -> None:
+    entry = await harness.attach()
+    await tick(harness.hub, entry, running=True)
+    await harness.hub.send(
+        {"id": "req-d", "session_id": "sess-1", "text": "look", "attachments": [SHOT]}
+    )
+    [held] = message_folders()
+
+    await harness.hub.shared.closed(entry, harness.attachment, "terminal")
+    assert not held.exists()
+    assert harness.events("queue")[-1]["pending"][0]["attachments"] == 1
+
+    harness.attachment = FakeAttachment()
+    await harness.attach()
+    await tick(harness.hub, entry, running=False)
+    [written] = message_folders()
+    assert written != held
+    assert harness.attachment.injected[0][1] == (
+        f"look\n\nAttached files:\n- shot.png: {written / 'shot.png'}"
+    )
+    assert (written / "shot.png").read_bytes() == b"hello"
+    assert harness.events("user_message")[-1]["attachments"] == [SHOT_SHOWN]
+
+
+async def test_an_absorbed_message_is_sent_again_naming_the_same_files(
+    harness: Harness,
+) -> None:
+    entry = await harness.attach()
+    await harness.hub.send(
+        {"id": "req-e", "session_id": "sess-1", "text": "look", "attachments": [SHOT]}
+    )
+    message_id, first = harness.attachment.injected[0]
+
+    await harness.hub.shared.echo_absorbed(entry, message_id)
+    assert harness.events("user_message")[-1]["attachments"] == [SHOT_SHOWN]
+    assert harness.events("queue")[-1]["pending"][0]["attachments"] == 1
+    await tick(harness.hub, entry, running=False)
+
+    assert harness.attachment.injected[1][1] == first
+    assert len(message_folders()) == 1
+
+
+async def test_a_message_with_a_bad_file_is_refused_before_anything_happens(
+    harness: Harness,
+) -> None:
+    entry = await harness.attach()
+    with pytest.raises(RcError) as raised:
+        await harness.hub.send(
+            {
+                "id": "req-f",
+                "session_id": "sess-1",
+                "text": "look",
+                "attachments": [SHOT, {"name": "x", "mime": "text/plain", "data_base64": "!!!"}],
+            }
+        )
+    assert raised.value.code == "bad_request"
+    assert harness.attachment.injected == []
+    assert entry.queue == []
+    assert harness.events("user_message") == []
+    assert message_folders() == []
+
+
+async def test_files_are_refused_where_the_device_says_they_cannot_reach(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """4.2: `shared_attachments: false`, a shim gone from `PATH` since the CLI started."""
+    entry = await harness.attach()
+    unready = [replace(info, shared_attachments=False) for info in agents()]
+    monkeypatch.setattr(harness.hub, "_agents", lambda: unready)
+    with pytest.raises(RcError) as raised:
+        await harness.hub.send(
+            {"id": "req-g", "session_id": "sess-1", "text": "look", "attachments": [SHOT]}
+        )
+    assert raised.value.code == "unsupported"
+    assert harness.attachment.injected == []
+    assert entry.queue == []
+    assert message_folders() == []
+
+
+async def test_the_cli_reads_the_session_s_own_file_without_anybody_asked(
+    harness: Harness,
+) -> None:
+    entry = await harness.attach()
+    [own] = attachments.materialise("sess-1", [SHOT])
+    await harness.hub.attach_permission_request(
+        harness.attachment,
+        {
+            "request_id": "rown1",
+            "tool_name": "Read",
+            "description": "Read a file from the local filesystem.",
+            "input_preview": json.dumps({"file_path": own.path}),
+        },
+    )
+
+    assert harness.attachment.verdicts == [("rown1", "allow")]
+    assert harness.events("approval") == []
+    assert entry.session.state != "needs_approval"
+
+
+async def test_the_preview_claude_renders_with_spaces_is_read_as_the_input(
+    harness: Harness,
+) -> None:
+    """Claude 2.1.299 writes the preview as `{ "file_path": "..." }`."""
+    await harness.attach()
+    [own] = attachments.materialise("sess-1", [SHOT])
+    await harness.hub.attach_permission_request(
+        harness.attachment,
+        {
+            "request_id": "rspaced",
+            "tool_name": "Read",
+            "description": "Read a file from the local filesystem.",
+            "input_preview": f'{{ "file_path": "{own.path}" }}',
+        },
+    )
+    assert harness.attachment.verdicts == [("rspaced", "allow")]
+    assert harness.events("approval") == []
+
+
+async def test_reading_another_session_s_file_still_asks(harness: Harness) -> None:
+    await harness.attach()
+    [other] = attachments.materialise("sess-2", [SHOT])
+    await harness.hub.attach_permission_request(
+        harness.attachment,
+        {
+            "request_id": "rother1",
+            "tool_name": "Read",
+            "description": "Read a file from the local filesystem.",
+            "input_preview": json.dumps({"file_path": other.path}),
+        },
+    )
+
+    assert harness.attachment.verdicts == []
+    assert harness.events("approval")[-1]["status"] == "pending"
+
+
+def test_a_prompt_read_back_from_a_transcript_names_its_files_and_no_path() -> None:
+    """A remote session's own transcript, mirrored once a terminal resumes it."""
+    written = attachments.materialise("sess-1", [SHOT])
+    row = {
+        "type": "user",
+        "uuid": "row-9",
+        "message": {"role": "user", "content": attachments.describe("look", written)},
+    }
+    [emit] = transcripts.TranscriptTailer(path="/nonexistent", cwd="/repo").translate(row)
+    assert emit.kind == "user_message"
+    assert emit.fields == {
+        "block_id": "row-9",
+        "text": "look",
+        "source": "terminal",
+        "attachments": [SHOT_SHOWN],
+    }
+
+
+async def test_a_held_message_whose_files_were_swept_writes_them_again(
+    harness: Harness,
+) -> None:
+    """The size cap may take a waiting message's files; its kept bytes put them back."""
+    entry = await harness.attach()
+    await tick(harness.hub, entry, running=True)
+    await harness.hub.send(
+        {"id": "req-h", "session_id": "sess-1", "text": "look", "attachments": [SHOT]}
+    )
+    [swept] = message_folders()
+    (swept / "shot.png").unlink()
+
+    await tick(harness.hub, entry, running=False)
+
+    [written] = message_folders()
+    assert (written / "shot.png").read_bytes() == b"hello"
+    assert harness.attachment.injected[0][1].endswith(f"- shot.png: {written / 'shot.png'}")
+
+
+async def test_a_send_that_fails_before_it_is_held_leaves_no_files(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rc_client.sessions import titles
+
+    await harness.attach()
+
+    async def broken(channel: Any, text: str) -> bool:
+        raise RuntimeError("the summary could not be published")
+
+    monkeypatch.setattr(titles, "from_prompt", broken)
+    with pytest.raises(RuntimeError):
+        await harness.hub.send(
+            {"id": "req-i", "session_id": "sess-1", "text": "look", "attachments": [SHOT]}
+        )
+    assert message_folders() == []
+
+
+class DetachingAttachment(FakeAttachment):
+    """A bridge that goes away while a held message is being handed to it."""
+
+    def __init__(self, hub: SessionHub) -> None:
+        super().__init__()
+        self.hub = hub
+
+    async def inject(self, message_id: str, text: str) -> bool:
+        entry = self.hub.entry("sess-1")
+        await self.hub.shared.closed(entry, self, "terminal")
+        return False
+
+
+async def test_a_message_held_back_by_a_detachment_keeps_no_files(harness: Harness) -> None:
+    harness.attachment = DetachingAttachment(harness.hub)
+    entry = await harness.attach()
+    await tick(harness.hub, entry, running=True)
+    await harness.hub.send(
+        {"id": "req-j", "session_id": "sess-1", "text": "look", "attachments": [SHOT]}
+    )
+
+    await tick(harness.hub, entry, running=False)
+
+    assert [item["id"] for item in entry.queue] == ["req-j"]
+    assert message_folders() == [], "whatever delivers it later writes them again"
+
+
+@pytest.mark.parametrize(
+    "preview",
+    [
+        '{"file_path": "/truncated/at/the/end',
+        "Read a file from the local filesystem",
+        '["not", "an", "object"]',
+        '{"file_path": "\\u0000"}',
+        "",
+    ],
+)
+async def test_a_preview_the_device_cannot_read_is_asked_about(
+    harness: Harness, preview: str
+) -> None:
+    await harness.attach()
+    await harness.hub.attach_permission_request(
+        harness.attachment,
+        {"request_id": "rlossy", "tool_name": "Read", "description": "", "input_preview": preview},
+    )
+    assert harness.attachment.verdicts == []
+    assert harness.events("approval")[-1]["status"] == "pending"
+
+
+async def test_editing_the_session_s_own_file_still_asks(harness: Harness) -> None:
+    await harness.attach()
+    [own] = attachments.materialise("sess-1", [SHOT])
+    await harness.hub.attach_permission_request(
+        harness.attachment,
+        {
+            "request_id": "redit1",
+            "tool_name": "Edit",
+            "description": "Edit a file",
+            "input_preview": json.dumps({"file_path": own.path, "old_string": "a"}),
+        },
+    )
+    assert harness.attachment.verdicts == []
+    assert harness.events("approval")[-1]["status"] == "pending"
+
+
+async def test_stopping_the_daemon_deletes_the_files_of_held_messages(harness: Harness) -> None:
+    entry = await harness.attach()
+    await tick(harness.hub, entry, running=True)
+    await harness.hub.send(
+        {"id": "req-k", "session_id": "sess-1", "text": "look", "attachments": [SHOT]}
+    )
+    assert len(message_folders()) == 1
+
+    await harness.hub.close()
+
+    assert message_folders() == []
+
+
+@pytest.mark.parametrize("waiting", [False, True], ids=["before-the-drain", "already-waiting"])
+async def test_a_message_sent_as_the_turn_ends_goes_after_the_one_held_for_it(
+    harness: Harness, waiting: bool
+) -> None:
+    """The turn's end only schedules the drain (A43).
+
+    A send that takes the session's lock before the drain task, or was already
+    waiting for it when the turn ended, hands the held message over first.
+    """
+    entry = await harness.attach()
+    await tick(harness.hub, entry, running=True)
+    await harness.hub.send({"id": "req-x", "session_id": "sess-1", "text": "x"})
+    sending = harness.hub.send({"id": "req-y", "session_id": "sess-1", "text": "y"})
+    if waiting:
+        async with entry.lock:
+            sent = asyncio.create_task(sending)
+            for _ in range(10):
+                await asyncio.sleep(0)
+            await harness.hub.shared.tick(entry, running=False)
+        result = await sent
+    else:
+        await harness.hub.shared.tick(entry, running=False)
+        result = await sending
+    await drained(entry)
+
+    assert result == {"accepted": "queued", "queued_id": "req-y"}
+    assert [text for _, text in harness.attachment.injected] == ["x"]
+    assert [item["id"] for item in entry.queue] == ["req-y"]
+
+
+async def test_two_turn_ends_at_once_hand_over_held_messages_in_order(harness: Harness) -> None:
+    """While the first held message's files are checked, the second must wait (A19, A43)."""
+    entry = await harness.attach()
+    await tick(harness.hub, entry, running=True)
+    await harness.hub.send(
+        {"id": "req-x", "session_id": "sess-1", "text": "x", "attachments": [SHOT]}
+    )
+    await harness.hub.send({"id": "req-y", "session_id": "sess-1", "text": "y"})
+
+    await asyncio.gather(
+        tick(harness.hub, entry, running=False),
+        tick(harness.hub, entry, running=False),
+    )
+
+    assert [text.split("\n")[0] for _, text in harness.attachment.injected] == ["x"]
+    assert [item["id"] for item in entry.queue] == ["req-y"]
+
+
+async def test_a_message_the_bridge_refuses_on_sending_keeps_no_files(harness: Harness) -> None:
+    """A bridge refuses only as it goes away; delivery later writes the files again."""
+    entry = await harness.attach()
+    harness.attachment.reachable = False
+    result = await harness.hub.send(
+        {"id": "req-l", "session_id": "sess-1", "text": "look", "attachments": [SHOT]}
+    )
+    assert result == {"accepted": "queued", "queued_id": "req-l"}
+    assert message_folders() == []
+
+    harness.attachment.reachable = True
+    await tick(harness.hub, entry, running=False)
+    [written] = message_folders()
+    assert harness.attachment.injected[0][1].endswith(f"- shot.png: {written / 'shot.png'}")

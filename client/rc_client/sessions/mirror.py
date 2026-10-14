@@ -26,7 +26,7 @@ from ..config import MirrorConfig
 from ..logging_setup import logger
 from ..models import Session, now_ms
 from ..procscan import file_writers
-from . import titles
+from . import offsets, titles
 from .hub import SessionEntry, SessionHub
 from .limits import TurnEnd
 
@@ -224,7 +224,7 @@ class MirrorService:
             await titles.from_agent(entry.channel, title.text)
 
     def _offset_key(self, session_id: str) -> str:
-        return f"mirror-offset:{session_id}"
+        return offsets.offset_key(session_id)
 
     def _initial_offset(self, session_id: str, path: str) -> int:
         stored = self.hub.registry.get_kv(self._offset_key(session_id))
@@ -571,6 +571,29 @@ class MirrorService:
                 continue
             await self._tail_one(session_id, entry, grok_mirror.tailer)
         await self._read_titles()
+        await self._mark_driven()
+
+    async def _mark_driven(self) -> None:
+        """Keep the mark of every terminal session the device drives at its end.
+
+        While the device drives a session a terminal started, its runner
+        publishes what the session says and the transcript records the same
+        rows. The mirror that takes the session back — once it is closed, after
+        a restart — starts from this mark, so those rows never reach the apps a
+        second time as the terminal's, while whatever a terminal writes after
+        the device let go is still read.
+        """
+        for session_id, entry in list(self.hub.entries.items()):
+            if entry.runner is None or entry.session.origin == "remote":
+                continue
+            path = await self._driven_transcript(entry)
+            offsets.mark_end(self.hub.registry, session_id, path)
+
+    async def _driven_transcript(self, entry: SessionEntry) -> str | None:
+        """The file a driven session writes; a Claude one is looked for until found."""
+        if entry.transcript is None and entry.session.agent == "claude":
+            entry.transcript = await self._transcript_path(entry, entry.session.session_id)
+        return entry.transcript
 
     async def _tail_one(self, session_id: str, entry: SessionEntry, tailer: Tailer) -> None:
         """Read what is new, then report turn state as those rows left it.

@@ -20,6 +20,8 @@ shim started the CLI inside (amendment A40). The scripts live in `typist.py`;
 what is here is the claim on the transcript rows they leave behind, which is
 the only thing that confirms a change actually happened. Stopping a turn takes
 the same route since amendment A42: Escape, the key the person would press.
+Attachments ride in the text as well (A49): a message's files are written when
+it is sent, and the words the CLI receives end with their paths.
 """
 
 from __future__ import annotations
@@ -31,12 +33,13 @@ import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from .. import attachments
 from ..agents.claude.questions import (
     answers_for_tool,
     answers_from_tool,
     normalise_questions,
 )
-from ..agents.claude.tools import tool_kind, tool_title
+from ..agents.claude.tools import reads_session_file, tool_kind, tool_title
 from ..errors import RcError
 from ..logging_setup import logger
 from ..models import now_ms
@@ -44,7 +47,7 @@ from . import titles
 from .attach import Attachment, HookQuestion
 from .limits import TurnEnd
 from .ptys import PtyLink
-from .queue import hold
+from .queue import hold, release
 from .typist import COMPACT_COMMAND, TypedCommand, Typist
 
 if TYPE_CHECKING:  # pragma: no cover - imported for types only
@@ -150,7 +153,13 @@ class SharedState:
         return not self.busy and self.question is None and not self.busy_typing
 
 
-def pending_item(text: str, request_id: str, source: str = "remote") -> dict[str, Any]:
+def pending_item(
+    text: str,
+    request_id: str,
+    source: str = "remote",
+    uploads: list[dict[str, Any]] | None = None,
+    written: list[attachments.Attachment] | None = None,
+) -> dict[str, Any]:
     """One held message: a queue entry that also carries its bubble's identity.
 
     The bubble is the app's request id (amendment A12), which is also the id
@@ -158,6 +167,8 @@ def pending_item(text: str, request_id: str, source: str = "remote") -> dict[str
     and once more as delivered is one block throughout. `message_id` stays the
     channel's own: it names the injection, not the bubble. `source` is what the
     bubble says the message was: a person's, or the device's resume (A35).
+    `attachments` keeps the bytes the app sent until the CLI has the message,
+    and `written` the files they became, which its words name (A49).
     """
     message_id = str(uuid.uuid4())
     block_id = request_id or str(uuid.uuid4())
@@ -165,7 +176,8 @@ def pending_item(text: str, request_id: str, source: str = "remote") -> dict[str
         "id": block_id,
         "text": text,
         "ts": now_ms(),
-        "attachments": [],
+        "attachments": list(uploads or []),
+        "written": list(written or []),
         "message_id": message_id,
         "block_id": block_id,
         "retried": False,
@@ -191,6 +203,15 @@ def approval_title(tool: str, preview: str, description: str, cwd: str) -> str:
         if line:
             return line[:200]
     return tool
+
+
+def previewed_input(preview: str) -> dict[str, Any]:
+    """The tool input the relay's preview carries as JSON, or nothing."""
+    try:
+        parsed = json.loads(preview)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 class SharedControl:
@@ -234,7 +255,10 @@ class SharedControl:
         await entry.channel.set_state("readonly" if control == "terminal" else "idle")
         if entry.queue:
             # The held messages survive the detachment and go out through the
-            # ordinary resume path the next time the session is sent to.
+            # ordinary resume path the next time the session is sent to. Their
+            # files do not: whatever delivers them writes them again (A49).
+            for item in entry.queue:
+                await release(item)
             await entry.channel.publish_queue(self.hub.queue_snapshot(entry))
         await entry.channel.publish_summary()
 
@@ -271,7 +295,9 @@ class SharedControl:
         out and is still in flight here, which is what `waiting` protects.
         `end` is how those rows say the turn ended: `completed` unless the
         person interrupted it (amendment A32) or the vendor's usage limit
-        stopped it (A35).
+        stopped it (A35). A held message is handed over by the hub's drain
+        task, never from here: a settings change being typed holds the
+        session's lock until this reader confirms it (A40).
         """
         state = entry.shared
         if state is None:
@@ -280,8 +306,8 @@ class SharedControl:
             state.trigger = trigger
         state.running = running
         await self._settle(entry, end)
-        if not running:
-            await self.drain(entry)
+        if not running and entry.queue and state.injectable:
+            self.hub.schedule_drain(entry)
 
     async def _settle(self, entry: SessionEntry, end: TurnEnd | None = None) -> None:
         """Reconcile turn, state and prompts with what the transcript says.
@@ -317,10 +343,19 @@ class SharedControl:
         await entry.channel.end_turn(end.stop_reason, max(0, now_ms() - started), limit=end.limit)
 
     async def echo_delivered(self, entry: SessionEntry, message_id: str) -> None:
-        """The injected row reached the transcript: the bubble is already correct."""
+        """The injected row reached the transcript: the bubble is already correct.
+
+        The CLI has the words now, and the files they name are on disk, so the
+        bytes the app sent are not needed again; only their count is kept (A49).
+        """
         state = entry.shared
-        if state is not None and state.inflight == message_id:
+        if state is None:
+            return
+        if state.inflight == message_id:
             state.inflight = None
+        item = state.sent.get(message_id)
+        if item is not None:
+            item["attachments"] = attachments.wire_attachments(item.get("written") or [])
 
     async def echo_absorbed(self, entry: SessionEntry, message_id: str) -> None:
         """The CLI took the injection as mid-turn data; re-send it at the next idle."""
@@ -367,23 +402,36 @@ class SharedControl:
         entry: SessionEntry,
         request_id: str,
         text: str,
-        attachments: list[dict[str, Any]],
+        uploads: list[dict[str, Any]],
         source: str = "remote",
         queue_ts: int | None = None,
     ) -> dict[str, Any]:
         state = entry.shared
         if state is None:
             raise RcError("conflict", "the session is no longer attached")
-        if attachments:
-            raise RcError("unsupported", "attachments cannot be delivered to a terminal session")
-        # Amendment A15: held or injected, the message brings the session back.
-        await entry.channel.revive()
-        if source != "resume":
-            # The resume prompt is the device's sentence, not a title (A35).
-            await titles.from_prompt(entry.channel, text)
-        item = pending_item(text, request_id, source)
-        if state.injectable and await self._inject(entry, item):
-            return {"accepted": "sent"}
+        # A49: the files are written first, so a message refused for a bad one
+        # changes nothing, and they are there whenever the CLI reads its words.
+        written = await attachments.store(entry.session.session_id, uploads)
+        try:
+            # Amendment A15: held or injected, the message brings the session back.
+            await entry.channel.revive()
+            if source != "resume":
+                # The resume prompt is the device's sentence, not a title (A35).
+                await titles.from_prompt(entry.channel, text)
+        except Exception:
+            await attachments.drop(written)
+            raise
+        item = pending_item(text, request_id, source, uploads, written)
+        if entry.queue and state.injectable:
+            # A turn's end drains from a task of its own, so a message the turn
+            # held may not have gone yet: it goes first, and this one after it.
+            await self.drain_locked(entry)
+        if state.injectable and not entry.queue:
+            if await self._inject(entry, item):
+                return {"accepted": "sent"}
+            # A bridge refuses only as it goes away; whatever delivers the
+            # message next writes its files again from the bytes it kept (A49).
+            await release(item)
         # Amendment A19: held is not delivered, and not a block either. The
         # bubble is drawn when the CLI takes the message, which is where the
         # terminal shows it too. An edited message is held where it was (A43).
@@ -391,8 +439,15 @@ class SharedControl:
         await entry.channel.publish_queue(self.hub.queue_snapshot(entry))
         return {"accepted": "queued", "queued_id": str(item["id"])}
 
-    async def drain(self, entry: SessionEntry) -> None:
-        """Release the oldest held message once the transcript says the turn ended."""
+    async def drain_locked(self, entry: SessionEntry) -> None:
+        """Release the oldest held message once the transcript says the turn ended.
+
+        The hub's drain task calls this holding the session's lock, as a send
+        does: a second drain, or a message sent meanwhile, waits until this one
+        is in the CLI and counts as in flight, so nothing overtakes it and
+        nothing is injected into the turn it starts while its files are
+        written (A19, A43).
+        """
         state = entry.shared
         if state is None or not state.injectable or not entry.queue:
             return
@@ -403,6 +458,8 @@ class SharedControl:
             # The bridge refused it, so it goes back under its own `ts` (A43).
             # A message queued or removed while the bridge was being asked went
             # out in a snapshot without this one, which has to be put right.
+            # Its files go with it, as in `send`: the next attempt writes them again.
+            await release(item)
             hold(entry.queue, item, int(item["ts"]))
             if entry.queue != before:
                 await entry.channel.publish_queue(self.hub.queue_snapshot(entry))
@@ -413,8 +470,12 @@ class SharedControl:
         state = entry.shared
         if state is None:
             return False
+        written = await self._files(entry, item)
+        if written is None:
+            return False
         message_id = str(item["message_id"])
-        if not await state.attachment.inject(message_id, str(item["text"])):
+        prompt = attachments.describe(str(item["text"]), written)
+        if not await state.attachment.inject(message_id, prompt):
             return False
         state.mark_inflight(message_id)
         state.trigger = str(item.get("source") or "remote")
@@ -423,13 +484,41 @@ class SharedControl:
         await self._settle(entry)
         return True
 
+    @staticmethod
+    async def _files(
+        entry: SessionEntry, item: dict[str, Any]
+    ) -> list[attachments.Attachment] | None:
+        """The files a held message's words name, written again if they are gone.
+
+        A detachment takes them on purpose, and the size cap may have taken
+        them while the message waited; the bytes it kept write them again.
+        `None` means they could not be: the message stays held and is tried at
+        the next idle point, like one the bridge refused.
+        """
+        written = item.get("written")
+        if written is not None and not written:
+            return []
+        if written and await asyncio.to_thread(attachments.present, written):
+            return list(written)
+        await release(item)
+        uploads = list(item.get("attachments") or [])
+        try:
+            item["written"] = await attachments.store(entry.session.session_id, uploads)
+        except RcError:
+            log.warning("a held message's attachments could not be written again")
+            return None
+        return list(item["written"])
+
     async def _emit_message(self, entry: SessionEntry, item: dict[str, Any], delivery: str) -> None:
+        """The bubble: the words as typed and the files as names, never their paths."""
+        written = item.get("written") or []
         await entry.channel.emit(
             "user_message",
             block_id=str(item["block_id"]),
             text=str(item["text"]),
             source=str(item.get("source") or "remote"),
             delivery=delivery,
+            **({"attachments": attachments.wire_attachments(written)} if written else {}),
         )
 
     # ---------------------------------------------------------------- typing
@@ -545,6 +634,11 @@ class SharedControl:
         tool = str(payload.get("tool_name") or "Tool")
         description = str(payload.get("description") or "")
         preview = str(payload.get("input_preview") or "")
+        if reads_session_file(entry.session.session_id, tool, previewed_input(preview)):
+            # A49: an attachment the injected words named, which is the
+            # session's own; the terminal's dialog closes with the answer.
+            await state.attachment.relay_permission(channel_id, ALLOW)
+            return
         approval = SharedApproval(
             request_id=str(uuid.uuid4()),
             channel_id=channel_id,

@@ -64,7 +64,9 @@ export const claudeAgent: AgentInfo = {
   // is no command to type for the permission mode, so it stays the terminal's.
   shared_settings: true,
   shared_settings_keys: ['model', 'effort'],
-  shared_attachments: false,
+  // A49: the channel carries text alone, so the device writes each attachment
+  // to disk and the words it injects name it.
+  shared_attachments: true,
   // A33: the Max account this machine's Claude Code runs on, with the three
   // windows the OAuth usage endpoint reports — a session window, the week, and
   // the week confined to one model.
@@ -96,6 +98,8 @@ export const claudeNoShim: AgentInfo = {
   shared_interrupt: false,
   shared_settings: false,
   shared_settings_keys: undefined,
+  // A49: and no channel to name an attachment's file in.
+  shared_attachments: false,
   // A33: installed on this machine and signed in nowhere.
   accounts: [],
 };
@@ -216,16 +220,18 @@ export const grokAgent: AgentInfo = {
   ],
   default_effort: 'high',
   // A27: Grok Build advertises its whole list over ACP when a session opens.
-  capabilities: ['worktree', 'interrupt', 'queue', 'effort', 'history', 'commands'],
+  // A49: its prompts take no images, so the device writes each attachment to
+  // disk and the prompt names it.
+  capabilities: ['worktree', 'interrupt', 'queue', 'attachments', 'effort', 'history', 'commands'],
   // A28: `[cli] use_leader` is on here, so every `grok` this machine starts
   // joins the leader the device is a client of. `session/cancel` and
-  // `session/set_config_option` act for everyone in the session; its prompts
-  // take no images, which is the one flag that stays false.
+  // `session/set_config_option` act for everyone in the session, and since A49
+  // a prompt on it names the files the device wrote as well.
   attach: 'leader',
   attach_ready: true,
   shared_interrupt: true,
   shared_settings: true,
-  shared_attachments: false,
+  shared_attachments: true,
   // A33: an xAI account with no plan word and no windows the leader exposes, so
   // the card is the sign-in line alone.
   accounts: [{ provider: 'xai', method: 'account', plan: null, email: 'me@example.com' }],
@@ -237,6 +243,7 @@ export const grokNoLeader: AgentInfo = {
   attach_ready: false,
   shared_interrupt: false,
   shared_settings: false,
+  shared_attachments: false,
   // A33: this machine's client is older than the amendment, so it never looked
   // at how its agents are signed in and the page draws nothing for it.
   accounts: undefined,

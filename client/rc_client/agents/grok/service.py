@@ -225,7 +225,7 @@ class GrokLeaderService:
         session = entry.session
 
         async def on_turn_end() -> None:
-            await self.hub.drain_queue(entry)
+            self.hub.schedule_drain(entry)
             await self.publish_control(entry)
 
         async def on_session_id(session_id: str) -> None:

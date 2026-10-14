@@ -98,7 +98,7 @@ directory to your `PATH` to call it by name.
   venv/                     the private Python environment the installer creates
   state/rc-client.sqlite3   sessions, events, request idempotency, tail offsets, pending resumes
   state/client-build        the SHA-256 of the wheel this client was installed from   (0600)
-  state/attachments/        files received with a message
+  state/attachments/        files received with a message, one folder each, kept a week at most
   state/claude-mcp.json     the channel server definition the shim passes to Claude Code
   state/claude-settings.json  the two hooks the shim passes to Claude Code
   state/channel.sock        where channel bridges register (see below)
@@ -306,8 +306,8 @@ What each agent advertises:
 | Permission modes | `default` (Ask before edits), `acceptEdits` (Auto-accept edits), `plan` (Plan mode), `bypassPermissions` (Bypass permissions) | `untrusted` (Ask for everything), `on-request` (Ask when needed), `never` (Never ask) | `default` (Ask when needed), `acceptEdits` (Auto-accept edits), `auto` (Auto mode), `dontAsk` (Deny unless allowed), `plan` (Plan mode), `bypassPermissions` (Bypass permissions) | `untrusted` (Ask for everything), `on-request` (Ask when needed, the default), `never` (Never ask). pi has none of its own; these are the device's, enforced by the extension it loads into every pi session (A26) |
 | Efforts | `low`, `medium`, `high`, `xhigh`, `max` | Whatever the catalogue reports, clamped per model, from `minimal` to `ultra` | The union of the models' `reasoning_efforts`, weakest first, clamped per model when a session runs | pi's thinking levels: `off`, `low`, `medium`, `high`. `minimal`, `xhigh` and `max` exist too, but pi only says which of them a model exposes once a session is running, so they are advertised only when one of them is the person's own saved default |
 | Speeds | none | The `serviceTiers` the catalogue lists, in catalogue order and with their own labels: `priority` ("Fast") today. `AgentInfo.speeds` is the union over every model; a model that lists none can run at no tier | none | none |
-| Capabilities | `takeover`, `interrupt`, `queue`, `attachments`, `effort`, `history`, `worktree`, `commands` | `interrupt`, `queue`, `steer`, `history`, `worktree`, `attachments`, `effort`, `commands` | `worktree`, `interrupt`, `queue`, `effort`, `history`, `commands` | `worktree`, `interrupt`, `queue`, `steer`, `attachments`, `effort`, `history`, `commands`. `attachments` is images alone: pi takes them as base64 content on the prompt and refuses everything else |
-| Attachment | `attach: "channel"`, `attach_ready` when the shim is installed and first on `PATH`; `shared_interrupt` and `shared_settings` follow `attach_ready`, because the device stops a turn and changes `model` and `effort` (`shared_settings_keys`) by typing into the terminal through the shim (A40, A42); `shared_attachments` false | `attach: "daemon"`, `attach_ready` from a real handshake on the daemon socket, `shared_interrupt`, `shared_settings` and `shared_attachments` all true | `attach: "leader"`, `attach_ready` when Grok's own configuration has `[cli] use_leader` on and no sandbox (`rc-client grok setup` turns it on), so the next `grok` joins the machine's leader (A28); `shared_interrupt` and `shared_settings` true, `shared_attachments` false: prompts carry no images | `attach: "extension"`, `attach_ready` when the device's extension is installed in pi's global extension directory at this build, `shared_interrupt`, `shared_settings` and `shared_attachments` all true: the extension runs inside the pi process and can do all three |
+| Capabilities | `takeover`, `interrupt`, `queue`, `attachments`, `effort`, `history`, `worktree`, `commands` | `interrupt`, `queue`, `steer`, `history`, `worktree`, `attachments`, `effort`, `commands` | `worktree`, `interrupt`, `queue`, `attachments`, `effort`, `history`, `commands`. `attachments` although Grok takes no image in a prompt: the files are written to disk and the prompt names them (A49) | `worktree`, `interrupt`, `queue`, `steer`, `attachments`, `effort`, `history`, `commands`. `attachments` is images alone: pi takes them as base64 content on the prompt and refuses everything else |
+| Attachment | `attach: "channel"`, `attach_ready` when the shim is installed and first on `PATH`; `shared_interrupt` and `shared_settings` follow `attach_ready`, because the device stops a turn and changes `model` and `effort` (`shared_settings_keys`) by typing into the terminal through the shim (A40, A42); `shared_attachments` follows it too, because the channel the shim loads carries the paths of a message's files (A49) | `attach: "daemon"`, `attach_ready` from a real handshake on the daemon socket, `shared_interrupt`, `shared_settings` and `shared_attachments` all true | `attach: "leader"`, `attach_ready` when Grok's own configuration has `[cli] use_leader` on and no sandbox (`rc-client grok setup` turns it on), so the next `grok` joins the machine's leader (A28); `shared_interrupt`, `shared_settings` and `shared_attachments` all true: a prompt names its files on the leader as anywhere else (A49) | `attach: "extension"`, `attach_ready` when the device's extension is installed in pi's global extension directory at this build, `shared_interrupt`, `shared_settings` and `shared_attachments` all true: the extension runs inside the pi process and can do all three |
 
 Defaults follow the person's own configuration where there is one: pi's `default_model` and
 `default_effort` come from `defaultProvider`, `defaultModel` and `defaultThinkingLevel` in
@@ -391,6 +391,20 @@ boundary, with `trigger: "queue"` so the UI can tell a queued turn from a typed 
 advertise `steer`, so an app can redirect a turn in flight instead of queueing. A repeated
 `session.send` with the same request id is recognised as a duplicate and never delivered twice.
 
+The launch is a task of the session's own (`SessionHub.schedule_drain`). A turn's end — a runner's,
+or the transcript read that says an attached terminal's turn is over — only schedules it and never
+waits for it: the send holding the session's lock may itself be waiting on that turn's end (an
+interrupt), and a settings change typed into a terminal holds the lock until the transcript reader
+confirms it. One drain runs per session at a time, and one asked for while it runs makes it go round
+once more. It hands over the oldest held message under the session's lock, as a send does, so a
+message sent meanwhile waits behind it. A send that finds the session idle before the drain has run
+hands the held message over first: an `auto` send to a session the device drives, and any send to
+an attached terminal, which also holds the new message while anything is still held, so nothing
+overtakes a held message. A Grok prompt is only over once its request has answered, which comes
+after the `turn_completed` notification that ends its turn, so a Grok session drains then. A
+session being closed (A39) drains nothing and stops a drain already under way, a deleted session's
+drain is cancelled, and nothing is drained once the daemon stops.
+
 The queue is kept in `ts` order, which is the order it drains in (amendment A43). An app edits a
 queued message by taking it out with `session.queue_remove` and sending the new words back with
 `mode: "queue"` and `queue_ts`, the `ts` the entry had; the device holds that message in front of
@@ -432,6 +446,14 @@ Claude send that has to restart the CLI to apply a new effort level, both show t
 they start. A Codex thread whose first turn has not run refuses every `thread/resume`, so a refusal
 is remembered and not repeated until a turn boundary on that thread says something has changed.
 
+A Claude answer streams under the index its block has in the API message, and the CLI then hands
+each finished block over alone, as a message of its own. The SDK translator
+(`agents/claude/translate.py`) remembers where every streamed text and thinking block started and
+gives the finished block that index, not its position in the one-block message, so a text block that
+follows a thinking block the CLI does not show is still one block, streamed and then finished.
+Taking the position instead would publish such an answer twice, once finished and once still
+streaming.
+
 `device.mkdir {device_id, path, name}` makes the folder a session will work in (A37): `fs.make_dir`
 checks the name as one path component — non-empty, no `/`, no `\\`, no NUL, no leading `.`, at most
 255 bytes of UTF-8 — and answers `bad_request` with a sentence a person can act on when it is not;
@@ -463,8 +485,14 @@ once; interrupts the runner when it is busy; calls the runner's `shutdown()`; an
 `archived: true`, `control: "none"`, `state: "stopped"`, clears the turn and the detail, publishes
 the summary once and answers. The whole close is bounded (8 s); an agent that will not die is let
 go of anyway, because the person asked for the session to end and a request that never answers
-helps nobody. `archived: false` only clears the flag. `shutdown()` is the runner protocol's second
-ending beside `close()` — `close` lets go of the agent, `shutdown` ends it:
+helps nobody. Messages held for the session are discarded, never sent: while the channel is
+`closing` the end of the interrupted turn drains nothing, a drain already under way is stopped
+before the agent is asked anything (files it was still writing are deleted; files already named
+to the agent are left to the age limit), and the close empties
+the queue, deletes the folders of their attachments and publishes the empty `queue` before the
+summary.
+`archived: false` only clears the flag. `shutdown()` is the runner protocol's second ending beside
+`close()` — `close` lets go of the agent, `shutdown` ends it:
 
 | Runner | `shutdown()` |
 | --- | --- |
@@ -665,8 +693,16 @@ Every ten seconds the daemon scans for agent sessions it did not create:
   a terminal's are mirrored: see "Work another application owns" below.
 
 A discovered session is published with `origin: "terminal"` and its rows are mirrored into the same
-block timeline, with `source: "terminal"` on the user messages. A process scan decides who owns the
-input, using `lsof` on macOS to find the process holding the transcript:
+block timeline, with `source: "terminal"` on the user messages. The mirror keeps its place in each
+file in the registry. While the device itself drives such a session — resumed from an app, or taken
+over — its runner publishes the rows the session writes, and the mirror moves that place to the end
+of the file on every tail pass, as the hub does once more when it lets go of the session (a close,
+the daemon stopping); when the mirror takes the session back, once it is closed or after a restart,
+it reads on from there, so those rows never reach the apps a second time as the terminal's. The end
+of the file may fall inside a row the CLI is still writing, even inside one of its characters; the
+reader skips what is left of that row like any line it cannot parse, and reads every row after it.
+A process scan decides who owns the input, using `lsof` on macOS to find the process holding the
+transcript:
 
 | `control` | Meaning | What the apps do |
 | --- | --- | --- |
@@ -894,7 +930,7 @@ This table is the Claude channel. Codex on the shared daemon does more; see the 
 | `/compact` | Yes since A40, typed into the terminal; other commands are `unsupported` |
 | Rename | Yes |
 | Take over | No, `conflict`: the session is already attached |
-| Attachments | No, `unsupported`: they cannot be delivered to a terminal session |
+| Attachments | Yes since A49: the device writes the files and the words it injects end with their paths, which the CLI opens with `Read`; the bubble names the files and shows no path |
 
 Whoever answers a permission prompt first wins. When the terminal answers, the device sees the tool
 run or be refused in the transcript and closes the block with `decision.by: "terminal"`; a later
@@ -907,7 +943,7 @@ message an older app sends is queued rather than injected, because the dialog ow
 the attachment drops, pending approvals and a pending question
 become `expired`, and the session moves to `terminal` if the CLI process is still alive or to `none`
 if it exited. Messages still held in the queue stay there and go out through the ordinary resume
-path.
+path; their files are deleted now and written again by whatever delivers them (A49).
 
 ### The device types into the terminal (A40)
 
@@ -943,8 +979,10 @@ not counted as typing. Nothing of what the person typed leaves the terminal: the
 **how many** characters are in their unfinished line, never which.
 
 `sessions/typist.py` holds the scripts. Each one holds the session's lock, so a message from an app
-waits behind the keystrokes rather than landing between two of them. Three rules make this safe to
-do to somebody else's terminal:
+waits behind the keystrokes rather than landing between two of them. The transcript reader that
+confirms each change never waits for that lock: a held message it finds ready goes to the session's
+drain task, which injects it once the script is done. Three rules make this safe to do to somebody
+else's terminal:
 
 - **Only into an idle terminal.** No turn, no dialog, an empty draft, and a keyboard still for two
   seconds. Anything else is `conflict` ("the terminal is busy; try again in a moment") and
@@ -955,13 +993,21 @@ do to somebody else's terminal:
   file.
   On a conversation with cached history the CLI asks once more after `s` — "Switch model? Your
   next response will be slower and use more tokens … 1. Yes, switch to … 2. No, go back", yes
-  highlighted — and the device presses Enter; a fresh session asks nothing.
+  highlighted — and the device presses Enter; a fresh session asks nothing. Claude Code 2.1.299
+  asks the same about an effort level, titled "Change effort level?", and gets the same Enter.
+  Its slider has the five levels the device offers, fewer on a model whose effort is capped, and
+  keeps Ultracode apart as a toggle on Tab, which the device never presses; both sliders stop at
+  their ends. The TUI rewrites only the cells that changed and the screen text marks each jump
+  with one space, so a footer drawn over a half-matching screen reads "s for this se sion only":
+  the slider counts as open when any of its own words is on screen whole (`←/→ to adjust`, that
+  footer, `Smarter`, `Ultracode`).
 - **The transcript decides.** The reply to `session.set` waits for the CLI to write the command and
-  its answer (`Set model …` / `Set effort …`, matched loosely); until then the app's `Session` says
-  the old value. A picker that does not open, or an answer that does not come within eight seconds,
-  presses Escape and answers `conflict`. The rows the device typed are claimed, so A32 draws no
-  terminal bubble for them; `/compact` is echoed as the app's own `user_message` (A27) and the
-  compaction notice is A32's as before.
+  its answer (`Set model …` matched loosely; `Set effort level to <the level asked for>`, so a
+  capped slider that stopped short is refused); until then the app's `Session` says the old value.
+  A picker that does not open, or an answer that does not come within eight seconds, presses Escape
+  and answers `conflict`. The rows the device typed are claimed, so A32 draws no terminal bubble for
+  them; `/compact` is echoed as the app's own `user_message` (A27) and the compaction notice is
+  A32's as before.
 
 **Stop is the fourth script, and the one the rules above do not fit (A42).** `session.stop` on a
 `shared` Claude session presses Escape, which is how a turn is stopped in that terminal. It keeps
@@ -1477,7 +1523,8 @@ the mirror to the leader — or back, when the leader goes away — neither doub
 Grok echoes every prompt back as a `user_message_chunk`, the TUI's and the device's alike; the TUI's
 become `user_message {source: "terminal"}` bubbles, and the device's are recognised by their text
 against what this device sent in the turn and dropped (`agents/grok/echoes.py`), the same problem
-Codex's daemon has and the same answer.
+Codex's daemon has and the same answer. The text compared is the prompt as sent, the attachment
+paths of A49 included; every other prompt has those paths taken off before it is published.
 
 A permission prompt is a `session/request_permission` sent to every client, the TUI's dialog
 included; the runner offers the leader's own options except `enable-always-approve` — Grok's "yes,
@@ -1529,8 +1576,9 @@ apps' hint saying what to run.
   grok 1.0.25, which is what ACP says: cancellation has no reply. The notification form is untested.
 - **Questions.** Grok asks the user through its own `ask_user_question` tool rather than an ACP
   request, so no `question` block is raised for one; it appears as a tool call.
-- **Attachments.** This build answers `promptCapabilities.image: false`, so a prompt has nowhere to
-  put a file. The capability is not advertised and an attachment sent anyway is refused.
+- **Attachments travel as paths.** This build answers `promptCapabilities.image: false`, so a prompt
+  carries no file: the device writes each one to disk and the prompt names it, for Grok to open with
+  `read_file` (A49; see "Attachments" below), on a private child and on the leader alike.
 - **Approvals on the leader were seen once.** One TUI-driven `rm` sent `session/request_permission`
   to the joined device client and drew the TUI's dialog; the device's answer resolved both. Later
   probes had Grok's default mode allow `rm` and writes outside the workspace by itself, so no second
@@ -1773,11 +1821,67 @@ running binary accepts. Any other attachment is refused with `unsupported` rathe
 
 ## Attachments
 
-Claude and Codex read files from disk far more reliably than they accept inline binary payloads
-(Grok takes none at all), so an
-attachment sent with a message is written to `state/attachments/<session>/` with a sanitised name,
-and the prompt gains the resulting paths. Limits are 8 attachments and 6 MiB each after decoding.
-Files are removed when the session is deleted. This path has not been exercised end to end.
+Claude, Codex and Grok read files from disk far more reliably than they accept inline binary
+payloads, so an attachment sent with a message is written to disk and the prompt gains the
+resulting paths: `Attached files:` and one `- name: path` line per file. Claude Code opens them with
+`Read` and Grok Build with `read_file`, both of which read images, on a session started from an app
+and on an attached terminal alike; neither is sent an image block, because Grok answers
+`promptCapabilities.image: false` and a Claude channel carries text (A49). Codex takes its images as
+`localImage` inputs and finds only the other files in the prompt; pi takes images inline (see pi).
+Limits are 8 attachments and 6 MiB each after decoding.
+
+Every message gets a folder of its own, `state/attachments/<session>/<message>/<name>`, with a fresh
+twelve-character `<message>`, folders `0700` and files `0600`. A name is sanitised, and numbered
+(`shot-2.png`) when the same message already has it, so no file ever overwrites another; a message
+refused for one bad file writes nothing.
+
+The apps see what the person sent: the `user_message` carries the typed words and
+`attachments: [{name, mime, size}]`, and a held message's `queue` entry counts its files (A43). A
+prompt read back from an agent's own record — a Claude transcript, Grok's `updates.jsonl`, the
+leader's replay or echo — whose last lines name files under `state/attachments` is published the
+same way: the words, and for each file its name, the type its extension suggests, and its size while
+it is still there (0 once it has gone). A path never reaches an app: a title or an error the agent
+words itself that quotes one is published with the file's name in its place.
+
+Opening one of those files asks nobody. When Claude asks to `Read` — through the SDK's `can_use_tool`
+on a session the device started, through the channel's permission relay on an attached one, whose
+preview must parse as the tool's input — or Grok asks `session/request_permission` for its own
+`read_file` (named so by `_meta["x.ai/tool"]` in the `grok_build` namespace, or by `rawInput.variant`
+`ReadFile`), and every path the request names lies in this session's own folder under
+`state/attachments`, written as the device wrote it, a regular file with one name and no link
+anywhere from the root down to it, the device allows it at once and raises no approval. For Grok
+that is the `allow-once` option and never another, and a `rawInput` key beyond the paths, `variant`,
+`pages`, `format`, `offset` and `limit` is asked about. Any other tool, path or session is asked
+about as before.
+
+Nothing is kept for long:
+
+- The daemon sweeps once when it starts and then every hour, off the event loop: every file older
+  than 7 days is deleted, then the oldest files until the folder holds no more than 512 MiB, then
+  every folder left empty except one changed in the last minute, which a send may be filling. Files
+  an earlier build wrote straight into `<session>/` are swept the same way. The limits are constants
+  in `rc_client/attachments.py`, not settings.
+- Deleting a session deletes its folder.
+- A message held for an attached Claude terminal writes its files when it is sent, so they are there
+  when the CLI takes it. Taken out of the queue — `session.queue_remove`, which an edit begins with —
+  it takes its folder with it at once; when the attachment drops, or the bridge refuses a message,
+  the folders of the messages still held go too, and whatever delivers them later writes them again
+  from the bytes the message kept.
+  A message whose files the size cap took while it waited writes them again before the CLI gets
+  its words. A message held for a session the device drives writes nothing until it goes out. The
+  queue lives in memory, so the daemon stopping deletes the files of every message still held.
+- A send that fails before the agent has the prompt deletes its folder: the SDK call that hands
+  Claude the prompt failing, or Grok refusing `session/prompt` as it stood — a JSON-RPC
+  invalid-request, method-not-found or invalid-params error — before it said anything after that
+  prompt. Any other failure keeps the files, which Grok may have opened, until the age limit.
+
+The state folder may be reached through a link — it is resolved — but `state/attachments` itself
+must be a real folder: if it is a link, attachments are refused with an error and nothing is
+written, swept, deleted or recognised through it. Below the root none of this follows a link or
+touches anything outside it, a file that vanishes meanwhile is skipped, and the log says how many
+files and bytes went, never a name or a path. For Claude and Grok the files are written and deleted
+off the event loop; Codex's sends are unchanged.
+`rc-client uninstall --purge` removes the whole device home, attachments included.
 
 ## Logs
 
@@ -1922,6 +2026,11 @@ and Codex out of step.
   a restarted daemon may briefly report a remote session as terminal-controlled. It self-corrects.
 - A mirrored session reports `readonly` during a long *silent* tool call, because the mirror infers
   activity from transcript rows arriving and a `sleep 45` writes nothing.
+- A mirrored or attached Claude session names a text or thinking block after its message and its
+  place in the transcript row, and the CLI files each block of a message as a row of its own. A
+  thought the CLI shows and the answer after it therefore share one block id, and the answer
+  replaces the thought. A thought it does not show publishes nothing, so nothing is lost then; a
+  session the device drives through the SDK takes the streamed index instead and is not affected.
 - The process scan runs about every ten seconds, so a very short terminal session can finish before
   the mirror sees the CLI holding it and appears directly as `control: "none"`. Only the live-control
   window is missed, never the timeline.

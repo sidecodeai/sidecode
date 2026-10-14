@@ -29,6 +29,12 @@ from typing import Any
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "grok"
 SESSION_ID = "01a09b4f-1b25-7e92-b96b-356d292ff2d0"
 INJECT_INTERVAL = 0.02
+# The modes whose prompt fails, with the JSON-RPC error each answers it with.
+FAILURES = {
+    "refuse": (-32602, "Invalid prompt"),
+    "fail-midway": (-32602, "Model overloaded"),
+    "break": (-32603, "Internal error"),
+}
 
 
 def _handshake(name: str) -> dict[str, Any]:
@@ -225,6 +231,18 @@ class FakePeer:
             self.echo(_text_of(params.get("prompt")))
         if self.mode == "approval":
             self.ask_permission()
+            return
+        if self.mode in FAILURES:
+            # Refused as it stood, failed once the turn had begun to stream, or
+            # failed inside Grok before it said anything.
+            if self.mode == "fail-midway":
+                for row in _notifications("turn.jsonl")[:4]:
+                    self.send(_for_session(row, self.prompt_session))
+            code, message = FAILURES[self.mode]
+            self.send(
+                {"jsonrpc": "2.0", "id": message_id, "error": {"code": code, "message": message}}
+            )
+            self.prompt_id = None
             return
         if self.mode in {"cancel", "leader-cancel"}:
             for row in _notifications("turn.jsonl")[:4]:

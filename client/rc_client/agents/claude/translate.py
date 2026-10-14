@@ -1,7 +1,17 @@
 """Translate `claude-agent-sdk` messages into protocol session events.
 
 Pure and stateful only in the way the timeline is: it remembers which block a
-tool result belongs to and which message id the current stream deltas carry.
+tool result belongs to, which message id the current stream deltas carry, and
+where in its message each streamed text or thinking block sits.
+
+That last part is what keeps one answer one block. The deltas name a block by
+its index in the API message, but the CLI hands over a finished message one
+block at a time, each in a message of its own, so a text block that follows a
+thinking block arrives alone at position 0 while its deltas said 1. Read as
+two blocks, the answer showed twice, once finished and once still streaming.
+A finished block therefore takes the index its block started under in the
+stream, and where nothing streamed, the count of the blocks earlier pieces of
+its message carried.
 """
 
 from __future__ import annotations
@@ -21,6 +31,7 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
+from ...attachments import without_paths
 from ...diffs import from_tool_input
 from ...models import now_ms
 from ...sessions.limits import claude_result_limit
@@ -30,6 +41,11 @@ from .injected import classify
 from .tools import todos_from_input, tool_kind, tool_title
 
 MAX_TOOL_BLOCKS = 2000
+# How many messages keep the positions of their blocks until the finished
+# blocks arrive; one that never finishes is let go of eventually.
+MAX_POSITIONED_MESSAGES = 64
+# The streamed block types a finished block is matched back to by position.
+_POSITIONED = ("text", "thinking")
 
 
 def result_text(content: Any) -> str:
@@ -62,6 +78,11 @@ class ClaudeTranslator:
         self.session_id: str | None = None
         self.model: str | None = None
         self._stream_message_id: str | None = None
+        # Per streamed message, per block type, the indices its blocks started
+        # at and no finished block has claimed yet, in order.
+        self._streamed: dict[str, dict[str, list[int]]] = {}
+        # Per message, how many blocks the finished pieces of it carried so far.
+        self._handed: dict[str, int] = {}
         self._tools: dict[str, dict[str, Any]] = {}
         self._interrupted = False
 
@@ -92,6 +113,40 @@ class ClaudeTranslator:
         base = message_id or self._stream_message_id or "msg"
         return f"{base}:{index}"
 
+    def _note_block(self, event: dict[str, Any]) -> None:
+        """Remember where a streamed text or thinking block sits in its message."""
+        block = event.get("content_block") or {}
+        kind = block.get("type") if isinstance(block, dict) else None
+        message_id = self._stream_message_id
+        if message_id is None or kind not in _POSITIONED:
+            return
+        positions = self._streamed.setdefault(message_id, {})
+        positions.setdefault(str(kind), []).append(int(event.get("index") or 0))
+        for stale in list(self._streamed)[:-MAX_POSITIONED_MESSAGES]:
+            self._streamed.pop(stale, None)
+
+    def _handed_over(self, message: AssistantMessage) -> int:
+        """How many blocks of this message its earlier finished pieces carried."""
+        message_id = message.message_id
+        if not message_id:
+            return 0
+        offset = self._handed.get(message_id, 0)
+        self._handed[message_id] = offset + len(message.content)
+        for stale in list(self._handed)[:-MAX_POSITIONED_MESSAGES]:
+            self._handed.pop(stale, None)
+        return offset
+
+    def _finished_index(self, message_id: str | None, kind: str, position: int) -> int:
+        """The index a finished block was streamed under, else its place in the message."""
+        positions = self._streamed.get(message_id or "", {})
+        started = positions.get(kind)
+        if not started:
+            return position
+        index = started.pop(0)
+        if not any(positions.values()):
+            self._streamed.pop(message_id or "", None)
+        return index
+
     def _feed_stream(self, message: StreamEvent) -> list[Emit]:
         event = message.event or {}
         event_type = event.get("type")
@@ -101,6 +156,9 @@ class ClaudeTranslator:
             return []
         if event_type == "message_stop":
             self._stream_message_id = None
+            return []
+        if event_type == "content_block_start":
+            self._note_block(event)
             return []
         if event_type != "content_block_delta":
             return []
@@ -120,34 +178,36 @@ class ClaudeTranslator:
     def _feed_assistant(self, message: AssistantMessage) -> list[Emit]:
         emits: list[Emit] = []
         parent = message.parent_tool_use_id
-        for index, block in enumerate(message.content):
+        for position, block in enumerate(message.content, start=self._handed_over(message)):
             if isinstance(block, TextBlock):
-                if not block.text:
-                    continue
-                fields: dict[str, Any] = {
-                    "block_id": self._block_id(message.message_id, index),
-                    "text": block.text,
-                    "done": True,
-                }
-                if parent:
-                    fields["parent_block_id"] = parent
-                emits.append(Emit("assistant_text", fields))
+                emits.extend(self._finished(message, "text", position, block.text))
             elif isinstance(block, ThinkingBlock):
-                if not block.thinking:
-                    continue
-                fields = {
-                    "block_id": self._block_id(message.message_id, index),
-                    "text": block.thinking,
-                    "done": True,
-                }
-                if parent:
-                    fields["parent_block_id"] = parent
-                emits.append(Emit("thinking", fields))
+                emits.extend(self._finished(message, "thinking", position, block.thinking))
             elif isinstance(block, ToolUseBlock):
                 emits.extend(self._tool_use(block, parent))
             elif isinstance(block, ToolResultBlock):
                 emits.extend(self._tool_result(block, parent))
         return emits
+
+    def _finished(
+        self, message: AssistantMessage, kind: str, position: int, text: str
+    ) -> list[Emit]:
+        """A finished text or thinking block, under the id its deltas streamed into.
+
+        The index is claimed even for an empty block, which publishes nothing,
+        so the next finished block of the message still lands on its own.
+        """
+        index = self._finished_index(message.message_id, kind, position)
+        if not text:
+            return []
+        fields: dict[str, Any] = {
+            "block_id": self._block_id(message.message_id, index),
+            "text": text,
+            "done": True,
+        }
+        if message.parent_tool_use_id:
+            fields["parent_block_id"] = message.parent_tool_use_id
+        return [Emit("assistant_text" if kind == "text" else "thinking", fields)]
 
     def _tool_use(self, block: ToolUseBlock, parent: str | None) -> list[Emit]:
         tool_input = block.input if isinstance(block.input, dict) else {}
@@ -294,7 +354,8 @@ class ClaudeTranslator:
             fields["limit"] = limit
         emits = [Emit("turn_completed", fields)]
         if message.is_error and message.result:
-            emits.insert(0, Emit("error", {"message": str(message.result)[:2000]}))
+            said = without_paths(str(message.result))[:2000]
+            emits.insert(0, Emit("error", {"message": said}))
         return emits
 
     def _feed_task(self, message: Any) -> list[Emit]:

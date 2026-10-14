@@ -13,6 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from ...attachments import split_prompt, without_paths
 from ...models import now_ms
 from ..base import Emit
 
@@ -220,13 +221,21 @@ class GrokTranslator:
         return self._chunk("thinking", update, meta)
 
     def _on_user_message_chunk(self, update: dict[str, Any], meta: dict[str, Any]) -> list[Emit]:
+        """A prompt, with the paths of a device's attachments taken off it (A49)."""
         if not self._mirror_user_messages:
             return []
         text = text_of(update.get("content"))
         if not text:
             return []
         prompt_id = str(meta.get("promptId") or meta.get("eventId") or now_ms())
-        fields = {"block_id": f"user:{prompt_id}", "text": text, "source": "terminal"}
+        said, files = split_prompt(text)
+        fields: dict[str, Any] = {
+            "block_id": f"user:{prompt_id}",
+            "text": said,
+            "source": "terminal",
+        }
+        if files:
+            fields["attachments"] = files
         return [Emit("user_message", fields)]
 
     # ------------------------------------------------------------- tool calls
@@ -459,7 +468,7 @@ class GrokTranslator:
 
     def _on_error(self, update: dict[str, Any], meta: dict[str, Any]) -> list[Emit]:
         message = str(update.get("message") or update.get("error") or "grok error")
-        return [Emit("error", {"message": message[:2000]})]
+        return [Emit("error", {"message": without_paths(message)[:2000]})]
 
     # ---------------------------------------------------------------- settings
 

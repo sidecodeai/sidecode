@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from rc_client import attachments
 from rc_client.agents.base import Emit
 from rc_client.agents.grok.translate import SETTINGS, GrokTranslator
 from rc_client.ids import block_uuid
@@ -109,6 +110,20 @@ def test_the_update_log_a_terminal_writes_carries_the_same_shapes() -> None:
 def test_a_driven_session_never_mirrors_its_own_prompt() -> None:
     emits = replay("terminal-updates.jsonl", mirror_user_messages=False)
     assert "user_message" not in kinds(emits)
+
+
+def test_a_logged_prompt_with_files_shows_their_names_and_never_their_paths() -> None:
+    """A49: `updates.jsonl` keeps the prompt as Grok got it, paths and all."""
+    written = attachments.materialise(SESSION, [{"name": "shot.png", "data_base64": "aGVsbG8="}])
+    prompt = attachments.describe("look", written)
+    row = update("user_message_chunk", {"content": {"type": "text", "text": prompt}})
+    [emit] = GrokTranslator().notification("session/update", row)
+    assert emit.fields == {
+        "block_id": f"user:{SESSION}-1",
+        "text": "look",
+        "source": "terminal",
+        "attachments": [{"name": "shot.png", "mime": "image/png", "size": 5}],
+    }
 
 
 def test_hook_rows_are_not_events() -> None:
@@ -268,3 +283,11 @@ def test_every_published_event_validates_against_the_schema() -> None:
             if emit.kind == "turn_completed":
                 payload["turn_id"] = "0b6d3a1e-6f6c-4a3f-9a3a-2a34a7f7e3a1"
             validator.validate(payload)
+
+
+def test_an_error_quoting_a_file_names_it_even_where_it_is_cut() -> None:
+    """The paths come off before the 2000-character cut, so none is left half there."""
+    written = attachments.materialise(SESSION, [{"name": "shot.png", "data_base64": "aGVsbG8="}])
+    said = "x" * 1990 + f"{written[0].path} could not be read"
+    [emit] = GrokTranslator().notification("session/update", update("error", {"message": said}))
+    assert emit.fields["message"] == ("x" * 1990 + "shot.png could not be read")[:2000]

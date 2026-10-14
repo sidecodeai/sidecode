@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from rc_client import attachments
+from rc_client.agents.claude.adapter import ClaudeRunner
 from rc_client.sessions import hub as hub_module
+from tests.helpers import drained
 from tests.test_app_defects import StubSDK, claude_runner
 from tests.test_hub import FakeRunner, add_session, build_hub
 from tests.test_pi_runner import build as build_pi
+
+SHOT = {"name": "shot.png", "mime": "image/png", "data_base64": "aGVsbG8="}
 
 
 def summaries(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -50,6 +57,21 @@ class StuckRunner(FakeRunner):
         await asyncio.sleep(30)
 
 
+class DrainingRunner(FakeRunner):
+    """An agent whose interrupted turn ends as a real one does: by draining the queue."""
+
+    def __init__(self, channel: Any, on_turn_end: Callable[[], Awaitable[None]]) -> None:
+        super().__init__(channel)
+        self.on_turn_end = on_turn_end
+
+    async def interrupt(self) -> bool:
+        await super().interrupt()
+        await self.on_turn_end()
+        # The drain the turn's end scheduled runs while the session closes.
+        await asyncio.sleep(0)
+        return True
+
+
 # --------------------------------------------------------------- the hub
 
 
@@ -73,6 +95,93 @@ async def test_closing_a_working_session_stops_it_and_says_so_once(tmp_path: Pat
     # One publish for the whole close: the row goes from working to closed and
     # archived in a single step.
     assert summaries(frames)[before:] == [session]
+    registry.close()
+
+
+async def test_closing_discards_the_held_messages_instead_of_starting_them(
+    tmp_path: Path,
+) -> None:
+    """The interrupted turn's end once drained a held message as the session closed."""
+    hub, frames, registry = build_hub(tmp_path)
+    entry = add_session(hub)
+
+    async def on_turn_end() -> None:
+        hub.schedule_drain(entry)
+
+    runner = DrainingRunner(entry.channel, on_turn_end)
+    entry.runner = runner
+    await hub.send({"id": "req-1", "session_id": "sess-1", "text": "go"})
+    await hub.send({"id": "req-2", "session_id": "sess-1", "text": "later", "mode": "queue"})
+    [held] = entry.queue
+    held["written"] = attachments.materialise("sess-1", [SHOT])
+    folder = Path(held["written"][0].path).parent
+
+    result = await hub.archive({"session_id": "sess-1", "archived": True})
+    await drained(entry)
+
+    assert runner.sent == ["go"], "the held message never became a turn"
+    assert entry.queue == []
+    assert not folder.exists()
+    queues = [
+        frame["event"]["pending"]
+        for frame in frames
+        if frame.get("type") == "session.event" and frame["event"]["kind"] == "queue"
+    ]
+    assert queues[-1] == []
+    session = result["session"]
+    assert (session["archived"], session["state"], session["queued"]) == (True, "stopped", 0)
+    assert summaries(frames)[-1] == session
+    registry.close()
+
+
+async def test_a_drain_under_way_is_stopped_by_the_close_and_leaves_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The drain had taken the held message and was writing its files.
+
+    Let go on, it would say the message and an error on the archived session.
+    """
+    hub, frames, registry = build_hub(tmp_path)
+    entry = add_session(hub)
+    runner = ClaudeRunner(entry.channel, binary=None, cwd=str(tmp_path), session_id="sess-1")
+    sdk = StubSDK()
+    runner._client = sdk  # type: ignore[assignment]
+    entry.runner = runner
+    runner._turn_done.clear()
+    await hub.send(
+        {"id": "req-x", "session_id": "sess-1", "text": "x", "attachments": [SHOT], "mode": "queue"}
+    )
+    writing, release, written = threading.Event(), threading.Event(), threading.Event()
+    materialise = attachments.materialise
+
+    def slow(session_id: str, uploads: list[dict[str, Any]]) -> list[attachments.Attachment]:
+        writing.set()
+        release.wait(5)
+        try:
+            return materialise(session_id, uploads)
+        finally:
+            written.set()
+
+    monkeypatch.setattr(attachments, "materialise", slow)
+    runner._turn_done.set()
+    hub.schedule_drain(entry)
+    await asyncio.to_thread(writing.wait, 5)
+
+    closing = asyncio.create_task(hub.archive({"session_id": "sess-1", "archived": True}))
+    await asyncio.sleep(0.05)
+    release.set()
+    result = await asyncio.wait_for(closing, timeout=5)
+    await drained(entry)
+    # The thread cannot be stopped: whatever it wrote has to have been taken back.
+    await asyncio.to_thread(written.wait, 5)
+
+    assert result["session"]["archived"] is True
+    assert sdk.prompts == []
+    kinds = [frame["event"]["kind"] for frame in frames if frame.get("type") == "session.event"]
+    assert "user_message" not in kinds
+    assert "error" not in kinds
+    folder = attachments.state_root() / "sess-1"
+    assert [path for path in folder.rglob("*") if path.is_file()] == []
     registry.close()
 
 

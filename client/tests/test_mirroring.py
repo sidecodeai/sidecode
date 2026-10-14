@@ -131,6 +131,22 @@ def test_tailer_ignores_a_partial_trailing_line(tmp_path: Path) -> None:
     assert tailer.read_new() == []
 
 
+def test_a_mark_inside_a_row_skips_the_rest_of_it_and_nothing_after(tmp_path: Path) -> None:
+    """A session the device let go of is marked at its file's end, which may be
+    inside a row the CLI is still writing, even inside one of its characters."""
+    path = tmp_path / "t.jsonl"
+    path.write_text(
+        json.dumps(user_row("naïve café"), ensure_ascii=False)
+        + "\n"
+        + json.dumps(user_row("after", uuid="u2"))
+        + "\n",
+        encoding="utf-8",
+    )
+    tailer = TranscriptTailer(path=str(path), cwd="/repo")
+    tailer.offset = path.read_bytes().index("é".encode()) + 1
+    assert [row["uuid"] for row in tailer.read_new()] == ["u2"]
+
+
 def test_tailer_restarts_when_the_file_shrinks(tmp_path: Path) -> None:
     path = tmp_path / "t.jsonl"
     write_rows(path, [user_row("first"), user_row("second", uuid="u2")])

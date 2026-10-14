@@ -148,7 +148,9 @@ async def test_what_grok_advertises_matches_the_protocol_fixture(grok_dir: Path)
     assert payload["attach_ready"] is True
     assert payload["shared_interrupt"] is True
     assert payload["shared_settings"] is True
-    assert payload["shared_attachments"] is False
+    # A49: a prompt names the files the device wrote, on the leader as well.
+    assert "attachments" in payload["capabilities"]
+    assert payload["shared_attachments"] is expected["shared_attachments"] is True
     assert payload["speeds"] == []
     assert payload["path"] == str(binary)
 

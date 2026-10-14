@@ -32,12 +32,12 @@ from ..models import (
     title_from_text,
 )
 from ..registry import Registry
-from . import titles
+from . import offsets, titles
 from .attach import Attachment, HookQuestion, SessionStart
 from .channel import SessionChannel
 from .limits import LimitStop
 from .ptys import PtyLinks
-from .queue import hold, queue_ts_from, snapshot_entry
+from .queue import hold, queue_ts_from, release, snapshot_entry
 from .resume import ResumeScheduler
 from .shared import EXIT_SETTLE, SharedControl, SharedState
 
@@ -78,6 +78,10 @@ class SessionEntry:
     transcript: str | None = None
     shared: SharedState | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # The one task handing the queue its next message, and whether it was
+    # asked again while it ran (A43).
+    drainer: asyncio.Task[None] | None = None
+    drain_again: bool = False
 
 
 class SessionHub:
@@ -119,6 +123,8 @@ class SessionHub:
         # Whether the gateway link is up right now; the daemon wires the real
         # answer in, so a repeated removal is never published into a gap.
         self.link_up: Callable[[], bool] = lambda: True
+        # Set when the daemon stops: no queue is drained after that.
+        self._closed = False
 
     # ------------------------------------------------------------- accessors
 
@@ -186,13 +192,19 @@ class SessionHub:
         return entry
 
     async def close(self) -> None:
+        self._closed = True
         for entry in list(self.entries.values()):
+            await self._cancel_drain(entry)
+            # The queue lives in memory, so its messages end with the daemon.
+            for item in entry.queue:
+                await release(item)
             if entry.shared is not None:
                 entry.shared.attachment.detach()
                 entry.shared = None
             if entry.runner is not None:
                 with contextlib.suppress(Exception):
                     await entry.runner.close()
+                self._mark_released(entry)
             await entry.channel.close()
 
     # ---------------------------------------------------------------- create
@@ -307,7 +319,7 @@ class SessionHub:
         self, entry: SessionEntry, info: AgentInfo, resume: str | None
     ) -> SessionRunner:
         async def on_turn_end() -> None:
-            await self.drain_queue(entry)
+            self.schedule_drain(entry)
 
         async def on_session_id(real_id: str) -> None:
             await self.rekey(entry, real_id)
@@ -367,6 +379,8 @@ class SessionHub:
         attachments = params.get("attachments") or []
         if len(attachments) > MAX_ATTACHMENTS:
             raise RcError("too_large", "at most 8 attachments per message")
+        if attachments:
+            self._check_shared_attachments(entry)
         mode = str(params.get("mode") or "auto")
         # A43: an edited message comes back under the `ts` its queue entry had.
         # It never decides whether the message queues; `mode` does.
@@ -389,6 +403,10 @@ class SessionHub:
             # Amendment A15: the send is going through, so the session is not
             # archived any more even when the message only joins the queue.
             await entry.channel.revive()
+            if mode == "auto":
+                # A turn's end drains from a task of its own, so a message the
+                # turn held may not have gone yet; it goes before this one.
+                await self._drain_queue_locked(entry)
 
             if mode == "queue":
                 # An explicit queue request always queues, even when idle: the
@@ -439,6 +457,11 @@ class SessionHub:
             await titles.from_prompt(entry.channel, text)
         await runner.send(text, attachments, source=source, block_id=request_id or None)
 
+    def _check_shared_attachments(self, entry: SessionEntry) -> None:
+        """Refuse files a shared session's attachment cannot hand its agent (4.2, A49)."""
+        if self._is_shared(entry) and not self._agent_flag(entry, "shared_attachments"):
+            raise RcError("unsupported", "attachments cannot be delivered to a terminal session")
+
     def _terminal_conflict_message(self, entry: SessionEntry) -> str:
         """Only offer "take over" when this agent can actually be taken over."""
         try:
@@ -480,22 +503,74 @@ class SessionHub:
         """The wire form of the queue: files stay on the device, only their count goes (A43)."""
         return [snapshot_entry(item) for item in entry.queue]
 
-    async def drain_queue(self, entry: SessionEntry) -> None:
-        """Launch the oldest queued message once the agent goes idle."""
-        async with entry.lock:
-            item = self._take_queued(entry)
-        if item is None:
+    def schedule_drain(self, entry: SessionEntry) -> None:
+        """Hand the queue its next message from a task of the session's own.
+
+        What ends a turn, and the transcript read that says a terminal's turn
+        ended, never wait for a drain: the send holding the session's lock may
+        be waiting on that very turn's end (an interrupt), and a settings change
+        typed into a terminal holds the lock until the reader confirms it. One
+        drain runs per session at a time; asked again meanwhile, it goes round
+        once more when it is done (A43).
+        """
+        if self._closed:
             return
-        await self._send_queued(entry, item)
+        drainer = entry.drainer
+        if drainer is not None and not drainer.done():
+            entry.drain_again = True
+            return
+        entry.drain_again = False
+        entry.drainer = asyncio.get_running_loop().create_task(
+            self._drain(entry), name="session-drain"
+        )
+
+    async def _drain(self, entry: SessionEntry) -> None:
+        """The drain task: the oldest held message, under the lock a send takes.
+
+        One the person sends meanwhile waits until the agent is busy with this
+        one, so nothing overtakes it while its files are written (A43). A
+        failure is reported by type alone; what it says may name a file.
+        """
+        while True:
+            try:
+                async with entry.lock:
+                    await self._drain_once(entry)
+            except Exception as exc:
+                log.warning("draining a session's queue failed", error=type(exc).__name__)
+            if not entry.drain_again:
+                return
+            entry.drain_again = False
+
+    async def _drain_once(self, entry: SessionEntry) -> None:
+        if self.entries.get(entry.session.session_id) is not entry:
+            # The session is gone, and its queue went with it.
+            return
+        if entry.shared is not None:
+            await self.shared.drain_locked(entry)
+        else:
+            await self._drain_queue_locked(entry)
+
+    @staticmethod
+    async def _cancel_drain(entry: SessionEntry) -> None:
+        drainer, entry.drainer = entry.drainer, None
+        entry.drain_again = False
+        if drainer is None or drainer.done() or drainer is asyncio.current_task():
+            return
+        drainer.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await drainer
 
     async def _drain_queue_locked(self, entry: SessionEntry) -> None:
-        """Same as `drain_queue`, for callers that already hold the lock."""
+        """Launch the oldest queued message if the agent is idle; the caller holds the lock."""
         item = self._take_queued(entry)
         if item is not None:
             await self._send_queued(entry, item)
 
     def _take_queued(self, entry: SessionEntry) -> dict[str, Any] | None:
+        """The next held message, unless a turn runs or the session is being closed (A39)."""
         if not entry.queue or entry.runner is None or entry.runner.busy:
+            return None
+        if entry.channel.closing:
             return None
         return entry.queue.pop(0)
 
@@ -742,10 +817,12 @@ class SessionHub:
     async def queue_remove(self, params: dict[str, Any]) -> dict[str, Any]:
         entry = self.entry(str(params.get("session_id") or ""))
         queued_id = str(params.get("queued_id") or "")
-        before = len(entry.queue)
-        entry.queue = [item for item in entry.queue if item["id"] != queued_id]
-        if len(entry.queue) == before:
+        removed = [item for item in entry.queue if item["id"] == queued_id]
+        if not removed:
             raise RcError("not_found", "that message is not queued")
+        entry.queue = [item for item in entry.queue if item["id"] != queued_id]
+        for item in removed:
+            await release(item)
         await entry.channel.publish_queue(self.queue_snapshot(entry))
         return {}
 
@@ -769,13 +846,20 @@ class SessionHub:
 
         The session is marked as being closed before anything is asked of the
         agent, so its last words — a turn ending, a status going idle — cannot
-        take it back out of the Archive. Everything else is one publish at the
-        end: the row goes from working to closed and archived in a single step,
-        whether or not the agent went quietly.
+        take it back out of the Archive, and the end of the interrupted turn
+        drains nothing: the messages held for the session are discarded with
+        it, files and all, rather than started as the turn the close is there
+        to end. Everything else is one publish at the end: the row goes from
+        working to closed and archived in a single step, whether or not the
+        agent went quietly.
         """
         runner = entry.runner
         entry.channel.closing = True
         try:
+            # A drain under way would hand its message to an agent the close is
+            # about to end, and say so on the archived session. It is stopped,
+            # and the files it was writing are taken back (`attachments.store`).
+            await self._cancel_drain(entry)
             await asyncio.wait_for(self._shutdown(runner), CLOSE_TIMEOUT)
         except TimeoutError:
             log.warning("a session did not close in time; letting go of it anyway")
@@ -788,8 +872,24 @@ class SessionHub:
             entry.session.state = "stopped"
             entry.session.state_detail = None
             entry.session.turn = None
+            held, entry.queue = entry.queue, []
             entry.channel.closing = False
+        self._mark_released(entry)
+        for item in held:
+            await release(item)
+        if held:
+            await entry.channel.publish_queue(self.queue_snapshot(entry))
         await entry.channel.publish_summary()
+
+    @staticmethod
+    def _mark_released(entry: SessionEntry) -> None:
+        """A terminal session the device has let go of is read on from here.
+
+        Its runner published everything the transcript holds so far; the
+        mirror that takes the session back must not publish it again.
+        """
+        if entry.session.origin != "remote":
+            offsets.mark_end(entry.channel.registry, entry.session.session_id, entry.transcript)
 
     @staticmethod
     async def _shutdown(runner: SessionRunner | None) -> None:
@@ -808,13 +908,14 @@ class SessionHub:
     async def _remove(self, entry: SessionEntry) -> None:
         """Forget a session here and everywhere: nothing of it is kept."""
         session_id = entry.session.session_id
+        await self._cancel_drain(entry)
         await self.shared.forget(entry)
         if entry.runner is not None:
             await entry.runner.close()
         await entry.channel.close()
         self.entries.pop(session_id, None)
         self.registry.delete_session(session_id)
-        attachments.cleanup(session_id)
+        await asyncio.to_thread(attachments.cleanup, session_id)
         await self.publish({"type": "session.removed", "session_id": session_id})
 
     async def takeover(self, params: dict[str, Any]) -> dict[str, Any]:

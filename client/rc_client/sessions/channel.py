@@ -13,6 +13,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from ..attachments import without_paths
 from ..events import BLOCK_KINDS, DELTA_FLUSH_MS, bound_event, should_store
 from ..ids import block_uuid
 from ..models import UNSET, Session, SessionState, now_ms
@@ -70,7 +71,13 @@ class SessionChannel:
     # ---------------------------------------------------------------- events
 
     async def emit(self, kind: str, **fields: Any) -> dict[str, Any]:
-        """Publish one non-streaming event, flushing that block's deltas first."""
+        """Publish one non-streaming event, flushing that block's deltas first.
+
+        An error is the agent's own sentence and may quote the prompt it was
+        given, so the paths of attachments come off it (A49).
+        """
+        if kind == "error" and isinstance(fields.get("message"), str):
+            fields["message"] = without_paths(fields["message"])
         block_id = fields.get("block_id")
         if isinstance(block_id, str):
             await self.flush_block(block_id)

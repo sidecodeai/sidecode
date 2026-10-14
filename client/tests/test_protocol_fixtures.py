@@ -357,8 +357,8 @@ def test_the_codex_daemon_agent_fixture_matches_what_this_device_advertises() ->
     assert "takeover" not in info.capabilities
     claude = agent_info_from(load_fixture("objects/agent.claude-attach.json"))
     # A40: Claude's attachment changes two of the four settings by typing them
-    # into the terminal, and carries no images.
-    assert (claude.shared_settings, claude.shared_attachments) == (True, False)
+    # into the terminal; A49: its words name the files the device wrote.
+    assert (claude.shared_settings, claude.shared_attachments) == (True, True)
     assert claude.shared_settings_keys == ["model", "effort"]
 
 

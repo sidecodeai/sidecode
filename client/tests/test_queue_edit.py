@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,7 @@ from rc_client.errors import RcError
 from rc_client.sessions import queue as queue_module
 from rc_client.sessions.hub import SessionEntry, SessionHub
 from rc_client.sessions.queue import hold, snapshot_entry
-from tests.helpers import event_validator, load_fixture
+from tests.helpers import drain, event_validator, load_fixture, tick
 from tests.test_hub import FakeRunner, add_session, build_hub
 from tests.test_shared_control import Harness
 
@@ -51,7 +52,7 @@ async def drain_all(hub: SessionHub, entry: SessionEntry, runner: FakeRunner) ->
     """End one turn after another until the queue is empty."""
     while entry.queue:
         await runner.finish()
-        await hub.drain_queue(entry)
+        await drain(hub, entry)
 
 
 @pytest.fixture
@@ -239,7 +240,7 @@ def test_snapshot_entries_read_as_the_frozen_fixture_does() -> None:
 
 async def test_queue_ts_is_honoured_on_a_busy_shared_session(harness: Harness) -> None:
     entry = await harness.attach()
-    await harness.hub.shared.tick(entry, running=True)
+    await tick(harness.hub, entry, running=True)
     for name in ("a", "b", "c"):
         await send(harness.hub, f"req-{name}", name.upper())
     b_ts = harness.events("queue")[-1]["pending"][1]["ts"]
@@ -253,21 +254,21 @@ async def test_queue_ts_is_honoured_on_a_busy_shared_session(harness: Harness) -
     assert ids(pending) == ["req-a", "req-b2", "req-c"]
     assert pending[1]["ts"] == b_ts
 
-    await harness.hub.shared.tick(entry, running=False)
+    await tick(harness.hub, entry, running=False)
     for _ in range(2):
         # One message is in flight at a time, until the transcript shows it.
         message_id = harness.attachment.injected[-1][0]
         await harness.hub.shared.echo_delivered(entry, message_id)
-        await harness.hub.shared.tick(entry, running=False)
+        await tick(harness.hub, entry, running=False)
     assert [text for _, text in harness.attachment.injected] == ["A", "B, reworded", "C"]
 
 
 async def deliver_the_rest(harness: Harness, entry: SessionEntry) -> None:
     """Let the transcript confirm each injection until nothing is held."""
-    await harness.hub.shared.tick(entry, running=False)
+    await tick(harness.hub, entry, running=False)
     while entry.queue:
         await harness.hub.shared.echo_delivered(entry, harness.attachment.injected[-1][0])
-        await harness.hub.shared.tick(entry, running=False)
+        await tick(harness.hub, entry, running=False)
 
 
 @pytest.mark.parametrize("edit_first", [True, False], ids=["edit-then-absorb", "absorb-then-edit"])
@@ -276,12 +277,12 @@ async def test_an_absorbed_injection_goes_back_under_its_own_ts(
 ) -> None:
     """Queue A, B; take A out; B goes in and is absorbed; A' comes back: A' goes first."""
     entry = await harness.attach()
-    await harness.hub.shared.tick(entry, running=True)
+    await tick(harness.hub, entry, running=True)
     await send(harness.hub, "req-a", "A")
     await send(harness.hub, "req-b", "B")
     a_ts = harness.events("queue")[-1]["pending"][0]["ts"]
     await harness.hub.queue_remove({"session_id": "sess-1", "queued_id": "req-a"})
-    await harness.hub.shared.tick(entry, running=False)
+    await tick(harness.hub, entry, running=False)
     b_message = harness.attachment.injected[-1][0]
 
     if edit_first:
@@ -291,7 +292,7 @@ async def test_an_absorbed_injection_goes_back_under_its_own_ts(
     else:
         # Absorbed means the CLI was mid-turn, and the edit waits for that turn.
         await harness.hub.shared.echo_absorbed(entry, b_message)
-        await harness.hub.shared.tick(entry, running=True)
+        await tick(harness.hub, entry, running=True)
         await send(harness.hub, "req-a2", "A, reworded", mode="queue", queue_ts=a_ts)
 
     assert ids(harness.events("queue")[-1]["pending"]) == ["req-a2", "req-b"]
@@ -302,9 +303,14 @@ async def test_an_absorbed_injection_goes_back_under_its_own_ts(
 async def test_a_message_the_bridge_refused_goes_back_under_its_own_ts(
     harness: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An older edit that lands while the bridge is being asked stays in front."""
+    """An older edit that arrives while the bridge is being asked lands in front.
+
+    The edit waits for the session's lock, which the drain holds until the
+    bridge has answered. B, still held, is offered again first, and the edit is
+    then held under the `ts` it came with: nothing overtakes a held message.
+    """
     entry = await harness.attach()
-    await harness.hub.shared.tick(entry, running=True)
+    await tick(harness.hub, entry, running=True)
     await send(harness.hub, "req-a", "A")
     await send(harness.hub, "req-b", "B")
     a_ts = harness.events("queue")[-1]["pending"][0]["ts"]
@@ -312,23 +318,51 @@ async def test_a_message_the_bridge_refused_goes_back_under_its_own_ts(
 
     reachable = harness.attachment.inject
     asked: list[str] = []
+    edits: list[asyncio.Task[Any]] = []
 
     async def refuse_while_the_edit_lands(message_id: str, text: str) -> bool:
         asked.append(text)
         if len(asked) == 1:
-            await send(harness.hub, "req-a2", "A, reworded", mode="queue", queue_ts=a_ts)
+            edit = send(harness.hub, "req-a2", "A, reworded", mode="queue", queue_ts=a_ts)
+            edits.append(asyncio.create_task(edit))
         return False
 
     monkeypatch.setattr(harness.attachment, "inject", refuse_while_the_edit_lands)
-    await harness.hub.shared.tick(entry, running=False)
+    await tick(harness.hub, entry, running=False)
+    await edits[0]
 
-    assert asked == ["B", "A, reworded"]
+    assert asked == ["B", "B"]
     assert ids(entry.queue) == ["req-a2", "req-b"]
     assert ids(harness.events("queue")[-1]["pending"]) == ["req-a2", "req-b"]
 
     monkeypatch.setattr(harness.attachment, "inject", reachable)
     await deliver_the_rest(harness, entry)
     assert [text for _, text in harness.attachment.injected] == ["A, reworded", "B"]
+
+
+async def test_a_removal_while_the_bridge_refuses_is_followed_by_the_queue_as_it_is(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A removal takes no lock, so it can land while the drain asks the bridge.
+
+    Its snapshot lacks the message being injected; once the bridge refuses
+    that one and it is held again, the queue goes out once more as it is.
+    """
+    entry = await harness.attach()
+    await tick(harness.hub, entry, running=True)
+    await send(harness.hub, "req-a", "A")
+    await send(harness.hub, "req-b", "B")
+
+    async def refuse_while_b_is_removed(message_id: str, text: str) -> bool:
+        await harness.hub.queue_remove({"session_id": "sess-1", "queued_id": "req-b"})
+        assert harness.events("queue")[-1]["pending"] == []
+        return False
+
+    monkeypatch.setattr(harness.attachment, "inject", refuse_while_b_is_removed)
+    await tick(harness.hub, entry, running=False)
+
+    assert ids(entry.queue) == ["req-a"]
+    assert ids(harness.events("queue")[-1]["pending"]) == ["req-a"]
 
 
 async def test_an_edit_is_injected_at_once_into_an_idle_terminal(harness: Harness) -> None:

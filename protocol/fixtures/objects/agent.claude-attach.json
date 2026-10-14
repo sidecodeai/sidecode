@@ -74,7 +74,7 @@
     "model",
     "effort"
   ],
-  "shared_attachments": false,
+  "shared_attachments": true,
   "accounts": [
     {
       "provider": "anthropic",

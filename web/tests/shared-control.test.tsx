@@ -183,8 +183,15 @@ describe.runIf(fixturesAvailable())('A10 composer on a shared session', () => {
     expect(document.querySelectorAll('.composer-chip.readonly')).toHaveLength(2);
   });
 
-  it('hides the attachment button, which cannot reach a terminal session', () => {
-    render(<Composer {...composerProps(sharedIdle, attachAgent)} />);
+  it('shows the attachment button only while the device reports shared_attachments', () => {
+    // A49: the channel carries text, so the device writes each file to disk
+    // and the words it injects name it. An agent that does not say so takes none.
+    const { unmount } = render(<Composer {...composerProps(sharedIdle, attachAgent)} />);
+    expect(screen.getByRole('button', { name: 'Attach files' })).toBeEnabled();
+    unmount();
+
+    const older: AgentInfo = { ...attachAgent, shared_attachments: false };
+    render(<Composer {...composerProps(sharedIdle, older)} />);
     expect(screen.queryByRole('button', { name: 'Attach files' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Attach files')).not.toBeInTheDocument();
   });
@@ -419,12 +426,12 @@ describe.runIf(fixturesAvailable())('A11 fixtures', () => {
     expect(agent.capabilities).not.toContain('takeover');
   });
 
-  it('leaves the Claude channel agent without images, and with two of four settings', () => {
+  it('gives the Claude channel agent attachments as files, and two of four settings', () => {
     // A40 replaced A11's flat "no settings" with a named subset; a channel
-    // still carries no bytes, so images stay out.
+    // still carries no bytes, so A49 names the files the device wrote in it.
     expect(attachAgent.shared_settings).toBe(true);
     expect(attachAgent.shared_settings_keys).toEqual(['model', 'effort']);
-    expect(attachAgent.shared_attachments).toBe(false);
+    expect(attachAgent.shared_attachments).toBe(true);
   });
 
   it('decodes a shared Codex session', () => {
@@ -472,7 +479,8 @@ describe.runIf(fixturesAvailable())('A11 composer on a shared Codex session', ()
     // The daemon names no subset, so every setting is the device's.
     for (const key of SETTING_KEYS) expect(canSetShared(daemonAgent, key)).toBe(true);
     expect(canAttachShared(daemonAgent)).toBe(true);
-    expect(canAttachShared(attachAgent)).toBe(false);
+    // A49: the Claude channel reports it too.
+    expect(canAttachShared(attachAgent)).toBe(true);
     // Both default to false when the device says nothing.
     expect(canSetShared(codexNoDaemon, 'model')).toBe(false);
     expect(canAttachShared({ ...claudeAgent, shared_attachments: undefined })).toBe(false);
@@ -821,12 +829,13 @@ describe('A28 Grok Build on the leader', () => {
   const grokShared = mockSession('ses-grok-shared');
   const grokTerminal = mockSession('ses-grok-no-leader');
 
-  it('reports the leader attachment with images the one flag left false', () => {
+  it('reports the leader attachment with every flag set, attachments included (A49)', () => {
     expect(grokAgent.attach).toBe('leader');
     expect(grokAgent.attach_ready).toBe(true);
     expect(grokAgent.shared_interrupt).toBe(true);
     expect(grokAgent.shared_settings).toBe(true);
-    expect(grokAgent.shared_attachments).toBe(false);
+    expect(grokAgent.capabilities).toContain('attachments');
+    expect(grokAgent.shared_attachments).toBe(true);
   });
 
   it('asks for the setup command while the config has not turned the leader on', () => {
@@ -857,11 +866,10 @@ describe('A28 Grok Build on the leader', () => {
     expect(screen.queryByText(LEADER_HINT)).not.toBeInTheDocument();
   });
 
-  it('draws no attachment button, because the leader takes no images', () => {
-    expect(canAttachShared(grokAgent)).toBe(false);
+  it('draws the attachment button, because a prompt names the files the device wrote', () => {
+    expect(canAttachShared(grokAgent)).toBe(true);
     render(<Composer {...composerProps(grokShared, grokAgent)} />);
-    expect(screen.queryByRole('button', { name: 'Attach files' })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Attach files')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Attach files' })).toBeEnabled();
   });
 
   it('shows Stop while the turn the terminal started is running', () => {
@@ -899,10 +907,10 @@ describe.runIf(fixturesAvailable())('A40 the device types into a Claude terminal
     expect(attachAgent.shared_settings).toBe(true);
     expect(attachAgent.shared_settings_keys).toEqual(['model', 'effort']);
     expect(attachAgent.capabilities).toContain('commands');
-    // A42 added the interrupt to the same pseudo-terminal; images still have
-    // no keystroke to be typed as.
+    // A42 added the interrupt to the same pseudo-terminal; A49 the attachments,
+    // as files the words the device injects name.
     expect(attachAgent.shared_interrupt).toBe(true);
-    expect(attachAgent.shared_attachments).toBe(false);
+    expect(attachAgent.shared_attachments).toBe(true);
   });
 
   it('answers per key, and falls back to all four when the list is absent', () => {
@@ -927,8 +935,9 @@ describe.runIf(fixturesAvailable())('A40 the device types into a Claude terminal
     expect(
       screen.getByLabelText('Permission mode · Ask before edits · set in the terminal'),
     ).toBeInTheDocument();
-    // The channel still carries no bytes, so there is no attachment button.
-    expect(screen.queryByRole('button', { name: 'Attach files' })).not.toBeInTheDocument();
+    // A49: the channel names the files the device wrote, so the attachment
+    // button is there too.
+    expect(screen.getByRole('button', { name: 'Attach files' })).toBeEnabled();
   });
 
   it('gives the card a live model list and a live effort slider', async () => {

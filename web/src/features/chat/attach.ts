@@ -6,10 +6,12 @@
  * What else the attachment carries is per agent: the device reports
  * `shared_interrupt`, `shared_settings` and `shared_attachments`, each
  * defaulting to false. The Codex app-server daemon and pi's extension carry
- * all three; Grok Build's leader carries the interrupt and the settings but
- * takes no images (A28); the Claude channel takes no images, and carries the
- * interrupt (A42) and the settings only as far as the device can type them
- * into the pseudo-terminal it owns — `shared_settings_keys` says which (A40).
+ * all three, and so does Grok Build's leader (A28, A49); the Claude channel
+ * carries the interrupt (A42), the attachments (A49), and the settings only
+ * as far as the device can type them into the pseudo-terminal it owns —
+ * `shared_settings_keys` says which (A40). Grok and the Claude channel take no
+ * images in a prompt, so the device writes each file to disk and the prompt
+ * names it (A49).
  */
 import { strings } from '../../strings';
 import type { AgentInfo, Session, SharedSettingKey } from '../../protocol/types';

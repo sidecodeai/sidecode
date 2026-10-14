@@ -648,15 +648,15 @@ booleans on the agent. Nothing in either app asks which agent it is looking at.
 
 | Boolean | What it turns on | Claude channel | Codex daemon | pi extension | Grok leader |
 | --- | --- | --- | --- | --- | --- |
-| `shared_interrupt` | Stop, and "Interrupt & send" | off | on | on | on |
-| `shared_settings` | The model card and the permission-mode picker | off | on | on | on |
-| `shared_attachments` | The attachment button, and pasted files | off | on | on | off |
+| `shared_interrupt` | Stop, and "Interrupt & send" | on (A42) | on | on | on |
+| `shared_settings` | The model card and the permission-mode picker | model and effort (A40) | on | on | on |
+| `shared_attachments` | The attachment button, and pasted files | on (A49) | on | on | on (A49) |
 
-A control the attachment cannot drive is hidden, not disabled with a caption: a Claude channel
-session shows no attachment button, and nothing explains its absence in the composer. Its model,
-permission mode and effort are the one exception, shown rather than offered (A17, above): the
-terminal chose them, and the reader needs to know what it chose. A shared Codex session shows every
-control, all live. The rule keeps the composer to two rows (the field, then one row of controls) on
+A control the attachment cannot drive is hidden, not disabled with a caption, and nothing explains
+its absence in the composer. A setting the attachment leaves to the terminal is the one exception,
+shown rather than offered (A17, above): on a Claude channel session that is the permission mode,
+which the terminal chose and the reader needs to know. A shared Codex session shows every control,
+all live. The rule keeps the composer to two rows (the field, then one row of controls) on
 the phone.
 
 Steering follows the ordinary rule rather than a shared-session rule. Codex advertises `steer`, so a

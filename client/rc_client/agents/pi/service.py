@@ -111,11 +111,15 @@ class PiExtensionService:
         self._links[hello.session_id] = link
         entry, fresh = self._entry(hello.session_id, link)
         mode = entry.session.permission_mode or DEFAULT_PERMISSION_MODE
+
+        async def on_turn_end() -> None:
+            self.hub.schedule_drain(entry)
+
         runner = PiTerminalSession(
             entry.channel,
             link,
             permission_mode=mode,
-            on_turn_end=lambda: self.hub.drain_queue(entry),
+            on_turn_end=on_turn_end,
         )
         entry.runner = runner
         await entry.channel.revive()

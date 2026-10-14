@@ -8,6 +8,9 @@ from typing import Any
 
 import pytest
 
+from rc_client.sessions.hub import SessionEntry, SessionHub
+from rc_client.sessions.limits import TurnEnd
+
 FIXTURE_ROOT = Path(__file__).resolve().parents[2] / "protocol" / "fixtures"
 SCHEMA_ROOT = Path(__file__).resolve().parents[2] / "protocol" / "schema"
 
@@ -70,3 +73,27 @@ def event_validator() -> Any:
     schema = _load_schema("events.json")
     registry = Registry(retrieve=retrieve)  # type: ignore[call-arg]
     return jsonschema.Draft202012Validator(schema, registry=registry)
+
+
+async def drained(entry: SessionEntry) -> None:
+    """Wait for the drain the session has scheduled, and any it went on to."""
+    while entry.drainer is not None and not entry.drainer.done():
+        await entry.drainer
+
+
+async def drain(hub: SessionHub, entry: SessionEntry) -> None:
+    """What a runner's turn end asks for, waited for."""
+    hub.schedule_drain(entry)
+    await drained(entry)
+
+
+async def tick(
+    hub: SessionHub,
+    entry: SessionEntry,
+    running: bool,
+    trigger: str = "terminal",
+    end: TurnEnd | None = None,
+) -> None:
+    """A transcript read of an attached session, and the drain it asked for."""
+    await hub.shared.tick(entry, running, trigger, end)
+    await drained(entry)

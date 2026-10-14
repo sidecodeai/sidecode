@@ -64,6 +64,8 @@ async def detect(context: DetectContext) -> AgentInfo:
     # Typing into the terminal is the shim's doing, so what it can do depends
     # on the shim being installed and first on PATH. Stopping a turn is the
     # same keystroke route — Escape — so it rides on the same condition (A42).
+    # Attachments need only the channel the shim loads: the words it carries
+    # end with the paths of the files the device wrote (A49).
     attachable = shim.status().ready
     return AgentInfo(
         agent=AGENT,
@@ -82,7 +84,7 @@ async def detect(context: DetectContext) -> AgentInfo:
         shared_interrupt=attachable,
         shared_settings=attachable,
         shared_settings_keys=list(SHARED_SETTINGS_KEYS) if attachable else None,
-        shared_attachments=False,
+        shared_attachments=attachable,
         accounts=accounts,
     )
 

@@ -30,6 +30,15 @@ ServerRequestHandler = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]
 PROTOCOL_VERSION = 1
 
 
+class GrokError(RcError):
+    """An error Grok answered a request with, and the JSON-RPC code it gave."""
+
+    def __init__(self, message: str, rpc_code: Any) -> None:
+        super().__init__("agent_unavailable", message)
+        exact = isinstance(rpc_code, int) and not isinstance(rpc_code, bool)
+        self.rpc_code: int | None = rpc_code if exact else None
+
+
 class GrokTransport(Protocol):
     """What a session needs of its connection, whoever owns the process.
 
@@ -210,7 +219,7 @@ class GrokAgent:
             if "error" in message:
                 error = message["error"] or {}
                 future.set_exception(
-                    RcError("agent_unavailable", str(error.get("message") or "grok error"))
+                    GrokError(str(error.get("message") or "grok error"), error.get("code"))
                 )
             else:
                 result = message.get("result")

@@ -23,7 +23,7 @@ from claude_agent_sdk import (
 )
 from claude_agent_sdk.types import PermissionRuleValue
 
-from ...attachments import Attachment, describe, materialise, wire_attachments
+from ...attachments import Attachment, describe, drop, store, wire_attachments
 from ...child_env import child_env_tombstones
 from ...config import DEFAULT_CLAUDE_SETTING_SOURCES
 from ...errors import RcError
@@ -35,6 +35,7 @@ from ..base import Emit
 from . import subagents, transcripts
 from .commands import COMMANDS, COMPACT
 from .questions import QUESTION_TOOL, answers_by_prompt, normalise_questions
+from .tools import reads_session_file
 from .translate import ClaudeTranslator
 
 log = logger("rc_client.claude")
@@ -363,24 +364,33 @@ class ClaudeRunner:
         source: str = "remote",
         block_id: str | None = None,
     ) -> None:
-        """Publish the message, then start the turn that answers it."""
+        """Publish the message, then start the turn that answers it.
+
+        A message whose prompt never reaches the CLI takes its files with it
+        (A49): nothing will ever read the paths.
+        """
         if self._client is None:
             raise RcError("agent_unavailable", "the Claude session is not connected")
-        prompt = text
-        written: list[Attachment] = []
-        if attachments:
-            written = materialise(self.channel.session.session_id, attachments)
-            prompt = describe(text, written)
-        # The message goes out before the SDK is touched. Applying a new effort
-        # level restarts Claude, which takes seconds, and the apps have drawn
-        # this bubble already.
-        await self.channel.emit(
-            "user_message",
-            block_id=block_id or f"user:{uuid.uuid4()}",
-            text=text,
-            source=source,
-            **({"attachments": wire_attachments(written)} if written else {}),
-        )
+        written: list[Attachment] = await store(self.channel.session.session_id, attachments)
+        prompt = describe(text, written)
+        try:
+            # The message goes out before the SDK is touched. Applying a new
+            # effort level restarts Claude, which takes seconds, and the apps
+            # have drawn this bubble already.
+            await self.channel.emit(
+                "user_message",
+                block_id=block_id or f"user:{uuid.uuid4()}",
+                text=text,
+                source=source,
+                **({"attachments": wire_attachments(written)} if written else {}),
+            )
+            await self._query(prompt, source)
+        except Exception:
+            await drop(written)
+            raise
+
+    async def _query(self, prompt: str, source: str) -> None:
+        """Hand the CLI the prompt, restarting it first for a new effort level."""
         if self._effort != self._applied_effort:
             await self.channel.notice("info", "restarting Claude to apply the new effort level")
             await self._reconnect()
@@ -476,6 +486,9 @@ class ClaudeRunner:
     ) -> PermissionResultAllow | PermissionResultDeny:
         if tool_name == QUESTION_TOOL:
             return await self._ask_question(tool_input)
+        if reads_session_file(self.channel.session.session_id, tool_name, tool_input):
+            # A49: an attachment the prompt named, which is the session's own.
+            return PermissionResultAllow()
         return await self._ask_approval(tool_name, tool_input, context)
 
     async def _wait_for(self, request_id: str, timeout: float) -> dict[str, Any] | None:

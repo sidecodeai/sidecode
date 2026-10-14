@@ -12,13 +12,17 @@ import pytest
 from rc_client.agents.claude import plugin as claude_plugin
 from rc_client.agents.claude.commands import COMPACT
 from rc_client.channel import paths, shim
+from rc_client.channel.screen import Screen
 from rc_client.errors import RcError
 from rc_client.models import AgentInfo, Choice
 from rc_client.registry import Registry
 from rc_client.sessions import typist
 from rc_client.sessions.hub import SessionEntry, SessionHub
 from rc_client.sessions.ptys import PtyLink, TerminalState
+from rc_client.sessions.queue import hold
+from rc_client.sessions.shared import pending_item
 from rc_client.sessions.typist import HIGHLIGHT, read_picker
+from tests.helpers import drained
 
 from .test_shared_control import FakeAttachment, FakeHookQuestion
 
@@ -28,6 +32,19 @@ PICKER_ROWS = ("Default (recommended)", "Opus (1M context)", "Fable", "Sonnet", 
 PICKER_FOOTER = "Enter to set as default · s to use this session only · Esc to cancel"
 SLIDER_FOOTER = "←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel"
 SLIDER_LEVELS = ("low", "medium", "high", "xhigh", "max", "ultracode")
+# Claude Code 2.1.299: five levels, fewer for a capped model, and Ultracode
+# apart as a toggle on Tab.
+NEW_SLIDER_LEVELS = ("low", "medium", "high", "xhigh", "max")
+TAB = "\t"
+# The frames 2.1.299 drew for `/effort`, recorded live through the proxy.
+RECORDED_SLIDER = Path(__file__).parent / "fixtures" / "claude" / "effort-slider-2.1.299.raw"
+
+
+def recorded_slider() -> str:
+    """What the proxy's screen reader made of them: a footer redrawn in part."""
+    screen = Screen()
+    screen.feed(RECORDED_SLIDER.read_bytes())
+    return screen.text()
 
 
 class _NoSocket:
@@ -47,6 +64,9 @@ class FakeTerminal(PtyLink):
         idle_for: float = 5.0,
         opens: bool = True,
         asks_to_switch: bool = False,
+        new_slider: bool = False,
+        levels: int = len(NEW_SLIDER_LEVELS),
+        level: int = 4,
     ) -> None:
         super().__init__(4242, cast(asyncio.StreamWriter, _NoSocket()))
         self.typed: list[str] = []
@@ -55,9 +75,12 @@ class FakeTerminal(PtyLink):
         self.opens = opens
         # A conversation with cached history asks once more before switching.
         self.asks_to_switch = asks_to_switch
+        self.new_slider = new_slider
+        self.levels = SLIDER_LEVELS if not new_slider else NEW_SLIDER_LEVELS[:levels]
         self.showing = "none"
         self.row = 5
-        self.level = 4
+        self.level = level
+        self.ultracode = False
         self.applied_model: str | None = None
         self.applied_effort: str | None = None
 
@@ -82,15 +105,20 @@ class FakeTerminal(PtyLink):
         elif data == typist.ENTER and self.showing == "switch":
             self.applied_model = PICKER_ROWS[self.row - 1]
             self.showing = "none"
+        elif data == typist.ENTER and self.showing == "change":
+            self.applied_effort = self.levels[self.level]
+            self.showing = "none"
         elif data == typist.THIS_SESSION:
-            if self.showing == "model" and self.asks_to_switch:
-                self.showing = "switch"
+            if self.showing in {"model", "effort"} and self.asks_to_switch:
+                self.showing = "switch" if self.showing == "model" else "change"
             elif self.showing == "model":
                 self.applied_model = PICKER_ROWS[self.row - 1]
                 self.showing = "none"
             elif self.showing == "effort":
-                self.applied_effort = SLIDER_LEVELS[self.level]
+                self.applied_effort = self.levels[self.level]
                 self.showing = "none"
+        elif data == TAB and self.showing == "effort" and self.new_slider:
+            self.ultracode = not self.ultracode
         elif self.showing == "model":
             moved = self.row + data.count(typist.DOWN) - data.count(typist.UP)
             self.row = min(len(PICKER_ROWS), max(1, moved))
@@ -98,7 +126,7 @@ class FakeTerminal(PtyLink):
             # The slider stops at its ends, one key at a time, which is what
             # makes "all the way left, then right" land where it is told.
             self.level = max(0, self.level - data.count(typist.LEFT))
-            self.level = min(len(SLIDER_LEVELS) - 1, self.level + data.count(typist.RIGHT))
+            self.level = min(len(self.levels) - 1, self.level + data.count(typist.RIGHT))
 
     def _drawn(self) -> str:
         if self.showing == "model":
@@ -108,7 +136,15 @@ class FakeTerminal(PtyLink):
             )
             return f"Select model\n{rows}\n{PICKER_FOOTER}\n"
         if self.showing == "effort":
+            if self.new_slider:
+                return recorded_slider()
             return f"Effort\n{'─' * 20}\n{SLIDER_FOOTER}\n"
+        if self.showing == "change":
+            # Drawn over the slider, so its title may come through with a gap.
+            return (
+                "Change ef ort level?\n Your next response will be slower and use more tokens\n"
+                f" {HIGHLIGHT} 1. Yes, switch to {self.levels[self.level]}\n   2. No, go back\n"
+            )
         if self.showing == "switch":
             return (
                 "Switch model?\n Your next response will be slower and use more tokens\n"
@@ -282,6 +318,87 @@ async def test_the_effort_slider_is_walked_from_the_left(harness: Harness) -> No
     assert entry.session.effort == "high"
 
 
+def test_the_recorded_2_1_299_slider_is_known_though_its_footer_has_gaps() -> None:
+    drawn = recorded_slider()
+    # The redraw skipped cells the screen already held, so the old hint is cut.
+    assert "s for this se sion only" in drawn
+    assert typist.EFFORT_HINTS[1] not in drawn
+    assert any(hint in drawn for hint in typist.EFFORT_HINTS)
+
+
+async def test_the_2_1_299_slider_is_opened_from_what_the_terminal_drew(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The new slider: five levels, Ultracode on Tab, and a footer with gaps."""
+    monkeypatch.setattr(typist, "PROMPT_TIMEOUT", 0.05)
+    entry = await harness.attach(FakeTerminal(new_slider=True, level=1))
+    terminal = harness.terminal
+    change = asyncio.create_task(
+        harness.hub.set_options({"session_id": "sess-1", "effort": "high"})
+    )
+    await _until(lambda: terminal.applied_effort is not None)
+    assert terminal.typed == ["/effort\r", typist.LEFT * 6 + typist.RIGHT * 2, "s"]
+    assert terminal.applied_effort == "high"
+    assert terminal.ultracode is False
+
+    await harness.confirm(entry, "/effort", "Set effort level to high (this session only): …")
+    await asyncio.wait_for(change, timeout=2)
+    assert entry.session.effort == "high"
+
+
+@pytest.mark.parametrize("start", [0, 4], ids=["from-low", "from-max"])
+@pytest.mark.parametrize("level", typist.EFFORT_ORDER)
+async def test_every_level_of_the_2_1_299_slider_is_reached_from_either_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, start: int, level: str
+) -> None:
+    monkeypatch.setattr(typist, "PROMPT_TIMEOUT", 0.05)
+    harness = Harness(tmp_path)
+    entry = await harness.attach(FakeTerminal(new_slider=True, level=start))
+    terminal = harness.terminal
+    change = asyncio.create_task(harness.hub.set_options({"session_id": "sess-1", "effort": level}))
+    await _until(lambda: terminal.applied_effort is not None)
+    await harness.confirm(entry, "/effort", f"Set effort level to {level} (this session only)")
+    await asyncio.wait_for(change, timeout=2)
+    assert (terminal.applied_effort, entry.session.effort) == (level, level)
+    assert TAB not in "".join(terminal.typed)
+    harness.close()
+
+
+async def test_a_cached_conversation_asks_before_a_new_effort_and_the_device_says_yes(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """2.1.299 asks "Change effort level?" with yes highlighted, as `/model` does."""
+    monkeypatch.setattr(typist, "PROMPT_TIMEOUT", 0.5)
+    entry = await harness.attach(FakeTerminal(new_slider=True, level=1, asks_to_switch=True))
+    terminal = harness.terminal
+    change = asyncio.create_task(harness.hub.set_options({"session_id": "sess-1", "effort": "max"}))
+    await _until(lambda: terminal.applied_effort is not None)
+    assert terminal.typed == ["/effort\r", typist.LEFT * 6 + typist.RIGHT * 4, "s", typist.ENTER]
+    assert terminal.applied_effort == "max"
+
+    await harness.confirm(entry, "/effort", "Set effort level to max (this session only)")
+    await asyncio.wait_for(change, timeout=2)
+    assert entry.session.effort == "max"
+
+
+async def test_a_capped_slider_that_stops_short_of_the_level_is_refused(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A model capped at `high` draws three levels; its answer names the one it took."""
+    monkeypatch.setattr(typist, "PROMPT_TIMEOUT", 0.05)
+    entry = await harness.attach(FakeTerminal(new_slider=True, levels=3, level=0))
+    terminal = harness.terminal
+    change = asyncio.create_task(harness.hub.set_options({"session_id": "sess-1", "effort": "max"}))
+    await _until(lambda: terminal.applied_effort is not None)
+    assert terminal.applied_effort == "high"
+
+    await harness.confirm(entry, "/effort", "Set effort level to high (this session only)")
+    with pytest.raises(RcError) as caught:
+        await asyncio.wait_for(change, timeout=2)
+    assert (caught.value.code, caught.value.message) == ("conflict", typist.REFUSED)
+    assert entry.session.effort != "max"
+
+
 async def test_the_person_at_the_keyboard_always_wins(harness: Harness) -> None:
     """Three ways a terminal is busy, and the same refusal for each."""
     entry = await harness.attach()
@@ -412,6 +529,42 @@ async def test_nothing_is_typed_while_a_turn_is_running(harness: Harness) -> Non
         await harness.hub.command({"session_id": "sess-1", "name": "compact", "id": REQUEST})
     assert (caught.value.code, caught.value.message) == ("conflict", typist.BUSY)
     assert harness.terminal.typed == []
+
+
+async def test_the_transcript_reader_is_never_held_up_by_a_change_being_typed(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Model and effort in one request, and a message held meanwhile.
+
+    Each change holds the session's lock until the reader confirms it, and the
+    reader says after every read that the terminal is idle. Saying so must not
+    wait for that lock, or the second confirmation never comes; the held
+    message goes in once the change is done, never between its keys (A40).
+    """
+    monkeypatch.setattr(typist, "PROMPT_TIMEOUT", 0.1)
+    monkeypatch.setattr(typist, "CONFIRM_TIMEOUT", 1.0)
+    entry = await harness.attach()
+    terminal = harness.terminal
+    change = asyncio.create_task(
+        harness.hub.set_options({"session_id": "sess-1", "model": "sonnet", "effort": "high"})
+    )
+    await _until(lambda: terminal.applied_model is not None)
+    hold(entry.queue, pending_item("later", "req-h"), None)
+
+    async def read(command: str, answer: str) -> None:
+        # One pass of the mirror's tail loop over the rows the CLI wrote.
+        await harness.confirm(entry, command, answer)
+        await asyncio.wait_for(harness.hub.shared.tick(entry, running=False), timeout=0.5)
+
+    await read("/model", "Set model to `Sonnet 4.5` for this session")
+    await _until(lambda: terminal.applied_effort is not None)
+    assert harness.attachment.injected == []
+    await read("/effort", "Set effort level to high for this session")
+
+    result = await asyncio.wait_for(change, timeout=2)
+    assert (result["session"]["model"], result["session"]["effort"]) == ("sonnet", "high")
+    await drained(entry)
+    assert [text for _, text in harness.attachment.injected] == ["later"]
 
 
 async def test_a_message_waits_behind_the_keystrokes(harness: Harness) -> None:
@@ -557,11 +710,14 @@ async def test_claude_reports_what_it_can_type_only_when_the_shim_is_there(
     assert "commands" in info.capabilities
     # A42: Escape goes through the same terminal, so Stop rides on the shim too.
     assert (info.shared_interrupt, "interrupt" in info.capabilities) == (True, True)
+    # A49: the channel the shim loads carries the paths of a message's files.
+    assert (info.shared_attachments, "attachments" in info.capabilities) == (True, True)
 
     monkeypatch.setattr(shim, "status", ready(False))
     info = await claude_plugin.detect(DetectContext())
     assert (info.shared_settings, info.shared_settings_keys) == (False, None)
     assert info.shared_interrupt is False
+    assert info.shared_attachments is False
 
 
 async def test_the_sdk_session_runs_compact_as_a_prompt(tmp_path: Path) -> None:

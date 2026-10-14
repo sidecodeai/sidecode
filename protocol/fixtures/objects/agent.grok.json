@@ -64,6 +64,7 @@
     "worktree",
     "interrupt",
     "queue",
+    "attachments",
     "effort",
     "history",
     "commands"
@@ -72,7 +73,7 @@
   "attach_ready": true,
   "shared_interrupt": true,
   "shared_settings": true,
-  "shared_attachments": false,
+  "shared_attachments": true,
   "accounts": [
     {
       "provider": "xai",

@@ -15,6 +15,7 @@ from rc_client.models import UNSET, AgentInfo, Choice, Command, Session, SpeedSe
 from rc_client.registry import Registry
 from rc_client.sessions.channel import SessionChannel
 from rc_client.sessions.hub import SessionEntry, SessionHub
+from tests.helpers import drain
 
 
 class FakeRunner:
@@ -210,7 +211,7 @@ async def test_send_while_running_queues_and_launches_at_the_turn_end(tmp_path: 
     assert snapshot["pending"][0]["text"] == "second"
 
     await runner.finish()
-    await hub.drain_queue(entry)
+    await drain(hub, entry)
     assert runner.sent == ["first", "second"]
     assert runner.sources == ["remote", "queue"]
     triggers = [
@@ -530,7 +531,7 @@ async def test_a_queued_message_keeps_its_id_from_the_queue_to_the_bubble(
     assert snapshot["pending"][0]["id"] == SECOND_REQUEST
 
     await runner.finish()
-    await hub.drain_queue(entry)
+    await drain(hub, entry)
     assert runner.block_ids == [FIRST_REQUEST, SECOND_REQUEST]
     registry.close()
 
@@ -547,7 +548,7 @@ async def test_a_message_the_device_replays_keeps_an_id_of_its_own(tmp_path: Pat
     assert minted and minted != FIRST_REQUEST
 
     await runner.finish()
-    await hub.drain_queue(entry)
+    await drain(hub, entry)
     assert runner.block_ids == [FIRST_REQUEST, minted]
     registry.close()
 
