@@ -29,6 +29,14 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return directory
 
 
+def install_agent(home: Path) -> None:
+    """The binary Grok's installer puts in its home, so none on the machine counts."""
+    (home / "bin").mkdir(parents=True, exist_ok=True)
+    binary = home / "bin" / "agent"
+    binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    binary.chmod(0o755)
+
+
 # ------------------------------------------------------------ the A28 table
 
 
@@ -188,6 +196,7 @@ def test_setup_edits_a_symlinked_configuration_in_place(home: Path, tmp_path: Pa
 
 
 async def test_status_reports_the_configuration_without_starting_anything(home: Path) -> None:
+    install_agent(home)
     (home / "config.toml").write_text("[cli]\nuse_leader = true\n", encoding="utf-8")
     (home / "active_sessions.json").write_text(
         json.dumps([{"session_id": SESSION, "pid": os.getpid(), "cwd": str(home)}]),
@@ -205,10 +214,7 @@ async def test_status_reports_the_configuration_without_starting_anything(home: 
 
 
 async def test_status_says_what_to_run_when_the_flag_is_off(home: Path) -> None:
-    (home / "bin").mkdir(parents=True, exist_ok=True)
-    binary = home / "bin" / "agent"
-    binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    binary.chmod(0o755)
+    install_agent(home)
     found = await grok_setup.status(probe=False)
     assert found.ready is False
     assert "rc-client grok setup" in found.summary()

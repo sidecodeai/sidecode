@@ -85,6 +85,9 @@ def enrolled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> list[list[str]]
         )
     )
     monkeypatch.setattr(shutil, "which", lambda name: f"/fake/{name}")
+    # launchd's sequence, whatever the platform running the suite; a test about
+    # systemd's says so itself.
+    monkeypatch.setattr(manager, "install_restarts", lambda: True)
     commands: list[list[str]] = []
 
     async def spawn(*command: str, **kwargs: Any) -> FakeProcess:

@@ -638,6 +638,8 @@ async def test_a_helper_that_vanishes_leaves_the_scan_unfinished(
         return Vanishing()
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    # The helpers are the macOS path; Linux reads `/proc` and runs none.
+    monkeypatch.setattr(procscan, "IS_LINUX", False)
     assert await procscan.scan_processes() == procscan.Scan(procs=[], complete=False)
     assert await procscan.process_cwds([1, 2]) == ({}, False)
     assert await procscan.file_writers("/tmp/rollout.jsonl") == ([], False)
