@@ -1,0 +1,21 @@
+{
+  "users": [
+    {
+      "username": "admin",
+      "role": "admin",
+      "state": "active",
+      "created_at": 1788426000000,
+      "last_login_at": 1788944400000,
+      "devices": 2
+    },
+    {
+      "username": "alice",
+      "role": "member",
+      "state": "disabled",
+      "created_at": 1788512400000,
+      "last_login_at": null,
+      "devices": 0
+    }
+  ],
+  "registration_open": false
+}

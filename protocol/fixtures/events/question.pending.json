@@ -1,0 +1,32 @@
+{
+  "seq": 28,
+  "ts": 1788944431500,
+  "kind": "question",
+  "block_id": "c918d535-0a55-4521-8254-66c9bec5be9d",
+  "request_id": "dbe1ce62-ee02-41b3-a229-50b5b4689610",
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "Two runs still fail on a machine whose clock jumps. How should the refresh window treat skew?",
+      "options": [
+        {
+          "id": "clamp",
+          "label": "Clamp skew to half the window",
+          "description": "Safest; never refreshes early by more than 2.5 s."
+        },
+        {
+          "id": "monotonic",
+          "label": "Switch to a monotonic deadline",
+          "description": "Bigger change, touches the issue path."
+        },
+        {
+          "id": "widen",
+          "label": "Widen the window to 10 s"
+        }
+      ],
+      "multi": false,
+      "allow_text": true
+    }
+  ],
+  "status": "pending"
+}

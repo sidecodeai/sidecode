@@ -1,0 +1,306 @@
+{
+  "name": "claude-flaky-test",
+  "description": "A complete Claude Code turn driven from the app: streamed thinking and text, read, search and subagent tool calls, an approval, a failing shell run, a question, and a clean rerun.",
+  "device": {
+    "device_id": "c5efb1ec-2912-4619-90f7-93b5172fd712",
+    "name": "mac-studio-office",
+    "platform": "macos",
+    "hostname": "mac-studio.local",
+    "arch": "arm64",
+    "client_version": "0.1.0",
+    "online": true,
+    "last_seen": 1788944400000,
+    "created_at": 1788426000000,
+    "latency_ms": 18,
+    "agents": [
+      {
+        "agent": "claude",
+        "available": true,
+        "version": "2.1.266",
+        "path": "/Users/me/.local/bin/claude",
+        "models": [
+          {
+            "id": "claude-opus-4-6",
+            "label": "Opus 4.6"
+          },
+          {
+            "id": "claude-sonnet-4-5",
+            "label": "Sonnet 4.5"
+          },
+          {
+            "id": "claude-haiku-4-5",
+            "label": "Haiku 4.5"
+          }
+        ],
+        "default_model": "claude-sonnet-4-5",
+        "permission_modes": [
+          {
+            "id": "default",
+            "label": "Ask before edits"
+          },
+          {
+            "id": "acceptEdits",
+            "label": "Auto-accept edits"
+          },
+          {
+            "id": "plan",
+            "label": "Plan mode"
+          },
+          {
+            "id": "bypassPermissions",
+            "label": "Bypass permissions"
+          }
+        ],
+        "default_permission_mode": "default",
+        "efforts": [
+          {
+            "id": "low",
+            "label": "Low"
+          },
+          {
+            "id": "medium",
+            "label": "Medium"
+          },
+          {
+            "id": "high",
+            "label": "High"
+          },
+          {
+            "id": "max",
+            "label": "Max"
+          }
+        ],
+        "default_effort": "medium",
+        "capabilities": [
+          "worktree",
+          "takeover",
+          "interrupt",
+          "queue",
+          "attachments",
+          "effort",
+          "history"
+        ]
+      },
+      {
+        "agent": "codex",
+        "available": true,
+        "version": "0.153.4",
+        "path": "/opt/homebrew/bin/codex",
+        "models": [
+          {
+            "id": "gpt-5.4-codex",
+            "label": "GPT-5.4 Codex"
+          },
+          {
+            "id": "gpt-5.4-codex-mini",
+            "label": "GPT-5.4 Codex mini"
+          }
+        ],
+        "default_model": "gpt-5.4-codex",
+        "permission_modes": [
+          {
+            "id": "untrusted",
+            "label": "Ask for everything"
+          },
+          {
+            "id": "on-request",
+            "label": "Ask when needed"
+          },
+          {
+            "id": "never",
+            "label": "Never ask"
+          }
+        ],
+        "default_permission_mode": "on-request",
+        "efforts": [
+          {
+            "id": "low",
+            "label": "Low"
+          },
+          {
+            "id": "medium",
+            "label": "Medium"
+          },
+          {
+            "id": "high",
+            "label": "High"
+          }
+        ],
+        "default_effort": "medium",
+        "capabilities": [
+          "worktree",
+          "interrupt",
+          "queue",
+          "steer",
+          "attachments",
+          "effort",
+          "history"
+        ]
+      }
+    ]
+  },
+  "session": {
+    "session_id": "ad2c9abb-4a1e-470a-835c-228778fc17f0",
+    "device_id": "c5efb1ec-2912-4619-90f7-93b5172fd712",
+    "agent": "claude",
+    "title": "Fix flaky auth test",
+    "cwd": "/Users/me/dev/gateway",
+    "git": {
+      "branch": "main",
+      "dirty": false,
+      "ahead": 0,
+      "behind": 0,
+      "worktree": false
+    },
+    "state": "idle",
+    "state_detail": null,
+    "origin": "remote",
+    "control": "remote",
+    "model": "claude-sonnet-4-5",
+    "permission_mode": "default",
+    "effort": "medium",
+    "created_at": 1788942600000,
+    "updated_at": 1788944399000,
+    "last_seq": 0,
+    "archived": false,
+    "turn": null,
+    "todos": null,
+    "usage": null,
+    "queued": 0
+  },
+  "session_final": {
+    "session_id": "ad2c9abb-4a1e-470a-835c-228778fc17f0",
+    "device_id": "c5efb1ec-2912-4619-90f7-93b5172fd712",
+    "agent": "claude",
+    "title": "Fix flaky auth refresh test",
+    "cwd": "/Users/me/dev/gateway",
+    "git": {
+      "branch": "main",
+      "dirty": false,
+      "ahead": 0,
+      "behind": 0,
+      "worktree": false
+    },
+    "state": "idle",
+    "state_detail": null,
+    "origin": "remote",
+    "control": "remote",
+    "model": "claude-sonnet-4-5",
+    "permission_mode": "default",
+    "effort": "medium",
+    "created_at": 1788942600000,
+    "updated_at": 1788944461100,
+    "last_seq": 41,
+    "archived": false,
+    "turn": null,
+    "todos": {
+      "total": 4,
+      "done": 4
+    },
+    "usage": {
+      "input_tokens": 48120,
+      "output_tokens": 6210,
+      "total_tokens": 54330,
+      "context_used": 61000,
+      "context_window": 200000,
+      "cost_usd": 0.42
+    },
+    "queued": 0
+  },
+  "frames": [
+    {
+      "type": "session.event",
+      "session_id": "ad2c9abb-4a1e-470a-835c-228778fc17f0",
+      "event": {
+        "seq": 1,
+        "ts": 1788944400000,
+        "kind": "status",
+        "state": "idle"
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "ad2c9abb-4a1e-470a-835c-228778fc17f0",
+      "event": {
+        "seq": 2,
+        "ts": 1788944401000,
+        "kind": "user_message",
+        "block_id": "78c122e5-9703-4501-bff4-e6e6d8a27efe",
+        "text": "Fix the flaky refresh test in tests/test_auth.py. It fails roughly 1 run in 20.",
+        "source": "remote"
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "ad2c9abb-4a1e-470a-835c-228778fc17f0",
+      "event": {
+        "seq": 3,
+        "ts": 1788944401100,
+        "kind": "turn_started",
+        "turn_id": "ad5ec709-3ce6-44c6-80a5-af2cb46308bc",
+        "trigger": "remote"
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "ad2c9abb-4a1e-470a-835c-228778fc17f0",
+      "event": {
+        "seq": 4,
+        "ts": 1788944401100,
+        "kind": "status",
+        "state": "running"
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "ad2c9abb-4a1e-470a-835c-228778fc17f0",
+      "event": {
+        "seq": 5,
+        "ts": 1788944402500,
+        "kind": "thinking",
+        "block_id": "e3c776b7-73e5-449f-a25e-25cec51cf406",
+        "delta": "The failure is timing dependent, so the ",
+        "done": false
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "ad2c9abb-4a1e-470a-835c-228778fc17f0",
+      "event": {
+        "seq": 5,
+        "ts": 1788944402600,
+        "kind": "thinking",
+        "first_seq": 5,
+        "block_id": "e3c776b7-73e5-449f-a25e-25cec51cf406",
+        "delta": "refresh window is probably compared against a wall clock that can drift.",
+        "done": false
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "ad2c9abb-4a1e-470a-835c-228778fc17f0",
+      "event": {
+        "seq": 7,
+        "ts": 1788944402900,
+        "kind": "thinking",
+        "first_seq": 5,
+        "block_id": "e3c776b7-73e5-449f-a25e-25cec51cf406",
+        "text": "The failure is timing dependent, so the refresh window is probably compared against a wall clock that can drift.",
+        "done": true,
+        "duration_ms": 4200
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "ad2c9abb-4a1e-470a-835c-228778fc17f0",
+      "event": {
+        "seq": 8,
+        "ts": 1788944403300,
+        "kind": "assistant_text",
+        "block_id": "5ccffa9e-4949-4c98-a8a5-066f320bd531",
+        "delta": "Let me read the test and the token helper.",
+        "done": false
+      }
+    }
+  ]
+}

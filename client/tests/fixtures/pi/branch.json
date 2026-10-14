@@ -1,0 +1,135 @@
+[
+  {
+    "type": "model_change",
+    "id": "e83c46c6",
+    "parentId": null,
+    "timestamp": "2026-09-13T18:20:43.655Z",
+    "provider": "xai",
+    "modelId": "grok-4.6"
+  },
+  {
+    "type": "thinking_level_change",
+    "id": "4cdbf976",
+    "parentId": "e83c46c6",
+    "timestamp": "2026-09-13T18:20:43.655Z",
+    "thinkingLevel": "low"
+  },
+  {
+    "type": "message",
+    "id": "ca8cd5a2",
+    "parentId": "4cdbf976",
+    "timestamp": "2026-09-13T18:20:43.924Z",
+    "message": {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Run the bash command: echo hello-pi. Then say done."
+        }
+      ],
+      "timestamp": 1789323643923
+    }
+  },
+  {
+    "type": "message",
+    "id": "31fe409e",
+    "parentId": "ca8cd5a2",
+    "timestamp": "2026-09-13T18:20:44.990Z",
+    "message": {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "thinking",
+          "thinking": "The user wants me to run a simple bash command and then say done."
+        },
+        {
+          "type": "toolCall",
+          "id": "call-b384fa67-4d4b-4644-83f7-534d966b4cb4-0|fc_d3ec000d-0103-95e6-8547-60bc1a726899_0",
+          "name": "bash",
+          "arguments": {
+            "command": "echo hello-pi"
+          }
+        }
+      ],
+      "api": "openai-responses",
+      "provider": "xai",
+      "model": "grok-4.6",
+      "usage": {
+        "input": 2474,
+        "output": 28,
+        "cacheRead": 512,
+        "cacheWrite": 0,
+        "reasoning": 15,
+        "totalTokens": 3014,
+        "cost": {
+          "input": 0.004948,
+          "output": 0.00016800000000000002,
+          "cacheRead": 0.000256,
+          "cacheWrite": 0,
+          "total": 0.005372
+        }
+      },
+      "stopReason": "toolUse",
+      "timestamp": 1789323643933
+    }
+  },
+  {
+    "type": "message",
+    "id": "310fda8a",
+    "parentId": "31fe409e",
+    "timestamp": "2026-09-13T18:20:45.001Z",
+    "message": {
+      "role": "toolResult",
+      "toolCallId": "call-b384fa67-4d4b-4644-83f7-534d966b4cb4-0|fc_d3ec000d-0103-95e6-8547-60bc1a726899_0",
+      "toolName": "bash",
+      "content": [
+        {
+          "type": "text",
+          "text": "hello-pi\n"
+        }
+      ],
+      "isError": false,
+      "timestamp": 1789323645001
+    }
+  },
+  {
+    "type": "message",
+    "id": "c8dda226",
+    "parentId": "310fda8a",
+    "timestamp": "2026-09-13T18:20:46.136Z",
+    "message": {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "thinking",
+          "thinking": "The command succeeded. User asked me to say done."
+        },
+        {
+          "type": "text",
+          "text": "done",
+          "textSignature": "{\"v\":1,\"id\":\"msg_10c75226-3f96-9ff6-8822-a1a76aa30c81\"}"
+        }
+      ],
+      "api": "openai-responses",
+      "provider": "xai",
+      "model": "grok-4.6",
+      "usage": {
+        "input": 2385,
+        "output": 12,
+        "cacheRead": 640,
+        "cacheWrite": 0,
+        "reasoning": 11,
+        "totalTokens": 3037,
+        "cost": {
+          "input": 0.00477,
+          "output": 7.2e-05,
+          "cacheRead": 0.00031999999999999997,
+          "cacheWrite": 0,
+          "total": 0.005162
+        }
+      },
+      "stopReason": "stop",
+      "timestamp": 1789323645002
+    }
+  }
+]

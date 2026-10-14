@@ -1,0 +1,38 @@
+{
+  "session_id": "81035e9c-8d47-4b27-9804-242432da844c",
+  "device_id": "c5efb1ec-2912-4619-90f7-93b5172fd712",
+  "agent": "codex",
+  "title": "Typecheck the web app",
+  "cwd": "/Users/me/dev/web",
+  "git": {
+    "branch": "feat/settings-drawer",
+    "dirty": true,
+    "ahead": 2,
+    "behind": 0,
+    "worktree": false
+  },
+  "state": "running",
+  "state_detail": "Typed in the terminal",
+  "origin": "terminal",
+  "control": "shared",
+  "model": "gpt-5.4-codex",
+  "permission_mode": "on-request",
+  "effort": "medium",
+  "created_at": 1788946200000,
+  "updated_at": 1788946241700,
+  "last_seq": 12,
+  "archived": false,
+  "turn": {
+    "turn_id": "76b014bd-9bea-45a4-8339-3dfa5de52f75",
+    "started_at": 1788946238100
+  },
+  "todos": null,
+  "usage": {
+    "input_tokens": 14980,
+    "output_tokens": 1740,
+    "total_tokens": 16720,
+    "context_used": 19300,
+    "context_window": 272000
+  },
+  "queued": 0
+}

@@ -1,0 +1,48 @@
+{
+  "commands": [
+    {
+      "name": "llama",
+      "description": "Manage llama.cpp router models",
+      "source": "extension",
+      "sourceInfo": {
+        "path": "<inline:llama.cpp>",
+        "source": "inline",
+        "scope": "temporary",
+        "origin": "top-level"
+      }
+    },
+    {
+      "name": "release-notes",
+      "description": "Draft release notes from the commits since the last tag",
+      "source": "prompt",
+      "sourceInfo": {
+        "path": "{dir}/release-notes.md",
+        "source": "auto",
+        "scope": "user",
+        "origin": "top-level"
+      }
+    },
+    {
+      "name": "Shouty",
+      "description": "A name no app could send back, so it is never offered",
+      "source": "prompt",
+      "sourceInfo": {
+        "path": "{dir}/Shouty.md",
+        "source": "auto",
+        "scope": "user",
+        "origin": "top-level"
+      }
+    },
+    {
+      "name": "skill:pdf-tables",
+      "description": "Extract tables from a PDF into CSV",
+      "source": "skill",
+      "sourceInfo": {
+        "path": "{dir}/pdf-tables/SKILL.md",
+        "source": "auto",
+        "scope": "user",
+        "origin": "top-level"
+      }
+    }
+  ]
+}

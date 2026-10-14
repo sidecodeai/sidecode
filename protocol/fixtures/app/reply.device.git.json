@@ -1,0 +1,12 @@
+{
+  "type": "reply",
+  "id": "74d5f4eb-37e6-41b7-88ab-30cbf8b142a1",
+  "ok": true,
+  "result": {
+    "is_repo": true,
+    "branch": "main",
+    "dirty": false,
+    "ahead": 0,
+    "behind": 3
+  }
+}

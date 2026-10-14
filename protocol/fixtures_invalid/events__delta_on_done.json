@@ -1,0 +1,10 @@
+{
+  "seq": 9,
+  "ts": 1788944403500,
+  "kind": "assistant_text",
+  "first_seq": 8,
+  "block_id": "5ccffa9e-4949-4c98-a8a5-066f320bd531",
+  "text": "Let me read the test and the token helper.",
+  "done": true,
+  "delta": "trailing delta on a finished block"
+}

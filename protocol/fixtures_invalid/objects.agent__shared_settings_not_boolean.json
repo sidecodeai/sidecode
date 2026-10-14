@@ -1,0 +1,61 @@
+{
+  "agent": "codex",
+  "available": true,
+  "version": "0.154.0",
+  "path": "/Users/me/.codex/packages/standalone/current/bin/codex",
+  "models": [
+    {
+      "id": "gpt-5.4-codex",
+      "label": "GPT-5.4 Codex"
+    },
+    {
+      "id": "gpt-5.4-codex-mini",
+      "label": "GPT-5.4 Codex mini"
+    }
+  ],
+  "default_model": "gpt-5.4-codex",
+  "permission_modes": [
+    {
+      "id": "untrusted",
+      "label": "Ask for everything"
+    },
+    {
+      "id": "on-request",
+      "label": "Ask when needed"
+    },
+    {
+      "id": "never",
+      "label": "Never ask"
+    }
+  ],
+  "default_permission_mode": "on-request",
+  "efforts": [
+    {
+      "id": "low",
+      "label": "Low"
+    },
+    {
+      "id": "medium",
+      "label": "Medium"
+    },
+    {
+      "id": "high",
+      "label": "High"
+    }
+  ],
+  "default_effort": "medium",
+  "capabilities": [
+    "worktree",
+    "interrupt",
+    "queue",
+    "steer",
+    "attachments",
+    "effort",
+    "history"
+  ],
+  "attach": "daemon",
+  "attach_ready": true,
+  "shared_interrupt": true,
+  "shared_settings": "yes",
+  "shared_attachments": true
+}

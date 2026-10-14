@@ -1,0 +1,130 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  background: var(--overlay);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-4);
+  animation: rc-fade var(--dur) var(--ease);
+}
+
+@keyframes rc-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+.modal {
+  width: 100%;
+  max-height: min(88vh, 820px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-modal);
+  animation: rc-rise var(--dur) var(--ease);
+}
+
+@keyframes rc-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+}
+
+.modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: var(--sp-6) var(--sp-6) 0;
+}
+
+.modal-head h2 {
+  font-size: var(--fs-22);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.modal-body {
+  padding: var(--sp-4) var(--sp-6) var(--sp-6);
+  overflow-y: auto;
+}
+
+.modal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-6);
+  border-top: 1px solid var(--line);
+}
+
+.drawer-overlay {
+  align-items: stretch;
+  justify-content: flex-end;
+  padding: 0;
+}
+
+.drawer {
+  width: min(480px, 100%);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  box-shadow: var(--shadow-modal);
+  animation: rc-slide var(--dur) var(--ease);
+}
+
+@keyframes rc-slide {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+}
+
+.drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: var(--sp-6) var(--sp-6) var(--sp-4);
+}
+
+.drawer-head h2 {
+  font-size: var(--fs-22);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 var(--sp-6) var(--sp-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+.drawer-foot {
+  padding: var(--sp-4) var(--sp-6) var(--sp-6);
+}
+
+@media (max-width: 640px) {
+  .drawer {
+    width: 100%;
+  }
+
+  .overlay {
+    padding: 0;
+    align-items: flex-end;
+  }
+
+  .modal {
+    max-height: 92vh;
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+  }
+}

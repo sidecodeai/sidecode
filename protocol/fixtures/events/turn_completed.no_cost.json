@@ -1,0 +1,15 @@
+{
+  "seq": 36,
+  "ts": 1788945049900,
+  "kind": "turn_completed",
+  "turn_id": "e411cdfb-4811-467a-9057-20393b6abb21",
+  "stop_reason": "completed",
+  "duration_ms": 19600,
+  "usage": {
+    "input_tokens": 26800,
+    "output_tokens": 3640,
+    "total_tokens": 30440,
+    "context_used": 36900,
+    "context_window": 272000
+  }
+}

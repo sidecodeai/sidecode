@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://remote-control.dev/schema/v1/timeline.json",
+  "title": "remote-control timeline fixture (test harness only)",
+  "description": "Not a wire format. A recorded session used by component tests: the device and session summaries a client starts from, followed by the session.event frames the gateway delivers in order. Feed `frames` into a timeline reducer and compare the result with `session_final`.",
+  "type": "object",
+  "properties": {
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "device": { "$ref": "objects.json#/$defs/Device" },
+    "session": {
+      "description": "The session summary before the first frame is applied.",
+      "$ref": "objects.json#/$defs/Session"
+    },
+    "session_final": {
+      "description": "The session summary after every frame has been applied.",
+      "$ref": "objects.json#/$defs/Session"
+    },
+    "frames": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "app_frames.json#/$defs/SessionEvent" }
+    }
+  },
+  "required": ["name", "description", "device", "session", "session_final", "frames"]
+}

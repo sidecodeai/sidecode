@@ -1,0 +1,15 @@
+{
+  "seq": 44,
+  "ts": 1788944500000,
+  "kind": "tool_call",
+  "block_id": "6d2e8b1a-4c3f-4a7e-9f0b-1c2d3e4f5a6b",
+  "tool": "/usage",
+  "tool_kind": "other",
+  "title": "/usage",
+  "status": "succeeded",
+  "output": "Plan: Pro\n5-hour window: 38% used, resets 14:20\nWeekly window: 12% used, resets Thu 09:00",
+  "summary": "38% of the 5-hour window used",
+  "started_at": 1788944499800,
+  "ended_at": 1788944500000,
+  "duration_ms": 200
+}

@@ -1,0 +1,10 @@
+{
+  "user": {
+    "username": "alice",
+    "role": "member",
+    "state": "active",
+    "created_at": 1788512400000,
+    "last_login_at": null,
+    "devices": 0
+  }
+}

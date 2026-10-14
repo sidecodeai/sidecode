@@ -1,0 +1,120 @@
+/*
+ * A38 — `docs/DESIGN.md` § "The terminal". A page of its own: a header with
+ * the device's name, the status line under it and Close at the trailing edge,
+ * and the emulator taking everything that is left.
+ *
+ * The emulator is light, like every other surface here (`terminalTheme.ts`).
+ * A black rectangle would be the only dark thing in the app, and would read as
+ * a different program rather than as this one's terminal.
+ */
+.terminal-page {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  background: var(--canvas);
+}
+
+.terminal-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: var(--header-h);
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.terminal-back {
+  flex: none;
+}
+
+.terminal-heading {
+  flex: 1;
+  min-width: 0;
+}
+
+.terminal-heading h1 {
+  margin: 0;
+  font-size: var(--fs-15);
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* One thin line: the state, why it is that state, and the one action it earns. */
+.terminal-status {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0 var(--sp-2);
+  margin: 1px 0 0;
+  font-size: var(--fs-12);
+  line-height: 1.45;
+  color: var(--ink-secondary);
+}
+
+.terminal-state.connected {
+  color: var(--running);
+}
+
+.terminal-state.disconnected {
+  color: var(--attention);
+}
+
+.terminal-reason::before {
+  content: '· ';
+  color: var(--line-strong);
+}
+
+.terminal-action {
+  font-size: var(--fs-12);
+  color: var(--ink);
+}
+
+.terminal-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  background: var(--surface-sunken);
+}
+
+/* The emulator measures itself against this box, so it has to be one. */
+.terminal-view {
+  width: 100%;
+  height: 100%;
+}
+
+.terminal-view .xterm {
+  height: 100%;
+}
+
+.terminal-view .xterm-viewport {
+  background: transparent;
+}
+
+/* A device that cannot give a shell says so where the shell would have been. */
+.terminal-blocked {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: var(--sp-4);
+  text-align: center;
+  font-size: var(--fs-14);
+  color: var(--ink-secondary);
+  background: var(--surface-sunken);
+}
+
+@media (max-width: 480px) {
+  .terminal-body {
+    padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  }
+}

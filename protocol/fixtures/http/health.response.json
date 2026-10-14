@@ -1,0 +1,24 @@
+{
+  "ok": true,
+  "version": "0.1.0",
+  "protocol": 1,
+  "apps": {
+    "ios": {
+      "minimum_version": "0.1.0",
+      "update_url": "https://testflight.apple.com/join/EXAMPLE"
+    },
+    "macos": {
+      "minimum_version": "1.11.0"
+    },
+    "android": {
+      "minimum_version": "1.12.0"
+    },
+    "windows": {
+      "minimum_version": "1.12.0"
+    }
+  },
+  "auth": {
+    "mode": "password",
+    "registration_open": false
+  }
+}

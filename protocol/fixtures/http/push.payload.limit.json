@@ -1,0 +1,10 @@
+{
+  "rc": {
+    "v": 1,
+    "kind": "limit_reached",
+    "device_id": "c5efb1ec-2912-4619-90f7-93b5172fd712",
+    "session_id": "6d1f3c58-8b2e-4d67-9a4f-2e7c1b0d5a93",
+    "device_name": "mac-studio-office",
+    "title": "mac-studio-office: paused by the usage limit"
+  }
+}

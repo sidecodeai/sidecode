@@ -1,0 +1,16 @@
+{
+  "type": "reply",
+  "id": "3b9c6f1e-7a2d-4e58-9c1b-8f6a2d4e7b31",
+  "ok": true,
+  "result": {
+    "path": "/Users/me/dev/new-project",
+    "parent": "/Users/me/dev",
+    "entries": [],
+    "recent": [
+      {
+        "path": "/Users/me/dev/gateway",
+        "last_used": 1788943800000
+      }
+    ]
+  }
+}

@@ -1,0 +1,488 @@
+.sessions-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+
+/*
+ * What the dot colours mean, said once under the toolbar and nowhere else
+ * (docs/DESIGN.md § "A legend, once, and quiet"): a caption line in the
+ * secondary ink, no box, no border and no title, with the dots at the size the
+ * rows draw them. The amber entry takes the still tone, because the pulsing one
+ * and it are the same colour and one entry covers both.
+ */
+.session-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-4);
+  margin-bottom: var(--sp-5);
+  font-size: var(--fs-12);
+  line-height: 1.45;
+  color: var(--ink-secondary);
+}
+
+.session-legend-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  white-space: nowrap;
+}
+
+/*
+ * The agent filter sits beside the pills rather than stretching with them: its
+ * segments are labels, so they keep their own width and never wrap.
+ */
+.sessions-toolbar .segmented {
+  flex: none;
+}
+
+.sessions-toolbar .segmented > button {
+  flex: none;
+  height: 28px;
+  padding: 0 var(--sp-3);
+  font-size: var(--fs-13);
+  white-space: nowrap;
+}
+
+/* --- session list ----------------------------------------------------- */
+
+.session-group + .session-group {
+  margin-top: var(--sp-6);
+}
+
+/* The device header, then its rows, then its own Archive under them. */
+.session-group .device-head {
+  margin-bottom: var(--sp-2);
+}
+
+.session-archive-group {
+  margin-top: var(--sp-3);
+}
+
+.session-archive-group .archive-head {
+  margin-bottom: var(--sp-2);
+}
+
+.session-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Rows are parted by their own fixed height, never by a rule between them. */
+.session-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: var(--row-h-three);
+  /* The gutter the close action sits in, reserved by every row. */
+  padding-right: 40px;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+/* The whole row tints, including under the close button at its end. */
+.session-row:hover {
+  background: var(--hover);
+}
+
+.session-open {
+  flex: 1;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  padding: 0 var(--sp-5);
+  border: none;
+  background: transparent;
+  text-align: left;
+  min-width: 0;
+  /* A47: the red dot is centred in the padding before the lines. */
+  --unseen-reach: calc(var(--sp-5) / 2);
+}
+
+/* A line of the row: what it starts with at the leading edge, what it ends
+   with at the trailing edge, and the leading part is what gives way. The
+   title's line is also where a red dot is placed from. */
+.session-line {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.session-title {
+  font-size: var(--fs-15);
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-state {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--ink-secondary);
+  white-space: nowrap;
+}
+
+.session-time {
+  flex: none;
+  font-size: var(--fs-12);
+  line-height: 1.45;
+  color: var(--ink-tertiary);
+  white-space: nowrap;
+}
+
+/* The working directory alone: a folder drawn to the same rule as the laptop
+   before a device — ink, no fill, round caps and joins — then the path. */
+.session-cwd {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  font-size: var(--fs-12);
+  line-height: 1.45;
+  color: var(--ink-secondary);
+}
+
+.session-folder {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--ink);
+}
+
+/* Head truncation: the ellipsis lands at the start, so the folder the path
+   ends in is the part that stays. The <bdi> inside keeps the text in order. */
+.session-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+/*
+ * The action sits in the gutter every row reserves, so a row that offers no
+ * close still ends its meta column in the same place as the row above it.
+ */
+.session-close {
+  position: absolute;
+  right: var(--sp-3);
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 0;
+}
+
+.session-row:hover .session-close,
+.session-close:focus-visible {
+  opacity: 1;
+}
+
+/* --- new session drawer ---------------------------------------------- */
+
+.label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.label-row .label {
+  margin-bottom: var(--sp-2);
+}
+
+.label-row .link-btn {
+  font-size: var(--fs-13);
+  color: var(--ink-secondary);
+  text-decoration: none;
+}
+
+.label-row .link-btn:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.drawer .popover-root {
+  display: block;
+}
+
+.drawer .popover-root > .pill {
+  width: 100%;
+  height: 46px;
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-md);
+  justify-content: space-between;
+}
+
+.select-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex: 1;
+  min-width: 0;
+}
+
+.select-name {
+  font-size: var(--fs-15);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.select-aux {
+  margin-left: auto;
+  font-size: var(--fs-12);
+  color: var(--ink-secondary);
+}
+
+.agent-option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* A26: in the new-session form the logo is the whole segment, so it is drawn
+   larger than the name it stands for. The box is one em, so one font size sets
+   it. */
+.segmented > button .agent-logo {
+  font-size: 18px;
+}
+
+.agent-line {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-12);
+  color: var(--ink-secondary);
+}
+
+.dir-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.dir-field .field {
+  height: 46px;
+  padding-right: 74px;
+  font-size: var(--fs-15);
+}
+
+.dir-status {
+  position: absolute;
+  right: var(--sp-4);
+  font-size: var(--fs-12);
+  color: var(--ink-secondary);
+  pointer-events: none;
+}
+
+.dir-status.missing {
+  color: var(--danger);
+}
+
+.dir-status.idle {
+  display: none;
+}
+
+.recent-list {
+  list-style: none;
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+}
+
+.recent-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  width: 100%;
+  padding: 9px var(--sp-2);
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  font-size: var(--fs-13);
+  text-align: left;
+}
+
+.recent-list button:hover {
+  background: var(--surface-hover);
+}
+
+.recent-list .hint {
+  font-size: var(--fs-12);
+  flex: none;
+}
+
+/* Inside the white drawer a group reads as sunken, not as a raised card. */
+.git-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  min-height: 52px;
+  border-radius: var(--r-md);
+  background: var(--surface-muted);
+}
+
+.git-branch {
+  font-size: var(--fs-14);
+}
+
+.git-row .hint {
+  font-size: var(--fs-12);
+}
+
+.git-worktree {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--fs-13);
+}
+
+.kbd-hint {
+  position: absolute;
+  right: var(--sp-4);
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  opacity: 0.65;
+}
+
+.drawer-foot .btn {
+  position: relative;
+}
+
+.drawer-foot .login-error {
+  margin: 0 0 var(--sp-3);
+}
+
+/* --- directory picker ------------------------------------------------- */
+
+.picker-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
+}
+
+.picker-head .btn {
+  flex: none;
+}
+
+.picker-path {
+  font-size: var(--fs-13);
+  color: var(--ink-secondary);
+  word-break: break-all;
+}
+
+/* A37: the row that names one folder, above the listing it will be made in. */
+.picker-new {
+  margin-bottom: var(--sp-3);
+}
+
+.picker-new-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.picker-new-row .field,
+.picker-new-row .btn {
+  height: 32px;
+}
+
+.picker-new-error {
+  margin: var(--sp-2) 0 0;
+  color: var(--danger);
+  font-size: var(--fs-13);
+}
+
+.picker-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+
+.picker-list li + li {
+  border-top: 1px solid var(--line);
+}
+
+.picker-list button {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  padding: 10px var(--sp-3);
+  border: none;
+  background: transparent;
+  text-align: left;
+  color: var(--ink-secondary);
+  font-size: var(--fs-13);
+}
+
+.picker-list button:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.picker-list .mono {
+  color: var(--ink);
+}
+
+.picker-git {
+  margin-left: auto;
+  color: var(--ink-tertiary);
+}
+
+.picker-empty {
+  padding: var(--sp-4);
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .sessions-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .search-field {
+    max-width: none;
+    flex-basis: 100%;
+  }
+
+  .session-open {
+    padding: 0 var(--sp-4);
+    --unseen-reach: calc(var(--sp-4) / 2);
+  }
+
+  .session-close {
+    opacity: 1;
+  }
+}
+
+/* A21: the speed tier sits on one line with its switch, after the three lists. */
+.speed-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.speed-row .label {
+  margin-bottom: 0;
+}

@@ -1,0 +1,18 @@
+{
+  "seq": 24,
+  "ts": 1788945031200,
+  "kind": "queue",
+  "pending": [
+    {
+      "id": "573d2674-debc-4db0-973c-16e8a7c2e9b1",
+      "text": "Then run the full test suite.",
+      "ts": 1788945028800
+    },
+    {
+      "id": "807da3ea-84ba-4e5d-b26d-77a153262986",
+      "text": "These two screenshots show the drawer before and after.",
+      "ts": 1788945031200,
+      "attachments": 2
+    }
+  ]
+}

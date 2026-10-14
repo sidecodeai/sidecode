@@ -1,0 +1,19 @@
+{
+  "seq": 101,
+  "ts": 1788945410000,
+  "kind": "tool_call",
+  "block_id": "47314f1e-329c-4f98-bd49-c61871b608a3",
+  "tool": "WebFetch",
+  "tool_kind": "web",
+  "title": "https://peps.python.org/pep-0418/",
+  "status": "succeeded",
+  "input": {
+    "url": "https://peps.python.org/pep-0418/"
+  },
+  "output": "PEP 418 - Add monotonic time, performance counter, and process time functions\n",
+  "output_truncated": true,
+  "summary": "fetched 41 KB",
+  "started_at": 1788945410000,
+  "ended_at": 1788945411400,
+  "duration_ms": 1400
+}

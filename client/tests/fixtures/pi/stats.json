@@ -1,0 +1,22 @@
+{
+  "sessionFile": "/tmp/pi/sessions/2026-09-13T15-45-52-437Z.jsonl",
+  "sessionId": "",
+  "userMessages": 1,
+  "assistantMessages": 2,
+  "toolCalls": 1,
+  "toolResults": 1,
+  "totalMessages": 5,
+  "tokens": {
+    "input": 4210,
+    "output": 180,
+    "cacheRead": 1024,
+    "cacheWrite": 0,
+    "total": 5414
+  },
+  "cost": 0.0213,
+  "contextUsage": {
+    "tokens": 4600,
+    "contextWindow": 1000000,
+    "percent": 1
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "ok": false,
+  "error": {
+    "code": "unsupported",
+    "message": "speech to text is not configured"
+  }
+}

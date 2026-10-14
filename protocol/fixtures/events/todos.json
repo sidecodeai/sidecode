@@ -1,0 +1,27 @@
+{
+  "seq": 12,
+  "ts": 1788944404400,
+  "kind": "todos",
+  "items": [
+    {
+      "id": "t1",
+      "text": "Reproduce the flake",
+      "status": "completed"
+    },
+    {
+      "id": "t2",
+      "text": "Find the timing dependency",
+      "status": "completed"
+    },
+    {
+      "id": "t3",
+      "text": "Fix the refresh window",
+      "status": "completed"
+    },
+    {
+      "id": "t4",
+      "text": "Run the test 20 times",
+      "status": "completed"
+    }
+  ]
+}

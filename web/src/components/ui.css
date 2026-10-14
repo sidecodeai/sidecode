@@ -1,0 +1,537 @@
+/* Shared primitives: buttons, pills, cards, fields, dots. */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  height: 36px;
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-pill);
+  border: none;
+  background: var(--surface-muted);
+  color: var(--ink);
+  font-size: var(--fs-14);
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    opacity var(--dur-fast) var(--ease);
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--surface-active);
+}
+
+.btn:active:not(:disabled) {
+  background: var(--surface-active);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn.primary {
+  background: var(--ink);
+  color: var(--ink-inverse);
+}
+
+.btn.primary:hover:not(:disabled) {
+  background: #262626;
+}
+
+.btn.primary:disabled {
+  background: #b9b9b4;
+  color: #fff;
+  opacity: 1;
+}
+
+.btn.danger {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.btn.danger:hover:not(:disabled) {
+  background: #fbdedb;
+}
+
+.btn.ghost {
+  background: transparent;
+}
+
+.btn.ghost:hover:not(:disabled) {
+  background: var(--surface-muted);
+}
+
+.btn.small {
+  height: 28px;
+  padding: 0 var(--sp-3);
+  font-size: var(--fs-13);
+}
+
+.btn.block {
+  width: 100%;
+  height: 44px;
+  font-size: var(--fs-15);
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-sm);
+  border: none;
+  background: transparent;
+  color: var(--ink-secondary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.icon-btn:hover {
+  background: var(--surface-active);
+  color: var(--ink);
+}
+
+.card {
+  background: var(--surface);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-soft);
+}
+
+/*
+ * A list of rows on one surface: hairlines part the rows, never the last one,
+ * and the surface itself carries no border.
+ */
+.surface {
+  background: var(--surface);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-soft);
+  overflow: hidden;
+}
+
+/* Caption above a surface. Sentence case: nothing in the app is re-cased. */
+.group-title {
+  font-size: var(--fs-12);
+  line-height: 1.4;
+  color: var(--ink-tertiary);
+  font-weight: 600;
+  margin: 0 0 var(--sp-2);
+  padding-left: var(--sp-4);
+}
+
+/* Search field shared by the Sessions page and the chat sidebar. */
+.search-field {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 34px;
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--r-pill);
+  background: var(--surface-muted);
+  color: var(--ink-tertiary);
+  max-width: 320px;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.search-field:focus-within {
+  background: var(--surface-active);
+}
+
+.search-field input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: var(--fs-14);
+  color: var(--ink);
+  min-width: 0;
+}
+
+.search-field input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+/*
+ * A group caption that doubles as its disclosure control. The chevron takes the
+ * gutter, so the label keeps the indent a plain caption has.
+ */
+.group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2) var(--sp-1) 0;
+  border: none;
+  background: transparent;
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.group-head:hover {
+  color: var(--ink-secondary);
+}
+
+.group-chevron {
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.group-chevron.open {
+  transform: rotate(90deg);
+}
+
+/* The device header carries the name and its online dot, one size up. */
+.device-head {
+  gap: var(--sp-2);
+  color: var(--ink);
+  font-size: var(--fs-14);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.device-head-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.archive-head {
+  padding-left: var(--sp-3);
+}
+
+.field {
+  width: 100%;
+  height: 40px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  outline: none;
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+
+.field:focus {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 3px rgba(17, 17, 17, 0.06);
+}
+
+.field.mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
+}
+
+/* A form field's label. Sentence case, like every other caption in the app. */
+.label {
+  display: block;
+  font-size: var(--fs-13);
+  line-height: 1.4;
+  color: var(--ink-secondary);
+  font-weight: 500;
+  margin-bottom: var(--sp-2);
+}
+
+.hint {
+  color: var(--ink-secondary);
+  font-size: var(--fs-13);
+}
+
+/* Why a form was refused, under the fields it belongs to. */
+.form-error {
+  color: var(--danger);
+  font-size: var(--fs-13);
+  line-height: 1.5;
+}
+
+/* A short stack of labelled fields in a dialog. */
+.form-stack .field + .label {
+  margin-top: var(--sp-4);
+}
+
+.form-stack .form-error:not(:first-child) {
+  margin-top: var(--sp-3);
+}
+
+.dot {
+  display: inline-block;
+  width: var(--status-dot);
+  height: var(--status-dot);
+  border-radius: 50%;
+  background: var(--idle);
+  flex: none;
+}
+
+.dot.running {
+  background: var(--running);
+}
+
+.dot.attention {
+  background: var(--attention);
+}
+
+.dot.error {
+  background: var(--danger);
+}
+
+.dot.offline {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--idle);
+}
+
+.dot.pulse {
+  animation: rc-pulse 1.8s var(--ease) infinite;
+}
+
+/*
+ * A session's dot, one tone per line of the table in docs/DESIGN.md. The tone
+ * is picked by `dotTone` in dotTone.ts, never by the markup. Green means
+ * working — leave it; amber means there is something for you, a finished turn
+ * to read or a question to answer. Only `waiting` moves, so the one state that
+ * needs the person is the one that asks for a glance.
+ */
+.dot.working {
+  background: var(--running);
+}
+
+.dot.waiting {
+  background: var(--attention);
+  animation: rc-pulse 1.8s var(--ease) infinite;
+}
+
+.dot.live {
+  background: var(--attention);
+}
+
+.dot.off {
+  background: var(--idle);
+}
+
+.dot.failed {
+  background: var(--danger);
+}
+
+@keyframes rc-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot.pulse,
+  .dot.waiting {
+    animation: none;
+  }
+}
+
+/*
+ * A47 (docs/DESIGN.md § "A red dot for a session that stopped and waits for
+ * you"): in the row's leading gutter, centred on the title's line, and out of
+ * the flow, so it moves nothing when it comes or goes. The title's line is its
+ * containing block; each list sets `--unseen-reach`, how far back from where
+ * that line starts the gutter's centre is.
+ */
+.unseen-dot {
+  position: absolute;
+  top: 50%;
+  left: calc(-1 * var(--unseen-reach) - var(--unseen-dot) / 2);
+  width: var(--unseen-dot);
+  height: var(--unseen-dot);
+  margin-top: calc(var(--unseen-dot) / -2);
+  border-radius: 50%;
+  background: var(--danger);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: var(--r-pill);
+  border: none;
+  background: var(--surface-muted);
+  font-size: var(--fs-13);
+  color: var(--ink);
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.pill:hover:not(:disabled) {
+  background: var(--surface-active);
+}
+
+.pill:disabled {
+  color: var(--ink-tertiary);
+  background: var(--surface-muted);
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* A chip that reads as state rather than as a control. */
+.pill.quiet {
+  background: transparent;
+  color: var(--ink-secondary);
+  padding: 0 2px;
+}
+
+.pill.quiet:hover:not(:disabled) {
+  background: transparent;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--r-pill);
+  background: var(--surface-muted);
+  color: var(--ink-secondary);
+  font-size: var(--fs-12);
+  white-space: nowrap;
+}
+
+.badge.warn {
+  background: var(--attention-soft);
+  color: #775707;
+}
+
+.badge.error {
+  background: var(--danger-soft);
+  color: #9c2c21;
+}
+
+/* A26: the agent's own logo, monochrome in whatever ink its surroundings set.
+   One em square on the cap height of the line beside it, so it reads as the
+   same size as the name. An agent with no vector shows its first letter in the
+   same box. `docs/DESIGN.md` § "Agents". */
+.agent-logo {
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.125em;
+  flex: none;
+}
+
+span.agent-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  font-weight: 600;
+}
+
+/* Which agent a session runs. One quiet tint for every agent, no border, one
+   per row: the logo and the name are what tell them apart, never a colour per
+   vendor. */
+.agent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: var(--r-pill);
+  background: var(--surface-muted);
+  color: var(--ink-secondary);
+  font-size: var(--fs-11);
+  font-weight: 500;
+  white-space: nowrap;
+  flex: none;
+}
+
+.segmented {
+  display: flex;
+  padding: 3px;
+  gap: 3px;
+  background: var(--surface-muted);
+  border-radius: var(--r-pill);
+}
+
+.segmented > button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  height: 32px;
+  border: none;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--ink-secondary);
+  font-size: var(--fs-14);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.segmented > button[aria-pressed='true'] {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-1);
+}
+
+.segmented > button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.switch {
+  position: relative;
+  width: 40px;
+  height: 24px;
+  border-radius: var(--r-pill);
+  border: none;
+  background: var(--line-strong);
+  transition: background var(--dur) var(--ease);
+  flex: none;
+}
+
+.switch[aria-checked='true'] {
+  background: var(--ink);
+}
+
+.switch::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: var(--shadow-1);
+  transition: transform var(--dur) var(--ease);
+}
+
+.switch[aria-checked='true']::after {
+  transform: translateX(16px);
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--ink);
+  animation: rc-spin 0.7s linear infinite;
+  flex: none;
+}
+
+@keyframes rc-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.empty {
+  padding: var(--sp-10) var(--sp-4);
+  text-align: center;
+  color: var(--ink-secondary);
+  line-height: 1.5;
+}
+
+.empty strong {
+  display: block;
+  color: var(--ink);
+  font-weight: 500;
+  margin-bottom: var(--sp-1);
+}

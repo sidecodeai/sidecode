@@ -1,0 +1,785 @@
+{
+  "name": "codex-typecheck",
+  "description": "A Codex CLI session: plan turned into todos, a command-execution approval with the app-server v2 option ids, a steered message inside a running turn, then a queued message that starts the next turn.",
+  "device": {
+    "device_id": "c5efb1ec-2912-4619-90f7-93b5172fd712",
+    "name": "mac-studio-office",
+    "platform": "macos",
+    "hostname": "mac-studio.local",
+    "arch": "arm64",
+    "client_version": "0.1.0",
+    "online": true,
+    "last_seen": 1788944400000,
+    "created_at": 1788426000000,
+    "latency_ms": 18,
+    "agents": [
+      {
+        "agent": "codex",
+        "available": true,
+        "version": "0.153.4",
+        "path": "/opt/homebrew/bin/codex",
+        "models": [
+          {
+            "id": "gpt-5.4-codex",
+            "label": "GPT-5.4 Codex"
+          },
+          {
+            "id": "gpt-5.4-codex-mini",
+            "label": "GPT-5.4 Codex mini"
+          }
+        ],
+        "default_model": "gpt-5.4-codex",
+        "permission_modes": [
+          {
+            "id": "untrusted",
+            "label": "Ask for everything"
+          },
+          {
+            "id": "on-request",
+            "label": "Ask when needed"
+          },
+          {
+            "id": "never",
+            "label": "Never ask"
+          }
+        ],
+        "default_permission_mode": "on-request",
+        "efforts": [
+          {
+            "id": "low",
+            "label": "Low"
+          },
+          {
+            "id": "medium",
+            "label": "Medium"
+          },
+          {
+            "id": "high",
+            "label": "High"
+          }
+        ],
+        "default_effort": "medium",
+        "capabilities": [
+          "worktree",
+          "interrupt",
+          "queue",
+          "steer",
+          "attachments",
+          "effort",
+          "history",
+          "commands"
+        ]
+      }
+    ]
+  },
+  "session": {
+    "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+    "device_id": "c5efb1ec-2912-4619-90f7-93b5172fd712",
+    "agent": "codex",
+    "title": "Typecheck the web app",
+    "cwd": "/Users/me/dev/web",
+    "git": {
+      "branch": "feat/settings-drawer",
+      "dirty": true,
+      "ahead": 2,
+      "behind": 0,
+      "worktree": false
+    },
+    "state": "idle",
+    "state_detail": null,
+    "origin": "remote",
+    "control": "remote",
+    "model": "gpt-5.4-codex",
+    "permission_mode": "on-request",
+    "effort": "medium",
+    "created_at": 1788944940000,
+    "updated_at": 1788944999000,
+    "last_seq": 0,
+    "archived": false,
+    "turn": null,
+    "todos": null,
+    "usage": null,
+    "queued": 0
+  },
+  "session_final": {
+    "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+    "device_id": "c5efb1ec-2912-4619-90f7-93b5172fd712",
+    "agent": "codex",
+    "title": "Typecheck the web app",
+    "cwd": "/Users/me/dev/web",
+    "git": {
+      "branch": "feat/settings-drawer",
+      "dirty": true,
+      "ahead": 2,
+      "behind": 0,
+      "worktree": false
+    },
+    "state": "idle",
+    "state_detail": null,
+    "origin": "remote",
+    "control": "remote",
+    "model": "gpt-5.4-codex",
+    "permission_mode": "on-request",
+    "effort": "medium",
+    "created_at": 1788944940000,
+    "updated_at": 1788945049900,
+    "last_seq": 37,
+    "archived": false,
+    "turn": null,
+    "todos": {
+      "total": 3,
+      "done": 3
+    },
+    "usage": {
+      "input_tokens": 26800,
+      "output_tokens": 3640,
+      "total_tokens": 30440,
+      "context_used": 36900,
+      "context_window": 272000
+    },
+    "queued": 0
+  },
+  "frames": [
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 1,
+        "ts": 1788945000000,
+        "kind": "status",
+        "state": "idle"
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 2,
+        "ts": 1788945001000,
+        "kind": "user_message",
+        "block_id": "44913af8-2eb0-4c5c-af14-812734963563",
+        "text": "Typecheck the web app and fix whatever it reports.",
+        "source": "remote"
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 3,
+        "ts": 1788945001100,
+        "kind": "turn_started",
+        "turn_id": "192a2a3b-0e93-4d42-bf6c-9d395dda731e",
+        "trigger": "remote"
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 4,
+        "ts": 1788945001100,
+        "kind": "status",
+        "state": "running"
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 5,
+        "ts": 1788945002300,
+        "kind": "thinking",
+        "block_id": "cc93abde-890f-4962-82c2-4ef5e50fd67e",
+        "delta": "Run the typecheck first to see the ",
+        "done": false
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 6,
+        "ts": 1788945002500,
+        "kind": "thinking",
+        "first_seq": 5,
+        "block_id": "cc93abde-890f-4962-82c2-4ef5e50fd67e",
+        "delta": "actual errors before touching anything.",
+        "done": false
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 7,
+        "ts": 1788945002700,
+        "kind": "thinking",
+        "first_seq": 5,
+        "block_id": "cc93abde-890f-4962-82c2-4ef5e50fd67e",
+        "text": "Run the typecheck first to see the actual errors before touching anything.",
+        "done": true,
+        "duration_ms": 1600
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 8,
+        "ts": 1788945003000,
+        "kind": "assistant_text",
+        "block_id": "4db74cc3-a830-4108-b79e-7551e5b3a32b",
+        "delta": "Starting with the typecheck.",
+        "done": false
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 9,
+        "ts": 1788945003200,
+        "kind": "assistant_text",
+        "first_seq": 8,
+        "block_id": "4db74cc3-a830-4108-b79e-7551e5b3a32b",
+        "text": "Starting with the typecheck.",
+        "done": true
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 10,
+        "ts": 1788945003400,
+        "kind": "todos",
+        "items": [
+          {
+            "id": "p1",
+            "text": "Run npm run typecheck",
+            "status": "in_progress"
+          },
+          {
+            "id": "p2",
+            "text": "Fix reported type errors",
+            "status": "pending"
+          },
+          {
+            "id": "p3",
+            "text": "Re-run typecheck",
+            "status": "pending"
+          }
+        ]
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 11,
+        "ts": 1788945003800,
+        "kind": "approval",
+        "block_id": "395e65a8-79fd-40a8-8fbe-c5963c948e1e",
+        "request_id": "89dac789-f956-41ad-bab8-196b43d681c7",
+        "tool": "shell",
+        "tool_kind": "shell",
+        "title": "npm run typecheck",
+        "input": {
+          "command": [
+            "npm",
+            "run",
+            "typecheck"
+          ],
+          "cwd": "/Users/me/dev/web"
+        },
+        "options": [
+          {
+            "id": "accept",
+            "label": "Run once",
+            "style": "primary"
+          },
+          {
+            "id": "acceptForSession",
+            "label": "Always allow in this session",
+            "style": "secondary"
+          },
+          {
+            "id": "decline",
+            "label": "Decline",
+            "style": "danger"
+          },
+          {
+            "id": "cancel",
+            "label": "Cancel the turn",
+            "style": "danger"
+          }
+        ],
+        "status": "pending"
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 12,
+        "ts": 1788945003800,
+        "kind": "status",
+        "state": "needs_approval",
+        "detail": "Run npm run typecheck"
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 13,
+        "ts": 1788945012800,
+        "kind": "approval",
+        "first_seq": 11,
+        "block_id": "395e65a8-79fd-40a8-8fbe-c5963c948e1e",
+        "request_id": "89dac789-f956-41ad-bab8-196b43d681c7",
+        "tool": "shell",
+        "tool_kind": "shell",
+        "title": "npm run typecheck",
+        "input": {
+          "command": [
+            "npm",
+            "run",
+            "typecheck"
+          ],
+          "cwd": "/Users/me/dev/web"
+        },
+        "options": [
+          {
+            "id": "accept",
+            "label": "Run once",
+            "style": "primary"
+          },
+          {
+            "id": "acceptForSession",
+            "label": "Always allow in this session",
+            "style": "secondary"
+          },
+          {
+            "id": "decline",
+            "label": "Decline",
+            "style": "danger"
+          },
+          {
+            "id": "cancel",
+            "label": "Cancel the turn",
+            "style": "danger"
+          }
+        ],
+        "status": "resolved",
+        "decision": {
+          "option_id": "acceptForSession",
+          "by": "remote"
+        }
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 14,
+        "ts": 1788945012800,
+        "kind": "status",
+        "state": "running"
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 15,
+        "ts": 1788945013000,
+        "kind": "tool_call",
+        "block_id": "5e808f56-b645-41fa-bba5-9a49992f3d57",
+        "tool": "shell",
+        "tool_kind": "shell",
+        "title": "npm run typecheck",
+        "status": "running",
+        "input": {
+          "command": [
+            "npm",
+            "run",
+            "typecheck"
+          ],
+          "cwd": "/Users/me/dev/web"
+        },
+        "started_at": 1788945013000
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 16,
+        "ts": 1788945020800,
+        "kind": "tool_call",
+        "first_seq": 15,
+        "block_id": "5e808f56-b645-41fa-bba5-9a49992f3d57",
+        "tool": "shell",
+        "tool_kind": "shell",
+        "title": "npm run typecheck",
+        "status": "failed",
+        "input": {
+          "command": [
+            "npm",
+            "run",
+            "typecheck"
+          ],
+          "cwd": "/Users/me/dev/web"
+        },
+        "output": "src/state/sessions.ts(74,11): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.\n",
+        "summary": "1 error",
+        "started_at": 1788945013000,
+        "ended_at": 1788945020800,
+        "duration_ms": 7800
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 17,
+        "ts": 1788945023800,
+        "kind": "user_message",
+        "block_id": "faf38b44-3516-44e8-bf66-ddc93f3037f1",
+        "text": "While you are in there, also check the settings drawer.",
+        "source": "remote"
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 18,
+        "ts": 1788945023900,
+        "kind": "notice",
+        "level": "info",
+        "text": "Message steered into the running turn."
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 19,
+        "ts": 1788945024200,
+        "kind": "tool_call",
+        "block_id": "643de5d9-01ef-47ef-816e-432020d413a0",
+        "tool": "fuzzyFileSearch",
+        "tool_kind": "search",
+        "title": "settings drawer",
+        "status": "succeeded",
+        "input": {
+          "query": "settings drawer"
+        },
+        "output": "src/ui/SettingsDrawer.tsx\nsrc/ui/SettingsDrawer.test.tsx\n",
+        "summary": "2 files",
+        "started_at": 1788945024200,
+        "ended_at": 1788945024400,
+        "duration_ms": 180
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 20,
+        "ts": 1788945024600,
+        "kind": "tool_call",
+        "block_id": "ab5cb1a9-2833-4cfa-bec9-592efca4f6c3",
+        "tool": "apply_patch",
+        "tool_kind": "edit",
+        "title": "src/state/sessions.ts",
+        "status": "succeeded",
+        "input": {
+          "path": "src/state/sessions.ts"
+        },
+        "diff": {
+          "path": "src/state/sessions.ts",
+          "additions": 3,
+          "deletions": 1,
+          "patch": "--- a/src/state/sessions.ts\n+++ b/src/state/sessions.ts\n@@ -71,7 +71,9 @@\n-  return byDevice(session.device_id)\n+  if (!session.device_id) return undefined\n+  return byDevice(session.device_id)\n"
+        },
+        "summary": "+3 -1",
+        "started_at": 1788945024600,
+        "ended_at": 1788945024800,
+        "duration_ms": 120
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 21,
+        "ts": 1788945024800,
+        "kind": "todos",
+        "items": [
+          {
+            "id": "p1",
+            "text": "Run npm run typecheck",
+            "status": "completed"
+          },
+          {
+            "id": "p2",
+            "text": "Fix reported type errors",
+            "status": "completed"
+          },
+          {
+            "id": "p3",
+            "text": "Re-run typecheck",
+            "status": "in_progress"
+          }
+        ]
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 22,
+        "ts": 1788945028800,
+        "kind": "queue",
+        "pending": [
+          {
+            "id": "573d2674-debc-4db0-973c-16e8a7c2e9b1",
+            "text": "Then run the full test suite.",
+            "ts": 1788945028800
+          }
+        ]
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 23,
+        "ts": 1788945029800,
+        "kind": "assistant_text",
+        "block_id": "b71b22f8-acf9-47a6-8274-34d8d6c245e5",
+        "delta": "Narrowed the type at the call site ",
+        "done": false
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 24,
+        "ts": 1788945030000,
+        "kind": "assistant_text",
+        "first_seq": 23,
+        "block_id": "b71b22f8-acf9-47a6-8274-34d8d6c245e5",
+        "text": "Narrowed the type at the call site and re-ran the typecheck; the settings drawer had no errors.",
+        "done": true
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 25,
+        "ts": 1788945030100,
+        "kind": "meta",
+        "title": "Typecheck the web app"
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 26,
+        "ts": 1788945030300,
+        "kind": "turn_completed",
+        "turn_id": "192a2a3b-0e93-4d42-bf6c-9d395dda731e",
+        "stop_reason": "completed",
+        "duration_ms": 41200,
+        "usage": {
+          "input_tokens": 21400,
+          "output_tokens": 3120,
+          "total_tokens": 24520,
+          "context_used": 30100,
+          "context_window": 272000
+        }
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 27,
+        "ts": 1788945030300,
+        "kind": "status",
+        "state": "idle"
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 28,
+        "ts": 1788945030600,
+        "kind": "user_message",
+        "block_id": "d59a1793-df4f-48a5-92e6-4d8f5432240e",
+        "text": "Then run the full test suite.",
+        "source": "queue"
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 29,
+        "ts": 1788945030600,
+        "kind": "queue",
+        "pending": []
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 30,
+        "ts": 1788945030700,
+        "kind": "turn_started",
+        "turn_id": "e411cdfb-4811-467a-9057-20393b6abb21",
+        "trigger": "queue"
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 31,
+        "ts": 1788945030700,
+        "kind": "status",
+        "state": "running"
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 32,
+        "ts": 1788945031000,
+        "kind": "tool_call",
+        "block_id": "660933a2-6377-4675-aa00-ef4902e60065",
+        "tool": "shell",
+        "tool_kind": "shell",
+        "title": "npm test -- --run",
+        "status": "running",
+        "input": {
+          "command": [
+            "npm",
+            "test",
+            "--",
+            "--run"
+          ],
+          "cwd": "/Users/me/dev/web"
+        },
+        "started_at": 1788945031000
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 33,
+        "ts": 1788945049200,
+        "kind": "tool_call",
+        "first_seq": 32,
+        "block_id": "660933a2-6377-4675-aa00-ef4902e60065",
+        "tool": "shell",
+        "tool_kind": "shell",
+        "title": "npm test -- --run",
+        "status": "succeeded",
+        "input": {
+          "command": [
+            "npm",
+            "test",
+            "--",
+            "--run"
+          ],
+          "cwd": "/Users/me/dev/web"
+        },
+        "output": "Test Files  14 passed (14)\n     Tests  96 passed (96)\n  Duration  17.44s\n",
+        "summary": "96 passed",
+        "started_at": 1788945031000,
+        "ended_at": 1788945049200,
+        "duration_ms": 18200
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 34,
+        "ts": 1788945049300,
+        "kind": "todos",
+        "items": [
+          {
+            "id": "p1",
+            "text": "Run npm run typecheck",
+            "status": "completed"
+          },
+          {
+            "id": "p2",
+            "text": "Fix reported type errors",
+            "status": "completed"
+          },
+          {
+            "id": "p3",
+            "text": "Re-run typecheck",
+            "status": "completed"
+          }
+        ]
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 35,
+        "ts": 1788945049700,
+        "kind": "assistant_text",
+        "block_id": "8468c79a-f7e1-475e-9e6c-4bae4435c0ca",
+        "text": "Full suite is green: 96 tests across 14 files.",
+        "done": true
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 36,
+        "ts": 1788945049900,
+        "kind": "turn_completed",
+        "turn_id": "e411cdfb-4811-467a-9057-20393b6abb21",
+        "stop_reason": "completed",
+        "duration_ms": 19600,
+        "usage": {
+          "input_tokens": 26800,
+          "output_tokens": 3640,
+          "total_tokens": 30440,
+          "context_used": 36900,
+          "context_window": 272000
+        }
+      }
+    },
+    {
+      "type": "session.event",
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "event": {
+        "seq": 37,
+        "ts": 1788945049900,
+        "kind": "status",
+        "state": "idle"
+      }
+    }
+  ]
+}

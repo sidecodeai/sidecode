@@ -1,0 +1,47 @@
+{
+  "data": [
+    {
+      "cwd": "/repo",
+      "hooks": [
+        {
+          "key": "/home/dev/.codex/hooks.json:pre_tool_use:0:0",
+          "eventName": "preToolUse",
+          "handlerType": "command",
+          "command": "\"/bin/sh\" \"/home/dev/.codex/hooks/guard.sh\"",
+          "async": false,
+          "matcher": null,
+          "timeoutSec": 30,
+          "statusMessage": null,
+          "additionalContextLimit": null,
+          "sourcePath": "/home/dev/.codex/hooks.json",
+          "source": "user",
+          "pluginId": null,
+          "displayOrder": 0,
+          "enabled": true,
+          "isManaged": false,
+          "currentHash": "sha256:0839e32a",
+          "trustStatus": "trusted"
+        },
+        {
+          "key": "/repo/.codex/hooks.json:post_tool_use:1:0",
+          "eventName": "postToolUse",
+          "handlerType": "mcpTool",
+          "server": "lint",
+          "tool": "check",
+          "matcher": "edit.*",
+          "timeoutSec": 600,
+          "sourcePath": "/repo/.codex/hooks.json",
+          "source": "repo",
+          "pluginId": null,
+          "displayOrder": 1,
+          "enabled": false,
+          "isManaged": false,
+          "currentHash": "sha256:89ec96b1",
+          "trustStatus": "untrusted"
+        }
+      ],
+      "warnings": [],
+      "errors": []
+    }
+  ]
+}

@@ -1,0 +1,188 @@
+/* A33 — the page one device has: the machine, then a card per agent with how
+   it is signed in and what is left of its quota. `docs/DESIGN.md` § "A device
+   has a page" and § "Quota is a meter, drawn for accounts only". */
+
+.device-page-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-bottom: var(--sp-4);
+  margin-left: -4px;
+  font-size: var(--fs-13);
+  color: var(--ink-secondary);
+  text-decoration: none;
+}
+
+.device-page-back:hover {
+  color: var(--ink);
+}
+
+.device-page-head {
+  min-width: 0;
+}
+
+.device-page-title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+/* The machine's own facts, under the name: the hostname and the architecture
+   the row no longer carries. No client version and no build (A36). */
+.device-page-head .hint {
+  margin-top: 2px;
+  word-break: break-word;
+}
+
+/* A36: what the update is doing, or what it did wrong and the way to try
+   again. Drawn only then, in the same words the row uses. */
+.device-page-update {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  margin-top: var(--sp-2);
+  font-size: var(--fs-13);
+  color: var(--ink-secondary);
+}
+
+.device-page-update.failed {
+  color: var(--danger);
+}
+
+.device-page-none {
+  margin-top: var(--sp-2);
+}
+
+.device-page-agents {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.device-page-agent {
+  padding: var(--sp-4) var(--sp-5);
+}
+
+.device-page-agent-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-15);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.device-page-agent-version {
+  font-size: var(--fs-12);
+  font-weight: 400;
+  color: var(--ink-tertiary);
+}
+
+.device-page-accounts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+/* pi signs in per provider, so an agent can carry more than one of these. */
+.device-page-accounts > li + li {
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--hairline);
+}
+
+.device-page-signin,
+.device-page-note {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-13);
+  line-height: 1.5;
+  color: var(--ink-secondary);
+  word-break: break-word;
+}
+
+.device-page-note {
+  margin-top: var(--sp-2);
+  color: var(--ink-tertiary);
+}
+
+.device-page-meters {
+  list-style: none;
+  margin: var(--sp-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  max-width: 520px;
+}
+
+/* Name on the left, the figures on the right, the meter on its own line under
+   both, so nothing has to be clipped on a phone. */
+.device-page-meter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px var(--sp-2);
+  font-size: var(--fs-13);
+}
+
+.device-page-meter-name {
+  color: var(--ink);
+  min-width: 0;
+}
+
+.device-page-meter-value {
+  margin-left: auto;
+  font-size: var(--fs-12);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-secondary);
+}
+
+.device-page-meter-reset {
+  font-size: var(--fs-12);
+  color: var(--ink-tertiary);
+}
+
+.device-page-meter-reset::before {
+  content: '·';
+  margin-right: var(--sp-2);
+  color: var(--line-strong);
+}
+
+.device-page-meter-track {
+  flex-basis: 100%;
+  height: 4px;
+  margin-top: 6px;
+  border-radius: var(--r-pill);
+  background: var(--surface-muted);
+  overflow: hidden;
+}
+
+/* The fill is the ink colour until the window is nearly spent; no other colour
+   appears on the page. */
+.device-page-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ink);
+  transition: width var(--dur) var(--ease);
+}
+
+.device-page-meter-fill.warn {
+  background: var(--attention);
+}
+
+.device-page-meter-fill.danger {
+  background: var(--danger);
+}
+
+@media (max-width: 480px) {
+  .device-page-agent {
+    padding: var(--sp-4);
+  }
+}

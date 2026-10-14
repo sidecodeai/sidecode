@@ -1,0 +1,30 @@
+# The gateway image builds from the repository root, so the context has to exclude every local
+# artefact: without this file the context is close to a gigabyte of virtualenvs and node_modules.
+
+.git
+.gitignore
+.env
+*.md
+!gateway/README.md
+
+# Python
+**/.venv
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+client/dist
+gateway/dist
+
+# Node — the web stage runs its own npm ci and vite build
+**/node_modules
+web/dist
+**/*.tsbuildinfo
+
+# Not part of any image
+docs
+protocol
+.github
+**/.DS_Store

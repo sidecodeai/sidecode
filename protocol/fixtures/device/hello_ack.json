@@ -1,0 +1,9 @@
+{
+  "type": "hello_ack",
+  "device_id": "c5efb1ec-2912-4619-90f7-93b5172fd712",
+  "server_time": 1788944400000,
+  "config": {
+    "delta_flush_ms": 80,
+    "max_event_bytes": 65536
+  }
+}

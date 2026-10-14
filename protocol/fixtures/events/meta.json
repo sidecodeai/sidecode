@@ -1,0 +1,19 @@
+{
+  "seq": 88,
+  "ts": 1788945300000,
+  "kind": "meta",
+  "title": "Fix flaky auth refresh test",
+  "model": "claude-opus-4-6",
+  "permission_mode": "acceptEdits",
+  "effort": "high",
+  "cwd": "/Users/me/dev/gateway",
+  "git": {
+    "branch": "fix/refresh-window",
+    "dirty": true,
+    "ahead": 1,
+    "behind": 0,
+    "worktree": true
+  },
+  "control": "remote",
+  "agent_version": "2.1.266"
+}

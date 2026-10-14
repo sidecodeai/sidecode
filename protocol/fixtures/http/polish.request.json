@@ -1,0 +1,16 @@
+{
+  "text": "um so the the green dot the one that blinks it should stop blinking when when it's done and just stay green",
+  "model": "gpt-4.1-mini",
+  "strength": "strong",
+  "language": "en",
+  "context": [
+    {
+      "role": "user",
+      "text": "Make the session status dot pulse while a turn is running."
+    },
+    {
+      "role": "assistant",
+      "text": "Done: the dot now breathes while the state is running and stays solid green when idle."
+    }
+  ]
+}

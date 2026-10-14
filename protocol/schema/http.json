@@ -1,0 +1,430 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://remote-control.dev/schema/v1/http.json",
+  "title": "remote-control gateway HTTP bodies (protocol v1)",
+  "description": "Request and response bodies for /api/*. Browsers authenticate with the HttpOnly cookie rc_session; native apps send Authorization: Bearer <token>. Cookie-authenticated mutating requests must carry Origin == PUBLIC_ORIGIN.",
+  "$defs": {
+    "ErrorResponse": {
+      "description": "Any 4xx/5xx JSON body.",
+      "type": "object",
+      "properties": {
+        "ok": { "const": false },
+        "error": { "$ref": "objects.json#/$defs/Error" }
+      },
+      "required": ["ok", "error"]
+    },
+    "OkResponse": {
+      "description": "POST /api/logout, POST /api/password, DELETE /api/devices/{device_id}, DELETE /api/devices/pairing/{code}, DELETE /api/users/{username}, POST/DELETE /api/push/*.",
+      "type": "object",
+      "properties": { "ok": { "const": true } },
+      "required": ["ok"]
+    },
+
+    "HealthResponse": {
+      "description": "GET /api/health (unauthenticated).",
+      "type": "object",
+      "properties": {
+        "ok": { "const": true },
+        "version": { "type": "string", "minLength": 1 },
+        "protocol": { "const": 1 },
+        "apps": { "$ref": "objects.json#/$defs/AppsInfo" },
+        "auth": {
+          "type": "object",
+          "properties": {
+            "mode": { "const": "password" },
+            "registration_open": { "type": "boolean" }
+          },
+          "required": ["mode", "registration_open"]
+        }
+      },
+      "required": ["ok", "version", "protocol", "auth"]
+    },
+
+    "LoginRequest": {
+      "description": "POST /api/login (unauthenticated, rate limited to 5 per minute per IP). The username is lower-cased by the gateway before it is matched (A24).",
+      "type": "object",
+      "properties": {
+        "password": { "type": "string", "minLength": 1 },
+        "username": { "type": "string", "minLength": 1 }
+      },
+      "required": ["password", "username"]
+    },
+    "RegisterRequest": {
+      "description": "POST /api/register (unauthenticated, rate limited to 5 per minute per IP, refused with 403 while registration is closed). Makes a member account and signs it in (A24).",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string", "minLength": 3, "maxLength": 32 },
+        "password": { "type": "string", "minLength": 8, "maxLength": 128 }
+      },
+      "required": ["username", "password"]
+    },
+    "LoginResponse": {
+      "description": "200 from POST /api/login. Also sets the rc_session cookie (SameSite=Strict, Secure under https). The token value is the same one native apps send as a bearer.",
+      "type": "object",
+      "properties": {
+        "ok": { "const": true },
+        "token": { "type": "string", "minLength": 1 },
+        "exp": { "$ref": "objects.json#/$defs/Timestamp" },
+        "user": { "$ref": "objects.json#/$defs/User" }
+      },
+      "required": ["ok", "token", "exp", "user"]
+    },
+    "AuthSessionResponse": {
+      "description": "GET /api/session.",
+      "type": "object",
+      "properties": {
+        "ok": { "const": true },
+        "user": { "$ref": "objects.json#/$defs/User" },
+        "exp": { "$ref": "objects.json#/$defs/Timestamp" }
+      },
+      "required": ["ok", "user", "exp"]
+    },
+    "PasswordChangeRequest": {
+      "description": "POST /api/password: the caller's own password. 401 when current_password is wrong, 403 for admin (A24).",
+      "type": "object",
+      "properties": {
+        "current_password": { "type": "string", "minLength": 1 },
+        "new_password": { "type": "string", "minLength": 8, "maxLength": 128 }
+      },
+      "required": ["current_password", "new_password"]
+    },
+    "UserListResponse": {
+      "description": "GET /api/users (admin only, A24).",
+      "type": "object",
+      "properties": {
+        "users": { "type": "array", "items": { "$ref": "objects.json#/$defs/UserRecord" } },
+        "registration_open": { "type": "boolean" }
+      },
+      "required": ["users", "registration_open"]
+    },
+    "UserCreateRequest": {
+      "description": "POST /api/users (admin only, A24). role defaults to member.",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string", "minLength": 3, "maxLength": 32 },
+        "password": { "type": "string", "minLength": 8, "maxLength": 128 },
+        "role": { "$ref": "objects.json#/$defs/UserRole" }
+      },
+      "required": ["username", "password"]
+    },
+    "UserPatchRequest": {
+      "description": "PATCH /api/users/{username} (admin only, A24): any of the three; at least one.",
+      "type": "object",
+      "properties": {
+        "state": { "$ref": "objects.json#/$defs/UserState" },
+        "role": { "$ref": "objects.json#/$defs/UserRole" },
+        "password": { "type": "string", "minLength": 8, "maxLength": 128 }
+      },
+      "minProperties": 1
+    },
+    "UserResponse": {
+      "description": "POST /api/users and PATCH /api/users/{username} (A24).",
+      "type": "object",
+      "properties": { "user": { "$ref": "objects.json#/$defs/UserRecord" } },
+      "required": ["user"]
+    },
+    "RegistrationPatchRequest": {
+      "description": "PATCH /api/registration (admin only, A24).",
+      "type": "object",
+      "properties": { "open": { "type": "boolean" } },
+      "required": ["open"]
+    },
+    "RegistrationResponse": {
+      "description": "200 from PATCH /api/registration (A24).",
+      "type": "object",
+      "properties": { "open": { "type": "boolean" } },
+      "required": ["open"]
+    },
+    "PreferencesResponse": {
+      "description": "200 from GET and PATCH /api/preferences (A35).",
+      "type": "object",
+      "properties": { "preferences": { "$ref": "objects.json#/$defs/Preferences" } },
+      "required": ["preferences"]
+    },
+    "PreferencesPatchRequest": {
+      "description": "PATCH /api/preferences: every field optional, the ones present are set (A35, A41).",
+      "type": "object",
+      "properties": {
+        "resume_after_limit": { "type": "boolean" },
+        "language": { "type": "string", "enum": ["en", "zh-Hans"] },
+        "stt_language": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "polish_enabled": { "type": "boolean" },
+        "polish_model": { "type": "string", "maxLength": 128 },
+        "polish_strength": { "type": "string", "enum": ["moderate", "strong"] },
+        "timeline_detail": { "type": "string", "enum": ["simple", "detailed"] }
+      }
+    },
+    "ConfigResponse": {
+      "description": "GET /api/config.",
+      "type": "object",
+      "properties": {
+        "public_origin": { "type": "string", "minLength": 1 },
+        "stt": { "$ref": "app_frames.json#/$defs/SttInfo" },
+        "polish": { "$ref": "app_frames.json#/$defs/PolishInfo" },
+        "apps": { "$ref": "objects.json#/$defs/AppsInfo" },
+        "push": {
+          "type": "object",
+          "properties": {
+            "web_enabled": { "type": "boolean" },
+            "apns_enabled": { "type": "boolean" }
+          },
+          "required": ["web_enabled", "apns_enabled"]
+        },
+        "version": { "type": "string", "minLength": 1 },
+        "client": {
+          "description": "The rc-client wheel this gateway serves (A22).",
+          "type": "object",
+          "properties": {
+            "version": { "type": "string", "minLength": 1 },
+            "build": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "url": { "type": "string", "minLength": 1 }
+          },
+          "required": ["version", "build", "url"]
+        }
+      },
+      "required": ["public_origin", "stt", "push", "version", "client"]
+    },
+
+    "EnrollRequest": {
+      "description": "POST /api/devices/enroll (unauthenticated; the pairing code is the credential). 404 unknown or expired code, 409 already used.",
+      "type": "object",
+      "properties": {
+        "code": { "$ref": "objects.json#/$defs/PairingCode" },
+        "name": { "type": "string", "minLength": 1 },
+        "platform": { "$ref": "objects.json#/$defs/Platform" },
+        "hostname": { "type": "string" },
+        "arch": { "$ref": "objects.json#/$defs/Arch" },
+        "client_version": { "type": "string", "minLength": 1 },
+        "agents": { "type": "array", "items": { "$ref": "objects.json#/$defs/AgentInfo" } }
+      },
+      "required": ["code", "name", "platform", "hostname", "arch", "client_version"]
+    },
+    "EnrollResponse": {
+      "description": "200 from POST /api/devices/enroll. device_token is shown once and stored hashed.",
+      "type": "object",
+      "properties": {
+        "device_id": { "$ref": "objects.json#/$defs/Uuid" },
+        "device_token": { "type": "string", "minLength": 1 },
+        "gateway_ws_url": { "type": "string", "minLength": 1 }
+      },
+      "required": ["device_id", "device_token", "gateway_ws_url"]
+    },
+
+    "DeviceListResponse": {
+      "description": "GET /api/devices.",
+      "type": "object",
+      "properties": {
+        "devices": { "type": "array", "items": { "$ref": "objects.json#/$defs/Device" } }
+      },
+      "required": ["devices"]
+    },
+    "DevicePatchRequest": {
+      "description": "PATCH /api/devices/{device_id}.",
+      "type": "object",
+      "properties": { "name": { "type": "string", "minLength": 1 } },
+      "required": ["name"]
+    },
+    "DeviceResponse": {
+      "description": "200 from PATCH /api/devices/{device_id}.",
+      "type": "object",
+      "properties": { "device": { "$ref": "objects.json#/$defs/Device" } },
+      "required": ["device"]
+    },
+
+    "PairingResponse": {
+      "description": "POST /api/devices/pairing. Each install value is a full shell one-liner.",
+      "type": "object",
+      "properties": {
+        "code": { "$ref": "objects.json#/$defs/PairingCode" },
+        "expires_at": { "$ref": "objects.json#/$defs/Timestamp" },
+        "install": {
+          "type": "object",
+          "properties": {
+            "macos": { "type": "string", "minLength": 1 },
+            "linux": { "type": "string", "minLength": 1 }
+          },
+          "required": ["macos", "linux"]
+        }
+      },
+      "required": ["code", "expires_at", "install"]
+    },
+    "PairingRequestResponse": {
+      "description": "POST /api/pairing/requests, unauthenticated: a host asks to be claimed by scanning (A23).",
+      "type": "object",
+      "properties": {
+        "token": { "$ref": "objects.json#/$defs/PairingToken" },
+        "expires_at": { "$ref": "objects.json#/$defs/Timestamp" },
+        "claim_url": { "type": "string", "minLength": 1, "description": "What the QR code encodes: <public_origin>/pair#<token>." }
+      },
+      "required": ["token", "expires_at", "claim_url"]
+    },
+    "PairingRequestStatusResponse": {
+      "description": "GET /api/pairing/requests/{token}, unauthenticated long-poll (A23).",
+      "type": "object",
+      "oneOf": [
+        { "properties": { "status": { "const": "waiting" } }, "required": ["status"] },
+        {
+          "properties": {
+            "status": { "const": "claimed" },
+            "code": { "$ref": "objects.json#/$defs/PairingCode" },
+            "expires_at": { "$ref": "objects.json#/$defs/Timestamp" }
+          },
+          "required": ["status", "code", "expires_at"]
+        }
+      ]
+    },
+    "PairingClaimResponse": {
+      "description": "POST /api/pairing/requests/{token}/claim, authenticated: the code minted for the host, so the app can follow pairing.progress for it (A23).",
+      "type": "object",
+      "properties": {
+        "code": { "$ref": "objects.json#/$defs/PairingCode" },
+        "expires_at": { "$ref": "objects.json#/$defs/Timestamp" }
+      },
+      "required": ["code", "expires_at"]
+    },
+
+    "SessionListResponse": {
+      "description": "GET /api/sessions?device_id=&archived= . Gateway index; last known summaries.",
+      "type": "object",
+      "properties": {
+        "sessions": { "type": "array", "items": { "$ref": "objects.json#/$defs/Session" } }
+      },
+      "required": ["sessions"]
+    },
+
+    "SttTranscribeResponse": {
+      "description": "200 from POST /api/stt/transcribe (multipart: audio as wav|webm|m4a|mp3). The provider detects the language (A44): language is what it reported, or auto. 503 with error code \"unsupported\" when STT is not configured.",
+      "type": "object",
+      "properties": {
+        "text": { "type": "string" },
+        "language": { "type": "string", "minLength": 1 }
+      },
+      "required": ["text", "language"]
+    },
+
+    "PolishModelsResponse": {
+      "description": "200 from GET /api/polish/models: the configured provider's models (A29). 503 with error code \"unsupported\" when no polish model is configured.",
+      "type": "object",
+      "properties": {
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "label": { "type": "string", "minLength": 1 }
+            },
+            "required": ["id", "label"]
+          }
+        }
+      },
+      "required": ["models"]
+    },
+
+    "PolishRequest": {
+      "description": "POST /api/polish (A29): the dictated text, the model and strength the user chose, a language hint, and the recent conversation the app shows, oldest first.",
+      "type": "object",
+      "properties": {
+        "text": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "model": { "type": "string", "minLength": 1 },
+        "strength": { "enum": ["moderate", "strong"] },
+        "language": { "type": "string", "minLength": 1 },
+        "context": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "properties": {
+              "role": { "enum": ["user", "assistant"] },
+              "text": { "type": "string", "maxLength": 4000 }
+            },
+            "required": ["role", "text"]
+          }
+        }
+      },
+      "required": ["text", "model", "strength", "context"]
+    },
+
+    "PolishResponse": {
+      "description": "200 from POST /api/polish: the polished text and nothing else (A29).",
+      "type": "object",
+      "properties": {
+        "text": { "type": "string" }
+      },
+      "required": ["text"]
+    },
+
+    "VapidResponse": {
+      "description": "GET /api/push/web/vapid.",
+      "type": "object",
+      "properties": { "public_key": { "type": "string", "minLength": 1 } },
+      "required": ["public_key"]
+    },
+    "WebPushSubscribeRequest": {
+      "description": "POST /api/push/web/subscribe. `subscription` is the browser PushSubscription serialised with toJSON().",
+      "type": "object",
+      "properties": {
+        "subscription": {
+          "type": "object",
+          "properties": {
+            "endpoint": { "type": "string", "minLength": 1 },
+            "expirationTime": { "type": ["integer", "null"] },
+            "keys": {
+              "type": "object",
+              "properties": {
+                "p256dh": { "type": "string", "minLength": 1 },
+                "auth": { "type": "string", "minLength": 1 }
+              },
+              "required": ["p256dh", "auth"]
+            }
+          },
+          "required": ["endpoint", "keys"]
+        }
+      },
+      "required": ["subscription"]
+    },
+    "WebPushUnsubscribeRequest": {
+      "description": "DELETE /api/push/web/subscribe.",
+      "type": "object",
+      "properties": { "endpoint": { "type": "string", "minLength": 1 } },
+      "required": ["endpoint"]
+    },
+    "ApnsRegisterRequest": {
+      "description": "POST /api/push/apns/register.",
+      "type": "object",
+      "properties": {
+        "token": { "type": "string", "minLength": 1 },
+        "environment": { "enum": ["sandbox", "production"] },
+        "bundle_id": { "type": "string", "minLength": 1 }
+      },
+      "required": ["token", "environment", "bundle_id"]
+    },
+    "ApnsUnregisterRequest": {
+      "description": "DELETE /api/push/apns/register.",
+      "type": "object",
+      "properties": { "token": { "type": "string", "minLength": 1 } },
+      "required": ["token"]
+    },
+
+    "PushPayload": {
+      "description": "Carried by both Web Push JSON and APNs custom data. The visible notification text is generic; no prompt or tool output ever appears in a push.",
+      "type": "object",
+      "properties": {
+        "rc": {
+          "type": "object",
+          "properties": {
+            "v": { "const": 1 },
+            "kind": { "enum": ["needs_approval", "needs_input", "turn_completed", "error", "limit_reached", "resumed", "resume_dropped", "badge"] },
+            "device_id": { "$ref": "objects.json#/$defs/Uuid" },
+            "session_id": { "$ref": "objects.json#/$defs/Id" },
+            "device_name": { "type": "string", "minLength": 1 },
+            "title": { "type": "string" },
+            "badge": { "type": "integer", "minimum": 0 }
+          },
+          "required": ["v", "kind", "device_id", "session_id", "device_name", "title"]
+        }
+      },
+      "required": ["rc"]
+    }
+  }
+}

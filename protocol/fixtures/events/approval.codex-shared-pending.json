@@ -1,0 +1,43 @@
+{
+  "seq": 14,
+  "ts": 1788946246300,
+  "kind": "approval",
+  "block_id": "71fffefa-3f87-43c3-9293-e184da187744",
+  "request_id": "33bc8c3b-49a9-4894-94e1-836422c63bb7",
+  "tool": "shell",
+  "tool_kind": "shell",
+  "title": "npm run typecheck",
+  "input": {
+    "command": "/bin/zsh -lc 'npm run typecheck'",
+    "cwd": "/Users/me/dev/web",
+    "command_actions": [
+      {
+        "type": "unknown",
+        "command": "npm run typecheck"
+      }
+    ]
+  },
+  "options": [
+    {
+      "id": "allow",
+      "label": "Allow",
+      "style": "primary"
+    },
+    {
+      "id": "allow_session",
+      "label": "Allow for this session",
+      "style": "secondary"
+    },
+    {
+      "id": "allow_always",
+      "label": "Always allow commands like this",
+      "style": "secondary"
+    },
+    {
+      "id": "deny",
+      "label": "Deny",
+      "style": "danger"
+    }
+  ],
+  "status": "pending"
+}

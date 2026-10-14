@@ -1,0 +1,12 @@
+{
+  "seq": 40,
+  "ts": 1788947998000,
+  "kind": "turn_completed",
+  "turn_id": "b7e2a5c4-3f1d-4a8e-9c6b-0d2f4e8a1b37",
+  "stop_reason": "error",
+  "duration_ms": 1200,
+  "limit": {
+    "window_minutes": 300,
+    "resets_at": 1788966000000
+  }
+}

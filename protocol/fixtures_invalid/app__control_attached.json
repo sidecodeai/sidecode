@@ -1,0 +1,32 @@
+{
+  "type": "session.updated",
+  "session": {
+    "session_id": "35d05f69-e142-4c32-b6e4-141624bf0637",
+    "device_id": "c5efb1ec-2912-4619-90f7-93b5172fd712",
+    "agent": "claude",
+    "title": "Rework the pairing code generator",
+    "cwd": "/Users/me/dev/gateway",
+    "git": {
+      "branch": "fix/pairing-alphabet",
+      "dirty": true,
+      "ahead": 0,
+      "behind": 0,
+      "worktree": false
+    },
+    "state": "idle",
+    "state_detail": null,
+    "origin": "terminal",
+    "control": "attached",
+    "model": "claude-sonnet-4-5",
+    "permission_mode": "default",
+    "effort": "medium",
+    "created_at": 1788946080000,
+    "updated_at": 1788946119000,
+    "last_seq": 11,
+    "archived": false,
+    "turn": null,
+    "todos": null,
+    "usage": null,
+    "queued": 0
+  }
+}

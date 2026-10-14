@@ -1,0 +1,36 @@
+{
+  "type": "reply",
+  "id": "9ed320c0-44f6-4a52-a1ac-756b4dbb0a7c",
+  "ok": true,
+  "result": {
+    "path": "/Users/me/dev",
+    "parent": "/Users/me",
+    "entries": [
+      {
+        "name": "gateway",
+        "path": "/Users/me/dev/gateway",
+        "is_git": true
+      },
+      {
+        "name": "web",
+        "path": "/Users/me/dev/web",
+        "is_git": true
+      },
+      {
+        "name": "scratch",
+        "path": "/Users/me/dev/scratch",
+        "is_git": false
+      }
+    ],
+    "recent": [
+      {
+        "path": "/Users/me/dev/gateway",
+        "last_used": 1788943800000
+      },
+      {
+        "path": "/Users/me/dev/web",
+        "last_used": 1788937200000
+      }
+    ]
+  }
+}

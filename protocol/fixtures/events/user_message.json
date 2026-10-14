@@ -1,0 +1,15 @@
+{
+  "seq": 2,
+  "ts": 1788944401000,
+  "kind": "user_message",
+  "block_id": "78c122e5-9703-4501-bff4-e6e6d8a27efe",
+  "text": "Have a look at the screenshot and tell me what broke the layout.",
+  "attachments": [
+    {
+      "name": "settings-drawer.png",
+      "mime": "image/png",
+      "size": 284913
+    }
+  ],
+  "source": "remote"
+}

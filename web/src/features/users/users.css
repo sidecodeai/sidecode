@@ -1,0 +1,121 @@
+/*
+ * A24: the admin's accounts screen — one switch, then one row per account.
+ * Class names are global, so the rows are `account-*`: `.user-row` belongs to
+ * the chat's own message row, and a screen that borrowed it styled the other.
+ */
+
+.users {
+  max-width: 620px;
+}
+
+.users-registration {
+  padding: var(--sp-3) var(--sp-5) var(--sp-4);
+}
+
+.users-registration-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  min-height: 40px;
+  font-size: var(--fs-14);
+}
+
+.users-registration-caption {
+  margin-top: 2px;
+  font-size: var(--fs-12);
+  line-height: 1.5;
+  color: var(--ink-tertiary);
+}
+
+.users .form-error {
+  margin-top: var(--sp-4);
+}
+
+.account-list {
+  list-style: none;
+  margin: var(--sp-4) 0 0;
+  padding: 0;
+}
+
+.account-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  min-height: var(--row-h);
+  padding: 0 var(--sp-5);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.account-row:hover {
+  background: var(--hover);
+}
+
+/* A disabled account stays legible and stops looking current. */
+.account-row.disabled .account-name {
+  color: var(--ink-secondary);
+}
+
+.account-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.account-name {
+  font-size: var(--fs-15);
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+}
+
+.account-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--sp-2);
+  margin-top: 1px;
+  font-size: var(--fs-12);
+  line-height: 1.45;
+  color: var(--ink-secondary);
+}
+
+.account-meta > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-meta > span + span {
+  color: var(--ink-tertiary);
+}
+
+.account-meta > span + span::before {
+  content: '·';
+  margin-right: var(--sp-2);
+  color: var(--line-strong);
+}
+
+.account-menu-trigger {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  justify-content: center;
+  color: var(--ink-tertiary);
+  flex: none;
+}
+
+.account-row:hover .account-menu-trigger,
+.account-menu-trigger:hover,
+.account-menu-trigger[aria-expanded='true'] {
+  color: var(--ink);
+}
+
+@media (max-width: 640px) {
+  .users-registration {
+    padding-inline: var(--sp-4);
+  }
+
+  .account-row {
+    padding-inline: var(--sp-4);
+  }
+}

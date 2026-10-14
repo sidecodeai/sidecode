@@ -1,0 +1,436 @@
+.device-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Rows are parted by their own height, never by a rule between them. It is a
+   floor rather than a fixed height: an update notice (A36) and the agent chips
+   both take room on a narrow screen, and a clipped row would be worse than a
+   tall one. Nothing moves at the widths where they do not wrap. */
+.device-row {
+  /* What the glyph takes at the leading edge: its own size, and what the agents
+     on a narrow screen indent past to line up with the name. */
+  --device-glyph: 20px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  min-height: var(--row-h);
+  padding: 0 var(--sp-5);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.device-row:hover {
+  background: var(--hover);
+}
+
+/* One computer glyph per device, the same for every platform, in the secondary
+   ink and sized to the title. `docs/DESIGN.md` § "The device row". */
+/* The laptop is drawn in the ink, as an outline: no fill, round caps and joins
+   (lucide's defaults), so it reads as a line drawing beside the name. */
+.device-glyph {
+  flex: none;
+  width: var(--device-glyph);
+  height: var(--device-glyph);
+  color: var(--ink);
+}
+
+/* A38: the whole row opens a terminal, and the menu still opens the menu. The
+   link's own box is the name, so that is its accessible name; the covering box
+   is drawn over the row and the menu is lifted above it. A device with no shell
+   to give is the same box as a button, so nothing moves between the two. */
+.device-open {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  color: inherit;
+  text-decoration: none;
+}
+
+.device-open::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+}
+
+.device-row > .popover-root {
+  position: relative;
+  z-index: 1;
+}
+
+.device-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.device-name {
+  font-size: var(--fs-15);
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--sp-2);
+  margin-top: 1px;
+  font-size: var(--fs-12);
+  line-height: 1.45;
+  color: var(--ink-secondary);
+}
+
+.device-meta > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The dot left the name to sit with the word it belongs to. */
+.device-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.device-reach {
+  color: var(--ink-tertiary);
+}
+
+/* The two halves of the meta line share a row on a wide screen only. */
+.device-reach::before {
+  content: '·';
+  margin-right: var(--sp-2);
+  color: var(--line-strong);
+}
+
+/* A36: the row's third line, drawn only while an update runs or has failed.
+   Nothing precedes it, so it needs no separator; the row's min-height is a
+   floor, so a row without it keeps the height of every other row. */
+.device-client {
+  margin-top: 1px;
+  font-size: var(--fs-12);
+  line-height: 1.45;
+  color: var(--ink-secondary);
+}
+
+.device-client.failed {
+  color: var(--danger);
+}
+
+/* A38: why the tap opened nothing. It says its piece and goes; the row keeps
+   its height because the notice takes the line an update notice would. */
+.device-note {
+  margin-top: 1px;
+  font-size: var(--fs-12);
+  line-height: 1.45;
+  color: var(--attention);
+}
+
+/* The agents a device found, as their logos alone and evenly spaced. The logo
+   is one em square, so the font size is what sizes it. */
+.device-agents {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-3);
+  font-size: var(--fs-16);
+  color: var(--ink-secondary);
+}
+
+.device-agent {
+  display: inline-flex;
+}
+
+.device-menu-trigger {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  justify-content: center;
+  color: var(--ink-tertiary);
+  flex: none;
+}
+
+.device-row:hover .device-menu-trigger,
+.device-menu-trigger:hover,
+.device-menu-trigger[aria-expanded='true'] {
+  color: var(--ink);
+}
+
+.menu-item.danger-text .menu-label {
+  color: var(--danger);
+}
+
+/* --- add device modal ------------------------------------------------- */
+
+.pairing-intro {
+  margin-bottom: var(--sp-4);
+  max-width: 46ch;
+}
+
+.pair-command {
+  margin-top: var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--surface-sunken);
+}
+
+.pair-command-top {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+}
+
+.pair-command-top code {
+  flex: 1;
+  font-size: var(--fs-13);
+  line-height: 1.7;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.pair-command-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 10px var(--sp-4);
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  font-size: var(--fs-12);
+}
+
+.pair-code {
+  font-size: var(--fs-12);
+  letter-spacing: 0.02em;
+}
+
+.pair-sep {
+  width: 1px;
+  height: 12px;
+  background: var(--line-strong);
+}
+
+.pair-command-foot .hint {
+  font-size: var(--fs-12);
+}
+
+.link-btn {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  color: var(--ink);
+}
+
+.pair-steps {
+  margin-top: var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: var(--sp-4);
+  background: var(--surface);
+}
+
+.pair-steps-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.pair-steps-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-weight: 500;
+}
+
+.pair-steps-head .hint {
+  font-size: var(--fs-12);
+}
+
+.pair-progress {
+  position: relative;
+  height: 1px;
+  margin: var(--sp-3) 0 var(--sp-4);
+  background: var(--line);
+}
+
+.pair-progress > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--ink);
+  transition: width 400ms var(--ease);
+}
+
+.pair-step-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.pair-step-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  color: var(--ink-tertiary);
+  font-size: var(--fs-14);
+}
+
+.pair-step-list li.active {
+  color: var(--ink-secondary);
+}
+
+.pair-step-list li.done {
+  color: var(--ink);
+}
+
+.pair-step-mark {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  flex: none;
+}
+
+.pair-step-list li.done .pair-step-mark {
+  background: var(--ink);
+  border-color: var(--ink);
+}
+
+.pair-step-list li.active .pair-step-mark {
+  border-color: var(--ink-secondary);
+  animation: rc-pulse 1.6s var(--ease) infinite;
+}
+
+.pair-agents {
+  font-size: var(--fs-12);
+  color: var(--ink-secondary);
+}
+
+/* A23: the second way in, under the code flow rather than beside it. */
+.pair-scan {
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--line);
+}
+
+.pair-scan-title {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-13);
+  font-weight: 600;
+}
+
+.pair-scan-command {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-sunken);
+}
+
+.pair-scan-command code {
+  flex: 1;
+  font-size: var(--fs-13);
+  line-height: 1.7;
+  word-break: break-all;
+}
+
+.pair-scan .hint {
+  margin-top: var(--sp-3);
+  font-size: var(--fs-13);
+  max-width: 52ch;
+}
+
+/* The `/pair` page: the same steps, on a page instead of in a dialog. */
+.pair-claim {
+  padding: var(--sp-5);
+}
+
+.pair-claim .pair-steps {
+  margin-top: var(--sp-3);
+}
+
+.pair-manual {
+  margin-top: var(--sp-4);
+  font-size: var(--fs-13);
+  color: var(--ink-secondary);
+}
+
+.pair-manual-steps {
+  margin: var(--sp-3) 0 0;
+  padding-left: var(--sp-5);
+  font-size: var(--fs-13);
+  color: var(--ink-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pair-manual-steps code {
+  font-size: var(--fs-12);
+  background: var(--surface-muted);
+  padding: 2px 6px;
+  border-radius: 6px;
+  word-break: break-all;
+}
+
+@media (max-width: 760px) {
+  /* The agent chips take a line of their own, so the fixed height grows. */
+  .device-row {
+    flex-wrap: wrap;
+    align-content: center;
+    gap: var(--sp-2) var(--sp-3);
+    min-height: var(--row-h-stacked);
+    padding: var(--sp-3) var(--sp-4);
+  }
+
+  .device-main {
+    order: 1;
+  }
+
+  .device-reach::before {
+    display: none;
+  }
+
+  .device-row > .popover-root {
+    order: 2;
+    margin-top: -2px;
+  }
+
+  /* A line of their own, indented past the glyph so they line up with the name. */
+  .device-agents {
+    order: 3;
+    flex-basis: 100%;
+    justify-content: flex-start;
+    padding-left: calc(var(--device-glyph) + var(--sp-3));
+  }
+}
+
+/* On a phone the status line and the session count part as well. */
+@media (max-width: 480px) {
+  .device-row {
+    min-height: var(--row-h-stacked-tall);
+  }
+}

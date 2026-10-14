@@ -1,0 +1,1989 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://remote-control.dev/schema/v1/app_frames.json",
+  "title": "remote-control app <-> gateway frames (protocol v1)",
+  "description": "Every JSON text frame on WS /ws/app, in both directions. Discriminated by `type`. additionalProperties stays open: unknown fields must be ignored.",
+  "$ref": "#/$defs/AppFrame",
+  "$defs": {
+    "AppFrame": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/Hello"
+        },
+        {
+          "$ref": "#/$defs/DeviceUpdated"
+        },
+        {
+          "$ref": "#/$defs/DeviceRemoved"
+        },
+        {
+          "$ref": "#/$defs/SessionUpdated"
+        },
+        {
+          "$ref": "#/$defs/SessionRemoved"
+        },
+        {
+          "$ref": "#/$defs/SessionEvent"
+        },
+        {
+          "$ref": "#/$defs/PairingProgress"
+        },
+        {
+          "$ref": "#/$defs/PreferencesUpdated"
+        },
+        {
+          "$ref": "#/$defs/TerminalOutput"
+        },
+        {
+          "$ref": "#/$defs/TerminalExited"
+        },
+        {
+          "$ref": "#/$defs/Ping"
+        },
+        {
+          "$ref": "#/$defs/Pong"
+        },
+        {
+          "$ref": "#/$defs/Reply"
+        },
+        {
+          "$ref": "#/$defs/SessionSubscribe"
+        },
+        {
+          "$ref": "#/$defs/SessionUnsubscribe"
+        },
+        {
+          "$ref": "#/$defs/SessionSeen"
+        },
+        {
+          "$ref": "#/$defs/SessionCreate"
+        },
+        {
+          "$ref": "#/$defs/SessionSend"
+        },
+        {
+          "$ref": "#/$defs/SessionStop"
+        },
+        {
+          "$ref": "#/$defs/SessionApprove"
+        },
+        {
+          "$ref": "#/$defs/SessionAnswer"
+        },
+        {
+          "$ref": "#/$defs/SessionSet"
+        },
+        {
+          "$ref": "#/$defs/SessionHistory"
+        },
+        {
+          "$ref": "#/$defs/SessionBlock"
+        },
+        {
+          "$ref": "#/$defs/SessionCommands"
+        },
+        {
+          "$ref": "#/$defs/SessionCommand"
+        },
+        {
+          "$ref": "#/$defs/SessionQueueRemove"
+        },
+        {
+          "$ref": "#/$defs/SessionResumeSet"
+        },
+        {
+          "$ref": "#/$defs/SessionResumeCancel"
+        },
+        {
+          "$ref": "#/$defs/SessionTakeover"
+        },
+        {
+          "$ref": "#/$defs/SessionArchive"
+        },
+        {
+          "$ref": "#/$defs/SessionDelete"
+        },
+        {
+          "$ref": "#/$defs/DeviceDirs"
+        },
+        {
+          "$ref": "#/$defs/DeviceGit"
+        },
+        {
+          "$ref": "#/$defs/DeviceMkdir"
+        },
+        {
+          "$ref": "#/$defs/TerminalOpen"
+        },
+        {
+          "$ref": "#/$defs/TerminalInput"
+        },
+        {
+          "$ref": "#/$defs/TerminalResize"
+        },
+        {
+          "$ref": "#/$defs/TerminalAttach"
+        },
+        {
+          "$ref": "#/$defs/TerminalClose"
+        },
+        {
+          "$ref": "#/$defs/DeviceAgents"
+        },
+        {
+          "$ref": "#/$defs/DeviceUpdate"
+        }
+      ]
+    },
+    "ForwardableRequest": {
+      "description": "The app requests the gateway forwards to the owning device unchanged, except that it adds device_id when the request is addressed by session_id and stamps `from`.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SessionCreate"
+        },
+        {
+          "$ref": "#/$defs/SessionSend"
+        },
+        {
+          "$ref": "#/$defs/SessionStop"
+        },
+        {
+          "$ref": "#/$defs/SessionApprove"
+        },
+        {
+          "$ref": "#/$defs/SessionAnswer"
+        },
+        {
+          "$ref": "#/$defs/SessionSet"
+        },
+        {
+          "$ref": "#/$defs/SessionHistory"
+        },
+        {
+          "$ref": "#/$defs/SessionBlock"
+        },
+        {
+          "$ref": "#/$defs/SessionCommands"
+        },
+        {
+          "$ref": "#/$defs/SessionCommand"
+        },
+        {
+          "$ref": "#/$defs/SessionQueueRemove"
+        },
+        {
+          "$ref": "#/$defs/SessionResumeSet"
+        },
+        {
+          "$ref": "#/$defs/SessionResumeCancel"
+        },
+        {
+          "$ref": "#/$defs/SessionTakeover"
+        },
+        {
+          "$ref": "#/$defs/SessionArchive"
+        },
+        {
+          "$ref": "#/$defs/SessionDelete"
+        },
+        {
+          "$ref": "#/$defs/DeviceDirs"
+        },
+        {
+          "$ref": "#/$defs/DeviceGit"
+        },
+        {
+          "$ref": "#/$defs/DeviceMkdir"
+        },
+        {
+          "$ref": "#/$defs/TerminalOpen"
+        },
+        {
+          "$ref": "#/$defs/TerminalInput"
+        },
+        {
+          "$ref": "#/$defs/TerminalResize"
+        },
+        {
+          "$ref": "#/$defs/TerminalAttach"
+        },
+        {
+          "$ref": "#/$defs/TerminalClose"
+        },
+        {
+          "$ref": "#/$defs/TerminalDetach"
+        },
+        {
+          "$ref": "#/$defs/DeviceAgents"
+        },
+        {
+          "$ref": "#/$defs/DeviceUpdate"
+        }
+      ]
+    },
+    "RequestBase": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "id": {
+          "description": "Set by the requester and echoed in the reply.",
+          "$ref": "objects.json#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "type",
+        "id"
+      ]
+    },
+    "Hello": {
+      "description": "Gateway -> app, first frame after connect.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "hello"
+        },
+        "protocol": {
+          "const": 1
+        },
+        "gateway_version": {
+          "type": "string"
+        },
+        "user": {
+          "$ref": "objects.json#/$defs/User"
+        },
+        "devices": {
+          "type": "array",
+          "items": {
+            "$ref": "objects.json#/$defs/Device"
+          }
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "objects.json#/$defs/Session"
+          }
+        },
+        "stt": {
+          "$ref": "#/$defs/SttInfo"
+        },
+        "polish": {
+          "$ref": "#/$defs/PolishInfo"
+        },
+        "apps": {
+          "$ref": "objects.json#/$defs/AppsInfo"
+        },
+        "preferences": {
+          "description": "The account's preferences; absent on a gateway older than A35.",
+          "$ref": "objects.json#/$defs/Preferences"
+        },
+        "server_time": {
+          "$ref": "objects.json#/$defs/Timestamp"
+        }
+      },
+      "required": [
+        "type",
+        "protocol",
+        "gateway_version",
+        "user",
+        "devices",
+        "sessions",
+        "stt",
+        "server_time"
+      ]
+    },
+    "PolishInfo": {
+      "description": "Whether the gateway can polish dictation through an operator-configured model (A29).",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "additionalProperties": false
+    },
+    "SttInfo": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "languages": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "enabled",
+        "languages"
+      ]
+    },
+    "DeviceUpdated": {
+      "description": "Gateway -> app.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "device.updated"
+        },
+        "device": {
+          "$ref": "objects.json#/$defs/Device"
+        }
+      },
+      "required": [
+        "type",
+        "device"
+      ]
+    },
+    "DeviceRemoved": {
+      "description": "Gateway -> app.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "device.removed"
+        },
+        "device_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "type",
+        "device_id"
+      ]
+    },
+    "SessionUpdated": {
+      "description": "Gateway -> app.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "session.updated"
+        },
+        "session": {
+          "$ref": "objects.json#/$defs/Session"
+        }
+      },
+      "required": [
+        "type",
+        "session"
+      ]
+    },
+    "SessionRemoved": {
+      "description": "Gateway -> app. `device_id` is stamped by the gateway (amendment A5).",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "session.removed"
+        },
+        "session_id": {
+          "$ref": "objects.json#/$defs/Id"
+        },
+        "device_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "type",
+        "session_id",
+        "device_id"
+      ]
+    },
+    "SessionEvent": {
+      "description": "Gateway -> app, only for sessions this connection subscribed to. The gateway stamps `device_id` (amendment A5); devices never send it. `session_id` stays the primary key.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "session.event"
+        },
+        "session_id": {
+          "$ref": "objects.json#/$defs/Id"
+        },
+        "event": {
+          "$ref": "events.json#/$defs/Event"
+        },
+        "device_id": {
+          "description": "Added by the gateway. Informational and for routing only.",
+          "$ref": "objects.json#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "type",
+        "session_id",
+        "event"
+      ]
+    },
+    "PairingProgress": {
+      "description": "Gateway -> app, while a pairing code is outstanding.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "pairing.progress"
+        },
+        "code": {
+          "$ref": "objects.json#/$defs/PairingCode"
+        },
+        "step": {
+          "enum": [
+            "waiting",
+            "enrolled",
+            "online",
+            "agents"
+          ]
+        },
+        "device": {
+          "$ref": "objects.json#/$defs/Device"
+        }
+      },
+      "required": [
+        "type",
+        "code",
+        "step"
+      ]
+    },
+    "Ping": {
+      "description": "Gateway -> app every 25 s.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "ping"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "Pong": {
+      "description": "App -> gateway, answer to ping.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "pong"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "ReplyBase": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "reply"
+        },
+        "id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "ok": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "ok"
+      ]
+    },
+    "ReplyOk": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReplyBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "result": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    },
+    "ReplyError": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReplyBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "ok": {
+          "const": false
+        },
+        "error": {
+          "$ref": "objects.json#/$defs/Error"
+        }
+      },
+      "required": [
+        "error"
+      ]
+    },
+    "Reply": {
+      "description": "Gateway -> app. `result` is typed per request in the Reply* defs below.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ReplyOk"
+        },
+        {
+          "$ref": "#/$defs/ReplyError"
+        }
+      ]
+    },
+    "SessionSubscribe": {
+      "description": "App -> gateway, handled by the gateway. Subscribing again replaces the cursor.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "session.subscribe"
+        },
+        "session_id": {
+          "$ref": "objects.json#/$defs/Id"
+        },
+        "since_seq": {
+          "$ref": "objects.json#/$defs/Seq"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "session_id"
+      ]
+    },
+    "SessionUnsubscribe": {
+      "description": "App -> gateway, handled by the gateway. No reply.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "session.unsubscribe"
+        },
+        "session_id": {
+          "$ref": "objects.json#/$defs/Id"
+        }
+      },
+      "required": [
+        "type",
+        "session_id"
+      ]
+    },
+    "SessionCreate": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "session.create"
+        },
+        "device_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "agent": {
+          "$ref": "objects.json#/$defs/AgentId"
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string"
+        },
+        "permission_mode": {
+          "type": "string"
+        },
+        "effort": {
+          "type": "string"
+        },
+        "worktree": {
+          "type": "boolean"
+        },
+        "first_message": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "speed": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A speed tier from AgentInfo.speeds, or null for the standard speed (A21)."
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "device_id",
+        "agent",
+        "cwd"
+      ]
+    },
+    "SessionSend": {
+      "description": "Limits: text <= 64 KiB; at most 8 attachments, each <= 6 MiB decoded. `auto` sends now when idle, otherwise steers (capability steer) or queues. `interrupt` stops the current turn first.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "session.send"
+        },
+        "session_id": {
+          "$ref": "objects.json#/$defs/Id"
+        },
+        "text": {
+          "type": "string"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "$ref": "objects.json#/$defs/AttachmentUpload"
+          },
+          "maxItems": 8
+        },
+        "mode": {
+          "enum": [
+            "auto",
+            "queue",
+            "interrupt"
+          ]
+        },
+        "queue_ts": {
+          "description": "A43: for a message taken out of the queue to be edited, the ts that queue entry had. When the message is queued the device holds it under that ts, in front of every entry with a later one.",
+          "$ref": "objects.json#/$defs/Timestamp"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "session_id",
+        "text",
+        "mode"
+      ]
+    },
+    "SessionStop": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "session.stop"
+        },
+        "session_id": {
+          "$ref": "objects.json#/$defs/Id"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "session_id"
+      ]
+    },
+    "SessionApprove": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "session.approve"
+        },
+        "session_id": {
+          "$ref": "objects.json#/$defs/Id"
+        },
+        "request_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "option_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "session_id",
+        "request_id",
+        "option_id"
+      ]
+    },
+    "SessionAnswer": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "session.answer"
+        },
+        "session_id": {
+          "$ref": "objects.json#/$defs/Id"
+        },
+        "request_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "answers": {
+          "$ref": "events.json#/$defs/Answers"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "session_id",
+        "request_id",
+        "answers"
+      ]
+    },
+    "SessionSet": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "session.set"
+        },
+        "session_id": {
+          "$ref": "objects.json#/$defs/Id"
+        },
+        "model": {
+          "type": "string"
+        },
+        "permission_mode": {
+          "type": "string"
+        },
+        "effort": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "speed": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A speed tier from AgentInfo.speeds, or null for the standard speed (A21)."
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "session_id"
+      ]
+    },
+    "SessionHistory": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        },
+        {
+          "description": "before_seq and after_seq are mutually exclusive.",
+          "not": {
+            "required": [
+              "before_seq",
+              "after_seq"
+            ]
+          }
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "session.history"
+        },
+        "session_id": {
+          "$ref": "objects.json#/$defs/Id"
+        },
+        "before_seq": {
+          "$ref": "objects.json#/$defs/Seq"
+        },
+        "after_seq": {
+          "description": "Return stored events with seq greater than this, ascending.",
+          "$ref": "objects.json#/$defs/Seq"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 200
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "session_id"
+      ],
+      "description": "Page a session's stored history. `before_seq` walks backwards from the newest event; `after_seq` walks forwards and is what the gateway uses to backfill its replay buffer after a device link outage (amendment A9). The two cursors are mutually exclusive."
+    },
+    "SessionBlock": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "session.block"
+        },
+        "session_id": {
+          "$ref": "objects.json#/$defs/Id"
+        },
+        "block_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "session_id",
+        "block_id"
+      ]
+    },
+    "SessionCommands": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "description": "Ask what slash commands the session offers right now (A27). Needs capability `commands` on the session's agent.",
+      "properties": {
+        "type": {
+          "const": "session.commands"
+        },
+        "session_id": {
+          "$ref": "objects.json#/$defs/Id"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "session_id"
+      ]
+    },
+    "SessionCommand": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "description": "Run one slash command on an idle session (A27). The device echoes it as a `user_message` under this request's `id` and reports the outcome as events.",
+      "properties": {
+        "type": {
+          "const": "session.command"
+        },
+        "session_id": {
+          "$ref": "objects.json#/$defs/Id"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_:.-]*$"
+        },
+        "argument": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "session_id",
+        "name"
+      ]
+    },
+    "SessionQueueRemove": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "session.queue_remove"
+        },
+        "session_id": {
+          "$ref": "objects.json#/$defs/Id"
+        },
+        "queued_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "session_id",
+        "queued_id"
+      ]
+    },
+    "SessionTakeover": {
+      "description": "Only for control == \"terminal\" sessions; requires capability takeover.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "session.takeover"
+        },
+        "session_id": {
+          "$ref": "objects.json#/$defs/Id"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "session_id"
+      ]
+    },
+    "SessionArchive": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "session.archive"
+        },
+        "session_id": {
+          "$ref": "objects.json#/$defs/Id"
+        },
+        "archived": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "session_id",
+        "archived"
+      ]
+    },
+    "SessionDelete": {
+      "description": "Removes the session from the device registry. Agent transcripts are not deleted.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "session.delete"
+        },
+        "session_id": {
+          "$ref": "objects.json#/$defs/Id"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "session_id"
+      ]
+    },
+    "DeviceDirs": {
+      "description": "Omit path for the home directory. Directories only, hidden entries excluded.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "device.dirs"
+        },
+        "device_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "device_id"
+      ]
+    },
+    "DeviceGit": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "device.git"
+        },
+        "device_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "device_id",
+        "path"
+      ]
+    },
+    "DeviceAgents": {
+      "description": "Re-detect installed agents on the device.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "device.agents"
+        },
+        "device_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "device_id"
+      ]
+    },
+    "ResultSession": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "$ref": "objects.json#/$defs/Session"
+        }
+      },
+      "required": [
+        "session"
+      ]
+    },
+    "ResultEmpty": {
+      "type": "object"
+    },
+    "ResultSessionSubscribe": {
+      "description": "`events` are the buffered events with seq > since_seq (empty when since_seq was omitted). resync true means the replay buffer no longer covers since_seq. `queue` is the latest queue event payload the gateway saw for this session (amendment A6), absent when it saw none.",
+      "type": "object",
+      "properties": {
+        "session": {
+          "$ref": "objects.json#/$defs/Session"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "events.json#/$defs/Event"
+          }
+        },
+        "resync": {
+          "type": "boolean"
+        },
+        "queue": {
+          "type": "object",
+          "properties": {
+            "pending": {
+              "type": "array",
+              "items": {
+                "$ref": "events.json#/$defs/QueuedMessage"
+              }
+            }
+          },
+          "required": [
+            "pending"
+          ]
+        }
+      },
+      "required": [
+        "session",
+        "events",
+        "resync"
+      ]
+    },
+    "ResultSessionSend": {
+      "type": "object",
+      "properties": {
+        "accepted": {
+          "enum": [
+            "sent",
+            "queued",
+            "steered"
+          ]
+        },
+        "queued_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "accepted"
+      ]
+    },
+    "ResultSessionHistory": {
+      "description": "Final events only, ascending by seq, ending just before before_seq.",
+      "type": "object",
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "events.json#/$defs/Event"
+          }
+        },
+        "has_more": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "events",
+        "has_more"
+      ]
+    },
+    "ResultSessionBlock": {
+      "description": "The full, untruncated latest event for that block, at most 1 MiB.",
+      "type": "object",
+      "properties": {
+        "event": {
+          "$ref": "events.json#/$defs/Event"
+        }
+      },
+      "required": [
+        "event"
+      ]
+    },
+    "ResultDeviceDirs": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "is_git": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "name",
+              "path",
+              "is_git"
+            ]
+          }
+        },
+        "recent": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "last_used": {
+                "$ref": "objects.json#/$defs/Timestamp"
+              }
+            },
+            "required": [
+              "path",
+              "last_used"
+            ]
+          }
+        }
+      },
+      "required": [
+        "path",
+        "parent",
+        "entries",
+        "recent"
+      ]
+    },
+    "ResultDeviceGit": {
+      "type": "object",
+      "properties": {
+        "is_repo": {
+          "type": "boolean"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "ahead": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "behind": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "is_repo"
+      ]
+    },
+    "ResultDeviceAgents": {
+      "type": "object",
+      "properties": {
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "objects.json#/$defs/AgentInfo"
+          }
+        }
+      },
+      "required": [
+        "agents"
+      ]
+    },
+    "ReplySessionSubscribe": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReplyOk"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ResultSessionSubscribe"
+        }
+      }
+    },
+    "ReplySessionCreate": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReplyOk"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ResultSession"
+        }
+      }
+    },
+    "ReplySessionSend": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReplyOk"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ResultSessionSend"
+        }
+      }
+    },
+    "ReplySessionHistory": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReplyOk"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ResultSessionHistory"
+        }
+      }
+    },
+    "ReplySessionBlock": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReplyOk"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ResultSessionBlock"
+        }
+      }
+    },
+    "ResultSessionCommands": {
+      "type": "object",
+      "properties": {
+        "commands": {
+          "type": "array",
+          "items": {
+            "$ref": "objects.json#/$defs/Command"
+          }
+        }
+      },
+      "required": [
+        "commands"
+      ]
+    },
+    "ReplySessionCommands": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReplyOk"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ResultSessionCommands"
+        }
+      }
+    },
+    "ReplySessionSet": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReplyOk"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ResultSession"
+        }
+      }
+    },
+    "ReplySessionTakeover": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReplyOk"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ResultSession"
+        }
+      }
+    },
+    "ReplySessionArchive": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReplyOk"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ResultSession"
+        }
+      }
+    },
+    "ReplyDeviceDirs": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReplyOk"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ResultDeviceDirs"
+        }
+      }
+    },
+    "ReplyDeviceGit": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReplyOk"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ResultDeviceGit"
+        }
+      }
+    },
+    "ReplyDeviceAgents": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReplyOk"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ResultDeviceAgents"
+        }
+      }
+    },
+    "DeviceUpdate": {
+      "description": "Update the device's rc-client to the gateway's build and restart it (A22).",
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "device.update"
+        },
+        "device_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "build": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "The build the app saw in GET /api/config; the device refuses any other wheel."
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "device_id",
+        "build"
+      ]
+    },
+    "ResultDeviceUpdate": {
+      "type": "object",
+      "properties": {
+        "accepted": {
+          "const": true
+        },
+        "from": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The build the device is leaving."
+        }
+      },
+      "required": [
+        "accepted"
+      ]
+    },
+    "ReplyDeviceUpdate": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReplyOk"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ResultDeviceUpdate"
+        }
+      }
+    },
+    "PreferencesUpdated": {
+      "description": "Gateway -> app: the account's preferences changed, from this or another app (A35).",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "preferences.updated"
+        },
+        "preferences": {
+          "$ref": "objects.json#/$defs/Preferences"
+        }
+      },
+      "required": [
+        "type",
+        "preferences"
+      ]
+    },
+    "SessionResumeSet": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "session.resume_set"
+        },
+        "session_id": {
+          "$ref": "objects.json#/$defs/Id"
+        },
+        "at": {
+          "$ref": "objects.json#/$defs/Timestamp"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "session_id",
+        "at"
+      ]
+    },
+    "SessionResumeCancel": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "session.resume_cancel"
+        },
+        "session_id": {
+          "$ref": "objects.json#/$defs/Id"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "session_id"
+      ]
+    },
+    "ReplySessionResumeSet": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReplyOk"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ResultSession"
+        }
+      }
+    },
+    "ReplySessionResumeCancel": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReplyOk"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ResultSession"
+        }
+      }
+    },
+    "DeviceMkdir": {
+      "description": "Make one directory, `name`, inside `path` (a directory the device listed), and reply with its listing (A37).",
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "device.mkdir"
+        },
+        "device_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "description": "One path component: no slash, no leading dot, at most 255 bytes.",
+          "type": "string",
+          "pattern": "^(?!\\.)[^/\\u0000]{1,255}$"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "device_id",
+        "path",
+        "name"
+      ]
+    },
+    "ReplyDeviceMkdir": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReplyOk"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ResultDeviceDirs"
+        }
+      }
+    },
+    "TerminalOpen": {
+      "description": "Start the person's login shell in a pseudo-terminal of this size; output streams to this connection (7.3, A38).",
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "terminal.open"
+        },
+        "device_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "cols": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "device_id",
+        "cols",
+        "rows"
+      ]
+    },
+    "TerminalInput": {
+      "description": "Bytes to write to the terminal, as typed (A38).",
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "terminal.input"
+        },
+        "device_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "terminal_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "data": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]*={0,2}$",
+          "maxLength": 87384,
+          "description": "Base64, at most 64 KiB decoded."
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "device_id",
+        "terminal_id",
+        "data"
+      ]
+    },
+    "TerminalResize": {
+      "description": "The app's view changed size (A38).",
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "terminal.resize"
+        },
+        "device_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "terminal_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "cols": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "device_id",
+        "terminal_id",
+        "cols",
+        "rows"
+      ]
+    },
+    "TerminalAttach": {
+      "description": "Take a terminal this account opened: output goes to this connection from now on, and the reply carries the scrollback (A38).",
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "terminal.attach"
+        },
+        "device_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "terminal_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "device_id",
+        "terminal_id"
+      ]
+    },
+    "TerminalClose": {
+      "description": "End the shell; idempotent (A38).",
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "terminal.close"
+        },
+        "device_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "terminal_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "device_id",
+        "terminal_id"
+      ]
+    },
+    "TerminalDetach": {
+      "description": "Gateway -> device only, from: \"gateway\": the app connection holding the terminal is gone; stop streaming and keep the shell ten minutes (7.3, A38).",
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "terminal.detach"
+        },
+        "device_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "terminal_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "device_id",
+        "terminal_id"
+      ]
+    },
+    "ResultTerminalOpen": {
+      "type": "object",
+      "properties": {
+        "terminal_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "terminal_id"
+      ]
+    },
+    "ResultTerminalAttach": {
+      "type": "object",
+      "properties": {
+        "terminal_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "cols": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        },
+        "scrollback": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]*={0,2}$",
+          "description": "The last 64 KiB the terminal produced, base64."
+        }
+      },
+      "required": [
+        "terminal_id",
+        "cols",
+        "rows",
+        "scrollback"
+      ]
+    },
+    "ReplyTerminalOpen": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReplyOk"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ResultTerminalOpen"
+        }
+      }
+    },
+    "ReplyTerminalAttach": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReplyOk"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ResultTerminalAttach"
+        }
+      }
+    },
+    "TerminalOutput": {
+      "description": "Gateway -> app: bytes a terminal produced, to the one connection holding it (7.3, A38).",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "terminal.output"
+        },
+        "terminal_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "device_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "data": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]*={0,2}$",
+          "maxLength": 21848
+        }
+      },
+      "required": [
+        "type",
+        "terminal_id",
+        "device_id",
+        "seq",
+        "data"
+      ]
+    },
+    "TerminalExited": {
+      "description": "Gateway -> app: the shell ended and the terminal is gone (A38).",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "terminal.exited"
+        },
+        "terminal_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "device_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "terminal_id",
+        "device_id",
+        "code"
+      ]
+    },
+    "SessionSeen": {
+      "description": "App -> gateway, handled by the gateway (A47): the person has this conversation in front of them. Reply {}.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "session.seen"
+        },
+        "session_id": {
+          "$ref": "objects.json#/$defs/Id"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "session_id"
+      ]
+    }
+  }
+}

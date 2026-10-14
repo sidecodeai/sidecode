@@ -1,0 +1,41 @@
+{
+  "data": [
+    {
+      "name": "context7",
+      "runtimeStatus": "connected",
+      "pluginId": null,
+      "serverInfo": {"name": "context7", "version": "1.2.0"},
+      "tools": {
+        "resolve-library-id": {"name": "resolve-library-id"},
+        "query-docs": {"name": "query-docs"}
+      },
+      "toolsError": null,
+      "resources": [],
+      "resourceTemplates": [],
+      "authStatus": "unsupported"
+    },
+    {
+      "name": "calendar",
+      "runtimeStatus": "authenticationRequired",
+      "pluginId": "calendar@openai-bundled",
+      "serverInfo": null,
+      "tools": {},
+      "toolsError": null,
+      "resources": [],
+      "resourceTemplates": [],
+      "authStatus": "notLoggedIn"
+    },
+    {
+      "name": "history",
+      "runtimeStatus": "failed",
+      "pluginId": null,
+      "serverInfo": null,
+      "tools": {},
+      "toolsError": "handshaking with MCP server failed: JSON-RPC error -32603",
+      "resources": [],
+      "resourceTemplates": [],
+      "authStatus": "unknown"
+    }
+  ],
+  "nextCursor": null
+}

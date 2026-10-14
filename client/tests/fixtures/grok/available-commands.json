@@ -1,0 +1,451 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "01a09b4f-1b25-7e92-b96b-356d292ff2d0",
+    "update": {
+      "sessionUpdate": "available_commands_update",
+      "availableCommands": [
+        {
+          "name": "compact",
+          "description": "Compress conversation history to save context window",
+          "input": {
+            "hint": "optional context about what to preserve"
+          }
+        },
+        {
+          "name": "always-approve",
+          "description": "Toggle always-approve mode (skip all permission prompts)",
+          "input": {
+            "hint": "on|off"
+          }
+        },
+        {
+          "name": "context",
+          "description": "Show context window usage and session stats",
+          "input": null
+        },
+        {
+          "name": "hooks-trust",
+          "description": "Trust this project for hook execution",
+          "input": null
+        },
+        {
+          "name": "hooks-list",
+          "description": "Show hooks loaded in this session",
+          "input": null
+        },
+        {
+          "name": "hooks-add",
+          "description": "Add a custom hook file or directory",
+          "input": {
+            "hint": "path to hook file or directory"
+          }
+        },
+        {
+          "name": "hooks-remove",
+          "description": "Remove a custom hook file or directory path",
+          "input": {
+            "hint": "path to hook file or directory"
+          }
+        },
+        {
+          "name": "hooks-untrust",
+          "description": "Remove trust for the current project",
+          "input": null
+        },
+        {
+          "name": "plugins",
+          "description": "Manage plugins (list, reload, trust, add, remove)",
+          "input": {
+            "hint": "list | reload | trust <path> | add <path> | remove <path>"
+          }
+        },
+        {
+          "name": "reload-plugins",
+          "description": "Reload plugins from disk (alias for /plugins reload)",
+          "input": null
+        },
+        {
+          "name": "session-info",
+          "description": "Show session details (model, turns, context usage)",
+          "input": null
+        },
+        {
+          "name": "feedback",
+          "description": "Send feedback about the current session",
+          "input": {
+            "hint": "feedback text"
+          }
+        },
+        {
+          "name": "deep-research",
+          "description": "Research with bounded parallel agents, cross-check evidence, and write a cited report",
+          "input": {
+            "hint": "<query>"
+          },
+          "_meta": {
+            "workflowSource": "builtin",
+            "workflowPath": "/Users/dev/.grok/bundled/workflows/deep-research.rhai"
+          }
+        },
+        {
+          "name": "workflow",
+          "description": "Launch a saved workflow, list runs, or manage a run (pause, resume, stop, save)",
+          "input": {
+            "hint": "<name> [--agent-budget N] [--effort LEVEL] [args] | runs | pause|resume|stop|save [name]"
+          }
+        },
+        {
+          "name": "goal",
+          "description": "Set, manage, or check an autonomous goal",
+          "input": {
+            "hint": "<objective> [--budget <tokens>] | status | pause | resume | clear"
+          }
+        },
+        {
+          "name": "loop",
+          "description": "Run a prompt on a recurring interval",
+          "input": {
+            "hint": "[interval] <prompt>"
+          }
+        },
+        {
+          "name": "example-skill",
+          "description": "An example personal skill used to show how a long skill description reads in a list. Use when the user asks for an example, wants to see how a skill is described, or needs a placeholder while writing their own. Triggers include \"show me an example\", \"sample skill\", \"placeholder\", or any request that only needs a stand-in.",
+          "input": null,
+          "_meta": {
+            "scope": "user",
+            "path": "/Users/dev/.agents/skills/example-skill/SKILL.md",
+            "bareName": "example-skill",
+            "qualifiedName": "user:example-skill"
+          }
+        },
+        {
+          "name": "review-helper",
+          "description": "Review a change for readability and consistency before it is committed.",
+          "input": {
+            "hint": "[target]"
+          },
+          "_meta": {
+            "scope": "user",
+            "path": "/Users/dev/.claude/skills/review-helper/SKILL.md",
+            "bareName": "review-helper",
+            "qualifiedName": "user:review-helper"
+          }
+        },
+        {
+          "name": "docs-writer",
+          "description": "Draft or update project documentation from the code it describes.",
+          "input": null,
+          "_meta": {
+            "scope": "user",
+            "path": "/Users/dev/.claude/skills/docs-writer/SKILL.md",
+            "bareName": "docs-writer",
+            "qualifiedName": "user:docs-writer"
+          }
+        },
+        {
+          "name": "build-with-ai",
+          "description": "Build AI apps on SpaceXAI (XAI_API_KEY + api.x.ai)",
+          "input": {
+            "hint": "<what you're building>"
+          },
+          "_meta": {
+            "scope": "bundled",
+            "path": "/Users/dev/.grok/bundled/skills/build-with-ai/SKILL.md",
+            "bareName": "build-with-ai",
+            "qualifiedName": "bundled:build-with-ai"
+          }
+        },
+        {
+          "name": "code-review",
+          "description": "Run an extremely strict maintainability review for abstraction quality, giant files, and spaghetti-condition growth. Use for a deep code quality audit or an especially harsh maintainability review.",
+          "input": null,
+          "_meta": {
+            "scope": "bundled",
+            "path": "/Users/dev/.grok/bundled/skills/code-review/SKILL.md",
+            "bareName": "code-review",
+            "qualifiedName": "bundled:code-review"
+          }
+        },
+        {
+          "name": "create-skill",
+          "description": "Create a new Grok skill",
+          "input": null,
+          "_meta": {
+            "scope": "bundled",
+            "path": "/Users/dev/.grok/bundled/skills/create-skill/SKILL.md",
+            "bareName": "create-skill",
+            "qualifiedName": "bundled:create-skill"
+          }
+        },
+        {
+          "name": "create-workflow",
+          "description": "Author a new multi-agent workflow",
+          "input": null,
+          "_meta": {
+            "scope": "bundled",
+            "path": "/Users/dev/.grok/bundled/skills/create-workflow/SKILL.md",
+            "bareName": "create-workflow",
+            "qualifiedName": "bundled:create-workflow"
+          }
+        },
+        {
+          "name": "design",
+          "description": "Run the full design-doc-writer and design-doc-reviewer loop until consensus. Produces a polished design document with a PR plan.",
+          "input": {
+            "hint": "<description of what to design>"
+          },
+          "_meta": {
+            "scope": "bundled",
+            "path": "/Users/dev/.grok/bundled/skills/design/SKILL.md",
+            "bareName": "design",
+            "qualifiedName": "bundled:design"
+          }
+        },
+        {
+          "name": "execute-plan",
+          "description": "Execute a PR Plan DAG from a design document. Parses the plan, topologically sorts it, implements PRs in parallel using worktree-isolated subagents, runs mandatory orchestrator-level review, and assembles either a Graphite PR stack or a plain-git branch stack depending on tool availability.",
+          "input": {
+            "hint": "<design-doc-path> [--effort N] [--concurrency N] [--dry-run] [--resume <PLAN_ID>] [--instructions \"...\"] [--no-graphite] [--auto-pr]"
+          },
+          "_meta": {
+            "scope": "bundled",
+            "path": "/Users/dev/.grok/bundled/skills/execute-plan/SKILL.md",
+            "bareName": "execute-plan",
+            "qualifiedName": "bundled:execute-plan"
+          }
+        },
+        {
+          "name": "bundled:imagine",
+          "description": "Prompting and workflow guidance for Imagine image tools",
+          "input": null,
+          "_meta": {
+            "scope": "bundled",
+            "path": "/Users/dev/.grok/bundled/skills/imagine/SKILL.md",
+            "bareName": "imagine",
+            "qualifiedName": "bundled:imagine"
+          }
+        },
+        {
+          "name": "implement",
+          "description": "Run the full implement-review-fix loop using implementer and reviewer personas. Supports effort-based multi-reviewer scaling (1-5 reviewers) with automatic specialization selection. Includes memory-based feedback loop that learns from past review patterns. Loops until all reviewers find 0 issues of any severity.",
+          "input": {
+            "hint": "[--effort N] <description of what to implement>"
+          },
+          "_meta": {
+            "scope": "bundled",
+            "path": "/Users/dev/.grok/bundled/skills/implement/SKILL.md",
+            "bareName": "implement",
+            "qualifiedName": "bundled:implement"
+          }
+        },
+        {
+          "name": "learn",
+          "description": "Learn from your own Grok Build sessions and tune your setup: add skills for things you keep typing, fix stale skill instructions, and retire skills, plugins, or MCP servers you never use. Use on \"/learn\", \"learn from my traces\", \"what skills do I never use\". Not for summarizing sessions into notes or memory.",
+          "input": {
+            "hint": "[--mode step|auto|report] [--days N | --since-last | --limit N] [--per-trace] [--include-headless] [--cwd PATH] [--focus TEXT] [--resume]"
+          },
+          "_meta": {
+            "scope": "bundled",
+            "path": "/Users/dev/.grok/bundled/skills/learn/SKILL.md",
+            "bareName": "learn",
+            "qualifiedName": "bundled:learn"
+          }
+        },
+        {
+          "name": "long-running-background-tasks",
+          "description": "Required reading before you start, watch, or wait on anything that keeps running after you launch it — background jobs, watchers, scheduled loops, CI, pull requests, training runs, dev servers, long builds. Read it before you launch such work and before you report on its state. Saying where a running job stands counts as working on it. Use when: about to launch, supervise, inspect, diagnose, or report on work that keeps running after it is started.",
+          "input": null,
+          "_meta": {
+            "scope": "bundled",
+            "path": "/Users/dev/.grok/bundled/skills/long-running-background-tasks/SKILL.md",
+            "bareName": "long-running-background-tasks",
+            "qualifiedName": "bundled:long-running-background-tasks"
+          }
+        },
+        {
+          "name": "pr-babysit",
+          "description": "Monitor PRs, fix CI failures, address review comments, resolve merge conflicts, and restack stacks. Supports independent PRs, Graphite stacks, and GitHub stacked PRs (gh-stack).",
+          "input": {
+            "hint": "add <number> | remove <number> | list | check"
+          },
+          "_meta": {
+            "scope": "bundled",
+            "path": "/Users/dev/.grok/bundled/skills/pr-babysit/SKILL.md",
+            "bareName": "pr-babysit",
+            "qualifiedName": "bundled:pr-babysit"
+          }
+        },
+        {
+          "name": "resume-claude",
+          "description": "Continue from a recent Claude Code session",
+          "input": {
+            "hint": "[words describing the session | session id]"
+          },
+          "_meta": {
+            "scope": "bundled",
+            "path": "/Users/dev/.grok/bundled/skills/resume-claude/SKILL.md",
+            "bareName": "resume-claude",
+            "qualifiedName": "bundled:resume-claude"
+          }
+        },
+        {
+          "name": "resume-codex",
+          "description": "Continue from a recent Codex session",
+          "input": {
+            "hint": "[words describing the session | session id]"
+          },
+          "_meta": {
+            "scope": "bundled",
+            "path": "/Users/dev/.grok/bundled/skills/resume-codex/SKILL.md",
+            "bareName": "resume-codex",
+            "qualifiedName": "bundled:resume-codex"
+          }
+        },
+        {
+          "name": "resume-cursor",
+          "description": "Continue from a recent Cursor session",
+          "input": {
+            "hint": "[words describing the session | session id]"
+          },
+          "_meta": {
+            "scope": "bundled",
+            "path": "/Users/dev/.grok/bundled/skills/resume-cursor/SKILL.md",
+            "bareName": "resume-cursor",
+            "qualifiedName": "bundled:resume-cursor"
+          }
+        },
+        {
+          "name": "bundled:review",
+          "description": "Run a reviewer subagent against uncommitted local changes, a named branch, or a GitHub PR. Local and branch modes write a review file plus a summary to disk. PR mode posts the findings as a PENDING GitHub review for the user to inspect and submit through the UI.",
+          "input": {
+            "hint": "[--local | --branch <name> | --pr <number-or-url> | <auto-detect>]"
+          },
+          "_meta": {
+            "scope": "bundled",
+            "path": "/Users/dev/.grok/bundled/skills/review/SKILL.md",
+            "bareName": "review",
+            "qualifiedName": "bundled:review"
+          }
+        },
+        {
+          "name": "skill-design-principles",
+          "description": "Concise, high-signal principles for writing and editing skills well. Use whenever authoring or editing a skill.",
+          "input": null,
+          "_meta": {
+            "scope": "bundled",
+            "path": "/Users/dev/.grok/bundled/skills/skill-design-principles/SKILL.md",
+            "bareName": "skill-design-principles",
+            "qualifiedName": "bundled:skill-design-principles"
+          }
+        },
+        {
+          "name": "statusline",
+          "description": "Configure the Grok Build status line.",
+          "input": null,
+          "_meta": {
+            "scope": "bundled",
+            "path": "/Users/dev/.grok/bundled/skills/statusline/SKILL.md",
+            "bareName": "statusline",
+            "qualifiedName": "bundled:statusline"
+          }
+        },
+        {
+          "name": "example:review",
+          "description": "Run the example plugin's review against local git state",
+          "input": {
+            "hint": "[--wait|--background] [--base <ref>]"
+          },
+          "_meta": {
+            "scope": "user",
+            "path": "/Users/dev/.claude/plugins/marketplaces/example-marketplace/plugins/example/commands/review.md",
+            "bareName": "review",
+            "qualifiedName": "example:review",
+            "pluginName": "example"
+          }
+        },
+        {
+          "name": "run",
+          "description": "Hand a task to the example plugin's background worker",
+          "input": {
+            "hint": "[--background|--wait] [--resume|--fresh] [--model <model>] [--effort <low|medium|high>] [what the worker should investigate, solve, or continue]"
+          },
+          "_meta": {
+            "scope": "user",
+            "path": "/Users/dev/.claude/plugins/marketplaces/example-marketplace/plugins/example/commands/run.md",
+            "bareName": "run",
+            "qualifiedName": "example:run",
+            "pluginName": "example"
+          }
+        },
+        {
+          "name": "example:status",
+          "description": "Show active and recent example plugin jobs for this repository",
+          "input": {
+            "hint": "[job-id] [--all]"
+          },
+          "_meta": {
+            "scope": "user",
+            "path": "/Users/dev/.claude/plugins/marketplaces/example-marketplace/plugins/example/commands/status.md",
+            "bareName": "status",
+            "qualifiedName": "example:status",
+            "pluginName": "example"
+          }
+        },
+        {
+          "name": "learn-traces",
+          "description": "Workflow: Map-reduce a collected set of Grok Build sessions into a curated list of harness changes: new or edited skills, plugin enables, deletes",
+          "input": {
+            "hint": "[--agent-budget N] [--effort LEVEL] [args]"
+          },
+          "_meta": {
+            "workflowSource": "bundled",
+            "workflowPath": "/Users/dev/.grok/bundled/workflows/learn-traces.rhai"
+          }
+        }
+      ],
+      "_meta": {
+        "tools": [
+          "run_terminal_command",
+          "read_file",
+          "search_replace",
+          "list_dir",
+          "grep",
+          "kill_command_or_subagent",
+          "todo_write",
+          "get_command_or_subagent_output",
+          "spawn_subagent",
+          "scheduler_create",
+          "scheduler_delete",
+          "scheduler_list",
+          "monitor",
+          "search_tool",
+          "use_tool",
+          "workflow",
+          "enter_plan_mode",
+          "exit_plan_mode",
+          "ask_user_question",
+          "send_feedback",
+          "web_search",
+          "web_fetch",
+          "image_gen",
+          "image_edit",
+          "image_to_video",
+          "reference_to_video",
+          "write"
+        ]
+      }
+    },
+    "_meta": {
+      "totalTokens": 1475,
+      "eventId": "01a09b4f-1b25-7e92-b96b-356d292ff2d0-0",
+      "agentTimestampMs": 1789333872589,
+      "updateType": "AvailableCommandsUpdate",
+      "updateParams": {
+        "commandsCount": 75
+      }
+    }
+  }
+}

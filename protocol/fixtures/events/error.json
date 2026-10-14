@@ -1,0 +1,8 @@
+{
+  "seq": 91,
+  "ts": 1788945330000,
+  "kind": "error",
+  "message": "The agent process exited before the turn completed.",
+  "code": "internal",
+  "block_id": "cbe34579-6f2c-4db5-9d2d-b95a7a2f4468"
+}

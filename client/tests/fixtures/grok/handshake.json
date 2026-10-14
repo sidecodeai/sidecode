@@ -1,0 +1,434 @@
+{
+  "initialize": {
+    "protocolVersion": 1,
+    "agentCapabilities": {
+      "loadSession": true,
+      "promptCapabilities": {
+        "image": false,
+        "audio": false,
+        "embeddedContext": true
+      },
+      "mcpCapabilities": {
+        "http": true,
+        "sse": true
+      },
+      "sessionCapabilities": {
+        "list": {},
+        "resume": {},
+        "close": {}
+      },
+      "auth": {},
+      "_meta": {
+        "x.ai/fs_notify": true,
+        "x.ai/hooks": {
+          "blockingEvents": [
+            "pre_tool_use",
+            "stop",
+            "subagent_stop"
+          ],
+          "decisions": [
+            "deny",
+            "block"
+          ],
+          "stopSignals": [
+            "continue",
+            "stopReason",
+            "additionalContext"
+          ]
+        },
+        "x.ai/capabilities": {
+          "toolOverrides": {
+            "x_keyword_search": true,
+            "x_semantic_search": true,
+            "x_user_search": false,
+            "x_thread_fetch": false
+          }
+        }
+      }
+    },
+    "authMethods": [
+      {
+        "id": "cached_token",
+        "name": "cached_token",
+        "description": "Cached token from ~/.grok/auth.json"
+      },
+      {
+        "id": "grok.com",
+        "name": "Grok",
+        "description": "Sign in with Grok"
+      }
+    ],
+    "_meta": {
+      "grokShell": true,
+      "defaultAuthMethodId": "cached_token",
+      "x.ai/mcp/sdk": true,
+      "x.ai/pluginDirs": true,
+      "currentWorkingDirectory": "/tmp/grok-run",
+      "agentVersion": "1.0.25",
+      "agentId": "19e5ece4-9252-56a5-bc5d-c7b06f42807a",
+      "agentInstanceId": "bd358b32-b706-42dd-bea2-3f12dbaed7f1",
+      "hostname": "devbox.local",
+      "modelState": {
+        "currentModelId": "grok-4.6",
+        "availableModels": [
+          {
+            "modelId": "grok-4.6",
+            "name": "Grok 4.6",
+            "description": "SpaceXAI's latest frontier model",
+            "_meta": {
+              "totalContextTokens": 500000,
+              "agentType": "grok-build-plan",
+              "supportsReasoningEffort": true,
+              "reasoningEffort": "xhigh",
+              "reasoningEfforts": [
+                {
+                  "id": "xhigh",
+                  "value": "xhigh",
+                  "label": "Extra High Effort",
+                  "description": "Highest effort and reasoning level",
+                  "default": false
+                },
+                {
+                  "id": "high",
+                  "value": "high",
+                  "label": "High Effort",
+                  "description": "Higher implementation quality with extensive reasoning",
+                  "default": true
+                },
+                {
+                  "id": "medium",
+                  "value": "medium",
+                  "label": "Medium Effort",
+                  "description": "Balanced effort with standard implementation and testing",
+                  "default": false
+                },
+                {
+                  "id": "low",
+                  "value": "low",
+                  "label": "Low Effort",
+                  "description": "Quick, fast implementations",
+                  "default": false
+                }
+              ]
+            }
+          },
+          {
+            "modelId": "grok-4.5",
+            "name": "Grok 4.5",
+            "_meta": {
+              "totalContextTokens": 500000,
+              "agentType": "grok-build-plan",
+              "supportsReasoningEffort": true,
+              "reasoningEffort": "high",
+              "reasoningEfforts": [
+                {
+                  "id": "high",
+                  "value": "high",
+                  "label": "High Effort",
+                  "description": "Highest implementation quality with extensive reasoning",
+                  "default": true
+                },
+                {
+                  "id": "medium",
+                  "value": "medium",
+                  "label": "Medium Effort",
+                  "description": "Balanced effort with standard implementation and testing",
+                  "default": false
+                },
+                {
+                  "id": "low",
+                  "value": "low",
+                  "label": "Low Effort",
+                  "description": "Quick, fast implementations",
+                  "default": false
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "mcpServers": [],
+      "mcpApps": false,
+      "metadata": null,
+      "availableCommands": [
+        {
+          "name": "compact",
+          "description": "Compress conversation history to save context window",
+          "input": {
+            "hint": "optional context about what to preserve"
+          }
+        },
+        {
+          "name": "always-approve",
+          "description": "Toggle always-approve mode (skip all permission prompts)",
+          "input": {
+            "hint": "on|off"
+          }
+        },
+        {
+          "name": "context",
+          "description": "Show context window usage and session stats",
+          "input": null
+        },
+        {
+          "name": "session-info",
+          "description": "Show session details (model, turns, context usage)",
+          "input": null
+        },
+        {
+          "name": "deep-research",
+          "description": "Research with bounded parallel agents, cross-check evidence, and write a cited report",
+          "input": {
+            "hint": "<query>"
+          }
+        },
+        {
+          "name": "workflow",
+          "description": "Launch a saved workflow, list runs, or manage a run (pause, resume, stop, save)",
+          "input": {
+            "hint": "<name> [--agent-budget N] [--effort LEVEL] [args] | runs | pause|resume|stop|save [name]"
+          }
+        },
+        {
+          "name": "goal",
+          "description": "Set, manage, or check an autonomous goal",
+          "input": {
+            "hint": "<objective> [--budget <tokens>] | status | pause | resume | clear"
+          }
+        }
+      ],
+      "cancelRewind": true,
+      "sessionRecap": true,
+      "feedbackTraceOffer": false,
+      "voiceMode": true
+    }
+  },
+  "session/new": {
+    "sessionId": "01a09b4f-1b25-7e92-b96b-356d292ff2d0",
+    "models": {
+      "currentModelId": "grok-4.6",
+      "availableModels": [
+        {
+          "modelId": "grok-4.6",
+          "name": "Grok 4.6",
+          "description": "SpaceXAI's latest frontier model",
+          "_meta": {
+            "totalContextTokens": 500000,
+            "agentType": "grok-build-plan",
+            "supportsReasoningEffort": true,
+            "reasoningEffort": "xhigh",
+            "reasoningEfforts": [
+              {
+                "id": "xhigh",
+                "value": "xhigh",
+                "label": "Extra High Effort",
+                "description": "Highest effort and reasoning level",
+                "default": false
+              },
+              {
+                "id": "high",
+                "value": "high",
+                "label": "High Effort",
+                "description": "Higher implementation quality with extensive reasoning",
+                "default": true
+              },
+              {
+                "id": "medium",
+                "value": "medium",
+                "label": "Medium Effort",
+                "description": "Balanced effort with standard implementation and testing",
+                "default": false
+              },
+              {
+                "id": "low",
+                "value": "low",
+                "label": "Low Effort",
+                "description": "Quick, fast implementations",
+                "default": false
+              }
+            ]
+          }
+        },
+        {
+          "modelId": "grok-4.5",
+          "name": "Grok 4.5",
+          "_meta": {
+            "totalContextTokens": 500000,
+            "agentType": "grok-build-plan",
+            "supportsReasoningEffort": true,
+            "reasoningEffort": "high",
+            "reasoningEfforts": [
+              {
+                "id": "high",
+                "value": "high",
+                "label": "High Effort",
+                "description": "Highest implementation quality with extensive reasoning",
+                "default": true
+              },
+              {
+                "id": "medium",
+                "value": "medium",
+                "label": "Medium Effort",
+                "description": "Balanced effort with standard implementation and testing",
+                "default": false
+              },
+              {
+                "id": "low",
+                "value": "low",
+                "label": "Low Effort",
+                "description": "Quick, fast implementations",
+                "default": false
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "configOptions": [
+      {
+        "id": "model",
+        "name": "Model",
+        "category": "model",
+        "type": "select",
+        "currentValue": "grok-4.6",
+        "options": [
+          {
+            "value": "grok-4.6",
+            "name": "Grok 4.6"
+          },
+          {
+            "value": "grok-4.5",
+            "name": "Grok 4.5"
+          }
+        ]
+      },
+      {
+        "id": "reasoning_effort",
+        "name": "Reasoning Effort",
+        "category": "thought_level",
+        "type": "select",
+        "currentValue": "xhigh",
+        "options": [
+          {
+            "value": "xhigh",
+            "name": "Extra High Effort",
+            "description": "Highest effort and reasoning level"
+          },
+          {
+            "value": "high",
+            "name": "High Effort",
+            "description": "Higher implementation quality with extensive reasoning"
+          },
+          {
+            "value": "medium",
+            "name": "Medium Effort",
+            "description": "Balanced effort with standard implementation and testing"
+          },
+          {
+            "value": "low",
+            "name": "Low Effort",
+            "description": "Quick, fast implementations"
+          }
+        ]
+      }
+    ],
+    "_meta": {
+      "currentWorkingDirectory": "/tmp/grok-run",
+      "codebaseIndexed": [],
+      "isGitRepo": false,
+      "gitRoot": null,
+      "showNonGitWarning": false,
+      "feedbackEnabled": true,
+      "x.ai/sessionConfig": {
+        "options": [
+          {
+            "id": "grok-4.6",
+            "category": "model",
+            "label": "Grok 4.6",
+            "selected": true
+          },
+          {
+            "id": "grok-4.5",
+            "category": "model",
+            "label": "Grok 4.5",
+            "selected": false
+          },
+          {
+            "id": "xhigh",
+            "category": "mode",
+            "label": "Extra High Effort",
+            "description": "Highest effort and reasoning level",
+            "selected": true
+          },
+          {
+            "id": "high",
+            "category": "mode",
+            "label": "High Effort",
+            "description": "Higher implementation quality with extensive reasoning",
+            "selected": false
+          },
+          {
+            "id": "medium",
+            "category": "mode",
+            "label": "Medium Effort",
+            "description": "Balanced effort with standard implementation and testing",
+            "selected": false
+          },
+          {
+            "id": "low",
+            "category": "mode",
+            "label": "Low Effort",
+            "description": "Quick, fast implementations",
+            "selected": false
+          }
+        ]
+      },
+      "x.ai/sessionDetail": {
+        "sessionId": "01a09b4f-1b25-7e92-b96b-356d292ff2d0",
+        "kind": "build",
+        "cwd": "/tmp/grok-run",
+        "currentModelId": "grok-4.6"
+      },
+      "x.ai/memoryMode": "legacy"
+    }
+  },
+  "session/prompt": {
+    "stopReason": "end_turn",
+    "_meta": {
+      "sessionId": "01a09b4f-1b25-7e92-b96b-356d292ff2d0",
+      "requestId": "a7fdbcb6-2e2b-4bec-83e2-fbee92ee91e6",
+      "promptId": "a7fdbcb6-2e2b-4bec-83e2-fbee92ee91e6",
+      "totalTokens": 25382,
+      "modelId": "grok-4.6",
+      "inputTokens": 25345,
+      "outputTokens": 37,
+      "cachedReadTokens": 5888,
+      "reasoningTokens": 32,
+      "usage": {
+        "inputTokens": 25345,
+        "outputTokens": 37,
+        "totalTokens": 25382,
+        "cachedReadTokens": 5888,
+        "cacheCreationTokens": 0,
+        "reasoningTokens": 32,
+        "modelCalls": 1,
+        "apiDurationMs": 3676,
+        "costUsdTicks": 143072000,
+        "modelUsage": {
+          "grok-4.6-build": {
+            "inputTokens": 25345,
+            "outputTokens": 37,
+            "totalTokens": 25382,
+            "cachedReadTokens": 5888,
+            "cacheCreationTokens": 0,
+            "reasoningTokens": 32,
+            "modelCalls": 1,
+            "apiDurationMs": 3676,
+            "costUsdTicks": 143072000
+          }
+        },
+        "numTurns": 1
+      }
+    }
+  }
+}

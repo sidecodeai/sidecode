@@ -1,0 +1,142 @@
+/*
+ * The Settings screen (docs/DESIGN.md § "The Settings screen"): an identity
+ * header on the canvas, four groups of two-line rows on one soft surface each,
+ * and the versions as the last line. Nothing parts two rows but spacing, and no
+ * footnote hangs under a group — what a state has to say is the row's own
+ * second line.
+ */
+
+.settings {
+  max-width: 620px;
+}
+
+/* Who and where, on the canvas rather than on a surface. */
+.settings-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-6);
+  min-width: 0;
+}
+
+/* The top bar's circle at the size a header takes. */
+.settings-identity .avatar {
+  width: 44px;
+  height: 44px;
+  font-size: var(--fs-16);
+}
+
+.settings-identity-text {
+  min-width: 0;
+}
+
+.settings-identity-name {
+  font-size: var(--fs-17);
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+}
+
+.settings-identity-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  margin-top: 1px;
+  font-size: var(--fs-13);
+  line-height: 1.4;
+  color: var(--ink-secondary);
+}
+
+/* A host too long for the line loses its middle, never its port. */
+.settings-identity-host {
+  display: flex;
+  min-width: 0;
+}
+
+.settings-identity-host .head {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-identity-host .tail {
+  flex: none;
+  white-space: pre;
+}
+
+.settings-section + .settings-section {
+  margin-top: var(--sp-6);
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  width: 100%;
+  min-height: var(--row-h-setting);
+  padding: var(--sp-3) var(--sp-5);
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+
+/* A row a click anywhere on reaches: the pointer tints it, as a list row does. */
+.settings-row.target {
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.settings-row.target:hover {
+  background: var(--hover);
+}
+
+.settings-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.settings-row-title {
+  font-size: var(--fs-15);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.settings-row-title.danger {
+  color: var(--danger);
+}
+
+.settings-row-sentence {
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--ink-secondary);
+}
+
+.settings-control {
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+
+.settings-row-chevron {
+  flex: none;
+  color: var(--ink-tertiary);
+}
+
+.settings-versions {
+  margin-top: var(--sp-8);
+  font-size: var(--fs-12);
+  line-height: 1.5;
+  color: var(--ink-tertiary);
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .settings-row {
+    padding-inline: var(--sp-4);
+  }
+}

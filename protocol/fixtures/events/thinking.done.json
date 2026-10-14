@@ -1,0 +1,10 @@
+{
+  "seq": 7,
+  "ts": 1788944402900,
+  "kind": "thinking",
+  "first_seq": 5,
+  "block_id": "e3c776b7-73e5-449f-a25e-25cec51cf406",
+  "text": "The failure is timing dependent, so the refresh window is probably compared against a wall clock that can drift.",
+  "done": true,
+  "duration_ms": 4200
+}

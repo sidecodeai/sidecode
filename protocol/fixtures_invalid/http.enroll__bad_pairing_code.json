@@ -1,0 +1,8 @@
+{
+  "code": "RC-IIII-LLLL",
+  "name": "mac-studio-office",
+  "platform": "macos",
+  "hostname": "mac-studio.local",
+  "arch": "arm64",
+  "client_version": "0.1.0"
+}

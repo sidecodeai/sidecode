@@ -1,0 +1,82 @@
+# remote-control stack: the gateway, plus an optional local speech-to-text service.
+#
+# Voice is two separate settings in .env: STT_* turns dictation on, and the optional POLISH_* block
+# lets the apps clean a finished dictation up through an OpenAI-compatible model of yours.
+#
+#   cp .env.example .env      # then set PUBLIC_ORIGIN and RC_PASSWORD
+#   docker compose up -d
+#
+# PUBLIC_ORIGIN and RC_PASSWORD are the only required values. The stack ships no TLS proxy: it
+# publishes the gateway on GATEWAY_BIND:GATEWAY_PORT and the operator's own reverse proxy owns the
+# public hostname, the certificate and the HTTP to HTTPS redirect. The gateway sets its own security
+# headers, so nothing is lost by not having one in the stack. See docs/DEPLOY.md.
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+      target: release
+    image: rc-gateway:latest
+    container_name: rc-gateway
+    restart: unless-stopped
+    # Rotate the container log at 10 MB and keep five files, so it never grows without bound.
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "5"}}
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+    ports:
+      # A proxy running as a container reaches this through the Docker bridge, so 0.0.0.0 is the
+      # default; see GATEWAY_BIND in .env.example before narrowing it.
+      - "${GATEWAY_BIND:-0.0.0.0}:${GATEWAY_PORT:-8787}:8787"
+    # The image already drops to uid 10001; this is the outer layer. /data stays writable, and
+    # /tmp is a tmpfs because Starlette spools a large upload there before the size cap trips.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 512m
+    # Every online user holds two sockets, a device's and an app's, and every database call opens
+    # its SQLite files, so Docker's default soft limit of 1024 open files caps connections.
+    ulimits: {nofile: {soft: 65536, hard: 65536}}
+    volumes:
+      - rc-data:/data
+      # Optional APNs signing key. Point APNS_KEY_PATH at the mounted path and make the file
+      # readable by uid 10001 before enabling it.
+      # - ./secrets/AuthKey.p8:/run/secrets/apns/AuthKey.p8:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request;urllib.request.urlopen('http://127.0.0.1:8787/api/health',timeout=4)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Optional: an OpenAI-compatible Whisper server on the internal network, so voice input never
+  # leaves the VPS. Start it with `docker compose --profile local-stt up -d` and set
+  #   STT_PROVIDER=openai
+  #   STT_BASE_URL=http://stt:8000/v1
+  #   STT_MODEL=Systran/faster-distil-whisper-small.en   (or another model speaches can fetch)
+  # in .env. The first request downloads the model into the stt-models volume.
+  stt:
+    image: ghcr.io/speaches-ai/speaches:latest-cpu
+    container_name: rc-stt
+    profiles: ["local-stt"]
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    expose:
+      - "8000"
+    volumes:
+      - stt-models:/home/ubuntu/.cache/huggingface/hub
+
+volumes:
+  rc-data:
+  stt-models:

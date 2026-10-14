@@ -1,0 +1,1078 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://remote-control.dev/schema/v1/objects.json",
+  "title": "remote-control shared objects (protocol v1)",
+  "description": "Shared value objects and the error envelope used by HTTP responses and by every WebSocket frame. Objects deliberately keep additionalProperties open: PROTOCOL.md requires every party to ignore unknown fields.",
+  "$defs": {
+    "Timestamp": {
+      "description": "Unix time in milliseconds.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "Seq": {
+      "description": "Per-session monotonically increasing event counter assigned by the device.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "Id": {
+      "description": "Opaque identifier. UUID v4 unless the field description says otherwise.",
+      "type": "string",
+      "minLength": 1
+    },
+    "Uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "PairingCode": {
+      "description": "Single-use pairing code, 10 minute TTL. Crockford base32 alphabet without I, L, O and U.",
+      "type": "string",
+      "pattern": "^RC-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$"
+    },
+    "AgentId": {
+      "description": "Agent identifier. Extensible: unknown values are rendered generically with the id as the label.",
+      "type": "string",
+      "minLength": 1,
+      "examples": [
+        "claude",
+        "codex",
+        "grok",
+        "pi"
+      ]
+    },
+    "Platform": {
+      "enum": [
+        "macos",
+        "linux"
+      ]
+    },
+    "Arch": {
+      "enum": [
+        "arm64",
+        "x86_64"
+      ]
+    },
+    "SessionState": {
+      "enum": [
+        "starting",
+        "idle",
+        "running",
+        "needs_approval",
+        "needs_input",
+        "error",
+        "stopped",
+        "readonly"
+      ]
+    },
+    "Origin": {
+      "description": "Who created the session.",
+      "enum": [
+        "remote",
+        "terminal"
+      ]
+    },
+    "Control": {
+      "description": "Who currently owns session input. A live CLI process owns it as \"terminal\", or as \"shared\" when the device is attached to that process; \"none\" means nobody owns it and the session is resumable.",
+      "enum": [
+        "remote",
+        "terminal",
+        "shared",
+        "none"
+      ]
+    },
+    "Capability": {
+      "enum": [
+        "worktree",
+        "takeover",
+        "interrupt",
+        "queue",
+        "steer",
+        "attachments",
+        "effort",
+        "history",
+        "commands"
+      ]
+    },
+    "AttachMode": {
+      "description": "How an agent's terminal sessions can be attached, so that control becomes \"shared\" instead of \"terminal\". \"channel\" is the Claude channel shim, \"daemon\" the Codex shared app-server, \"extension\" the device's own extension that pi loads into every session (A26), \"leader\" Grok Build's leader process that its TUI joins and the device joins as another client (A28).",
+      "enum": [
+        "channel",
+        "daemon",
+        "extension",
+        "leader"
+      ]
+    },
+    "AccountMethod": {
+      "description": "How an agent is signed in with a vendor: \"account\" is the vendor's own subscription account signed in with OAuth, \"api_key\" a key (A33).",
+      "enum": [
+        "account",
+        "api_key"
+      ]
+    },
+    "AgentLimit": {
+      "description": "One rate-limit window of a vendor account, as the device read it for a device.agents reply (A33).",
+      "type": "object",
+      "properties": {
+        "window_minutes": {
+          "description": "The window's length: 300 for five hours, 10080 for a week.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "scope": {
+          "description": "What the window is confined to when it is not everything, in the vendor's words: the model a weekly limit applies to.",
+          "type": "string"
+        },
+        "used_percent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "resets_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "window_minutes",
+        "used_percent"
+      ]
+    },
+    "AgentAccount": {
+      "description": "One credential an agent holds on a device: whose it is, how it signs in, and in a device.agents reply the rate-limit windows the device could read (A33).",
+      "type": "object",
+      "properties": {
+        "provider": {
+          "description": "The vendor the credential belongs to, as the agent names it: anthropic, openai, xai, or another id.",
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "$ref": "#/$defs/AccountMethod"
+        },
+        "plan": {
+          "description": "The plan word the vendor records, lowercase as reported (pro, max, team, enterprise, plus, business, free). Null or absent when the agent records none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tier": {
+          "description": "A finer tier when the vendor exposes one, in words the device vouches for: Max 5x from Claude's rate-limit tier id default_claude_max_5x. Omitted when it only repeats plan.",
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "endpoint": {
+          "description": "For api_key: the host the key is sent to when it is not the vendor's own. Host only, never a path or a secret.",
+          "type": "string"
+        },
+        "limits": {
+          "description": "Present only in a device.agents reply, for method account; empty when the vendor reported no windows; absent with no limits_error when the vendor exposes none the device can read.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgentLimit"
+          }
+        },
+        "limits_error": {
+          "description": "Why limits is missing after the device tried, in one line.",
+          "type": "string"
+        },
+        "limits_checked_at": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "required": [
+        "provider",
+        "method"
+      ]
+    },
+    "ErrorCode": {
+      "enum": [
+        "bad_request",
+        "unauthorized",
+        "forbidden",
+        "not_found",
+        "device_offline",
+        "agent_unavailable",
+        "conflict",
+        "timeout",
+        "internal",
+        "unsupported",
+        "too_large"
+      ]
+    },
+    "Error": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code"
+      ]
+    },
+    "LabeledId": {
+      "description": "An option offered by a device: a stable opaque id plus a human label.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ]
+    },
+    "Command": {
+      "description": "A slash command a session offers (A27). `name` is what the user types after the slash.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_:.-]*$"
+        },
+        "description": {
+          "type": "string"
+        },
+        "argument": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Placeholder for what may follow the name, e.g. `instructions`. Absent when the command takes nothing."
+        },
+        "group": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Where the command comes from, for sectioning a long list: `Skills`, `Prompts`, `Extensions`, `Built-in`. Absent when the agent draws no distinction."
+        }
+      },
+      "required": [
+        "name",
+        "description"
+      ]
+    },
+    "Usage": {
+      "description": "Token and cost accounting for a session or a turn. Only the token totals are guaranteed: an agent that reports no context or cost figures omits those fields or sends null.",
+      "type": "object",
+      "properties": {
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "context_used": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "context_window": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "cost_usd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "total_tokens"
+      ]
+    },
+    "Git": {
+      "description": "Git state of a session working directory.",
+      "type": "object",
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "ahead": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "behind": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "worktree": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "branch",
+        "dirty",
+        "ahead",
+        "behind",
+        "worktree"
+      ]
+    },
+    "Attachment": {
+      "description": "Attachment metadata as echoed back in a user_message event. The bytes are not part of the event.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mime": {
+          "type": "string",
+          "minLength": 1
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "name",
+        "mime",
+        "size"
+      ]
+    },
+    "AttachmentUpload": {
+      "description": "Attachment as uploaded in session.send. Decoded size is bounded to 6 MiB each, 8 per request.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mime": {
+          "type": "string",
+          "minLength": 1
+        },
+        "data_base64": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "mime",
+        "data_base64"
+      ]
+    },
+    "AgentInfo": {
+      "description": "One agent as detected on a device.",
+      "type": "object",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/AgentId"
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LabeledId"
+          }
+        },
+        "default_model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_modes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LabeledId"
+          }
+        },
+        "default_permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "efforts": {
+          "description": "Empty array when the agent has no effort levels.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LabeledId"
+          }
+        },
+        "default_effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Capability"
+          }
+        },
+        "attach": {
+          "description": "How this agent's terminal sessions can be attached. Null or absent means they can only be taken over or resumed.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AttachMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attach_ready": {
+          "description": "Whether the device is prepared to attach: the Claude shim is installed and on PATH, or a handshake on the Codex shared daemon socket succeeds.",
+          "type": "boolean"
+        },
+        "shared_interrupt": {
+          "description": "Whether session.stop works on a session with control \"shared\". False when absent.",
+          "type": "boolean"
+        },
+        "shared_settings": {
+          "description": "Whether session.set for model, permission_mode and effort works on a session with control \"shared\". False when absent.",
+          "type": "boolean"
+        },
+        "shared_settings_keys": {
+          "description": "With shared_settings true, the subset of the four settings that session.set changes on a session with control \"shared\"; the others stay what the terminal set. Absent means all four (A40).",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "model",
+              "permission_mode",
+              "effort",
+              "speed"
+            ]
+          }
+        },
+        "shared_attachments": {
+          "description": "Whether session.send attachments are delivered on a session with control \"shared\". False when absent.",
+          "type": "boolean"
+        },
+        "speeds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LabeledId"
+          },
+          "description": "Speed tiers the agent can run a session at, beyond its standard speed; empty or absent when it has none (A21)."
+        },
+        "accounts": {
+          "description": "How the agent is signed in on this device, one entry per vendor credential (A33). Absent when the device did not look; empty when the agent is installed but signed in nowhere.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgentAccount"
+          }
+        }
+      },
+      "required": [
+        "agent",
+        "available",
+        "version",
+        "path",
+        "models",
+        "default_model",
+        "permission_modes",
+        "default_permission_mode",
+        "efforts",
+        "default_effort",
+        "capabilities"
+      ]
+    },
+    "Device": {
+      "type": "object",
+      "properties": {
+        "device_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "platform": {
+          "$ref": "#/$defs/Platform"
+        },
+        "hostname": {
+          "type": "string"
+        },
+        "arch": {
+          "$ref": "#/$defs/Arch"
+        },
+        "client_version": {
+          "type": "string"
+        },
+        "online": {
+          "type": "boolean"
+        },
+        "last_seen": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "created_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "latency_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgentInfo"
+          }
+        },
+        "client_build": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 of the wheel the client was installed from; null when unknown (A22)."
+        },
+        "update_state": {
+          "enum": [
+            "idle",
+            "updating",
+            "failed"
+          ],
+          "description": "Whether an app-requested client update is in flight or failed (A22). Absent means idle."
+        },
+        "update_message": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why the last update failed, in one line (A22)."
+        },
+        "terminal": {
+          "type": "boolean",
+          "description": "True when the device offers a shell over the gateway (7.3, A38). Absent on a client older than A38."
+        }
+      },
+      "required": [
+        "device_id",
+        "name",
+        "platform",
+        "hostname",
+        "arch",
+        "client_version",
+        "online",
+        "last_seen",
+        "created_at",
+        "latency_ms",
+        "agents"
+      ]
+    },
+    "SessionTurn": {
+      "type": "object",
+      "properties": {
+        "turn_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "started_at": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "required": [
+        "turn_id",
+        "started_at"
+      ]
+    },
+    "SessionTodos": {
+      "type": "object",
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "done": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "total",
+        "done"
+      ]
+    },
+    "Session": {
+      "description": "Session summary. Global identity is (device_id, session_id).",
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "device_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "agent": {
+          "$ref": "#/$defs/AgentId"
+        },
+        "title": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        },
+        "git": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Git"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/SessionState"
+        },
+        "state_detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        },
+        "control": {
+          "$ref": "#/$defs/Control"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "last_seq": {
+          "$ref": "#/$defs/Seq"
+        },
+        "archived": {
+          "type": "boolean"
+        },
+        "turn": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionTurn"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "todos": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionTodos"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "queued": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resume": {
+          "description": "The resume the device has scheduled after a usage limit, or null/absent when none (A35).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionResume"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "speed": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The speed tier the session runs at, one of AgentInfo.speeds, or null for the standard speed (A21)."
+        },
+        "unseen": {
+          "type": "boolean",
+          "description": "True while the session waits for the person and nobody on the account has opened it since it stopped working (A47). The gateway's alone; absent is false."
+        }
+      },
+      "required": [
+        "session_id",
+        "device_id",
+        "agent",
+        "title",
+        "cwd",
+        "git",
+        "state",
+        "state_detail",
+        "origin",
+        "control",
+        "model",
+        "permission_mode",
+        "effort",
+        "created_at",
+        "updated_at",
+        "last_seq",
+        "archived",
+        "turn",
+        "todos",
+        "usage",
+        "queued"
+      ],
+      "allOf": [
+        {
+          "description": "Amendment A7: readonly means a mirrored terminal session that is not currently working. While the terminal-driven turn runs the device reports running, needs_approval or needs_input instead.",
+          "if": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "readonly"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "control": {
+                "const": "terminal"
+              },
+              "turn": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "AppsInfo": {
+      "description": "The oldest build of each separately installed app this gateway still works with (A31): `ios` for the iPhone app, `macos` for the Mac app (A45), `android` for the Android app and `windows` for the Windows app (A46). An app reads its own entry; an absent entry, or an absent object, means no requirement.",
+      "type": "object",
+      "properties": {
+        "ios": {
+          "type": "object",
+          "properties": {
+            "minimum_version": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+            },
+            "update_url": {
+              "type": "string",
+              "pattern": "^https://"
+            }
+          },
+          "required": [
+            "minimum_version"
+          ]
+        },
+        "macos": {
+          "type": "object",
+          "properties": {
+            "minimum_version": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+            },
+            "update_url": {
+              "type": "string",
+              "pattern": "^https://"
+            }
+          },
+          "required": [
+            "minimum_version"
+          ]
+        },
+        "android": {
+          "type": "object",
+          "properties": {
+            "minimum_version": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+            },
+            "update_url": {
+              "type": "string",
+              "pattern": "^https://"
+            }
+          },
+          "required": [
+            "minimum_version"
+          ]
+        },
+        "windows": {
+          "type": "object",
+          "properties": {
+            "minimum_version": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+            },
+            "update_url": {
+              "type": "string",
+              "pattern": "^https://"
+            }
+          },
+          "required": [
+            "minimum_version"
+          ]
+        }
+      },
+      "required": [
+        "ios"
+      ]
+    },
+    "PairingToken": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+      "description": "128 bits in Crockford base32, single use, ten-minute lifetime (A23)."
+    },
+    "UserRole": {
+      "description": "What 3.9 is gated on (A24).",
+      "enum": [
+        "admin",
+        "member"
+      ]
+    },
+    "UserState": {
+      "description": "A disabled account cannot sign in and its devices are refused (A24).",
+      "enum": [
+        "active",
+        "disabled"
+      ]
+    },
+    "User": {
+      "description": "The account an app signed in as: LoginResponse.user, AuthSessionResponse.user and the app hello's user (A24).",
+      "type": "object",
+      "properties": {
+        "username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 32,
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,31}$"
+        },
+        "role": {
+          "$ref": "#/$defs/UserRole"
+        }
+      },
+      "required": [
+        "username",
+        "role"
+      ]
+    },
+    "UserRecord": {
+      "description": "One account as the admin lists it (A24).",
+      "type": "object",
+      "properties": {
+        "username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 32,
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,31}$"
+        },
+        "role": {
+          "$ref": "#/$defs/UserRole"
+        },
+        "state": {
+          "$ref": "#/$defs/UserState"
+        },
+        "created_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "last_login_at": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "devices": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "username",
+        "role",
+        "state",
+        "created_at",
+        "last_login_at",
+        "devices"
+      ]
+    },
+    "LimitStop": {
+      "description": "Why a turn ended when the vendor's usage limit was reached (A35): the window that was hit and when it resets, or null when the vendor named no time.",
+      "type": "object",
+      "properties": {
+        "window_minutes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "resets_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "resets_at"
+      ]
+    },
+    "SessionResume": {
+      "description": "The one resume a session can have pending after a usage limit stopped it (A35).",
+      "type": "object",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "estimated": {
+          "type": "boolean"
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "window_minutes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "at",
+        "estimated",
+        "attempts"
+      ]
+    },
+    "Preferences": {
+      "description": "An account's preferences: the settings that read the same on every app and device of the account (A35, A41). Every field but resume_after_limit is absent until somebody has set it.",
+      "type": "object",
+      "properties": {
+        "resume_after_limit": {
+          "type": "boolean"
+        },
+        "language": {
+          "type": "string",
+          "enum": [
+            "en",
+            "zh-Hans"
+          ],
+          "description": "The app's interface language (A41)."
+        },
+        "stt_language": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "description": "The language a phone that recognises speech itself listens for (A41, A44); Chinese when unset, and an auto written before A44 reads as unset."
+        },
+        "polish_enabled": {
+          "type": "boolean",
+          "description": "Whether a finished dictation goes through the gateway's polish model (A29, A41)."
+        },
+        "polish_model": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "The polish model chosen from GET /api/polish/models; empty when none (A41)."
+        },
+        "polish_strength": {
+          "type": "string",
+          "enum": [
+            "moderate",
+            "strong"
+          ],
+          "description": "How far the polish may go (A29, A41)."
+        },
+        "timeline_detail": {
+          "type": "string",
+          "enum": [
+            "simple",
+            "detailed"
+          ],
+          "description": "How much of a transcript is drawn (A41)."
+        }
+      },
+      "required": [
+        "resume_after_limit"
+      ]
+    }
+  }
+}

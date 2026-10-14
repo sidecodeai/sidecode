@@ -1,0 +1,52 @@
+{
+  "type": "reply",
+  "id": "e3a7c1f9-2d4b-4c68-8e5a-1f9d3b7c2a60",
+  "ok": true,
+  "result": {
+    "session": {
+      "session_id": "6d1f3c58-8b2e-4d67-9a4f-2e7c1b0d5a93",
+      "device_id": "c5efb1ec-2912-4619-90f7-93b5172fd712",
+      "agent": "claude",
+      "title": "Migrate the push store to sqlite",
+      "cwd": "/Users/me/dev/gateway",
+      "git": {
+        "branch": "fix/pairing-alphabet",
+        "dirty": true,
+        "ahead": 0,
+        "behind": 0,
+        "worktree": false
+      },
+      "state": "idle",
+      "state_detail": null,
+      "origin": "terminal",
+      "control": "shared",
+      "model": "claude-sonnet-4-5",
+      "permission_mode": "default",
+      "effort": "medium",
+      "created_at": 1788946080000,
+      "updated_at": 1788948000000,
+      "last_seq": 41,
+      "archived": false,
+      "turn": null,
+      "todos": {
+        "total": 3,
+        "done": 1
+      },
+      "usage": {
+        "input_tokens": 18240,
+        "output_tokens": 2110,
+        "total_tokens": 20350,
+        "context_used": 24800,
+        "context_window": 200000,
+        "cost_usd": 0.11
+      },
+      "queued": 0,
+      "resume": {
+        "at": 1788967860000,
+        "estimated": false,
+        "attempts": 0,
+        "window_minutes": 300
+      }
+    }
+  }
+}

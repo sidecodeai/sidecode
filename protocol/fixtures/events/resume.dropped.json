@@ -1,0 +1,7 @@
+{
+  "seq": 42,
+  "ts": 1788966060000,
+  "kind": "resume",
+  "status": "dropped",
+  "reason": "The terminal that owned this session was closed."
+}

@@ -1,0 +1,14 @@
+{
+  "type": "session.send",
+  "id": "d7c20931-eada-4d1f-9df5-e8426a3d8dcd",
+  "session_id": "ad2c9abb-4a1e-470a-835c-228778fc17f0",
+  "text": "Have a look at the screenshot and tell me what broke the layout.",
+  "attachments": [
+    {
+      "name": "settings-drawer.png",
+      "mime": "image/png",
+      "data_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    }
+  ],
+  "mode": "auto"
+}

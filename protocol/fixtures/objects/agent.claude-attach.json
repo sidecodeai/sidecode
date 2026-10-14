@@ -1,0 +1,106 @@
+{
+  "agent": "claude",
+  "available": true,
+  "version": "2.1.267",
+  "path": "/Users/me/.local/bin/claude",
+  "models": [
+    {
+      "id": "claude-opus-4-6",
+      "label": "Opus 4.6"
+    },
+    {
+      "id": "claude-sonnet-4-5",
+      "label": "Sonnet 4.5"
+    },
+    {
+      "id": "claude-haiku-4-5",
+      "label": "Haiku 4.5"
+    }
+  ],
+  "default_model": "claude-sonnet-4-5",
+  "permission_modes": [
+    {
+      "id": "default",
+      "label": "Ask before edits"
+    },
+    {
+      "id": "acceptEdits",
+      "label": "Auto-accept edits"
+    },
+    {
+      "id": "plan",
+      "label": "Plan mode"
+    },
+    {
+      "id": "bypassPermissions",
+      "label": "Bypass permissions"
+    }
+  ],
+  "default_permission_mode": "default",
+  "efforts": [
+    {
+      "id": "low",
+      "label": "Low"
+    },
+    {
+      "id": "medium",
+      "label": "Medium"
+    },
+    {
+      "id": "high",
+      "label": "High"
+    },
+    {
+      "id": "max",
+      "label": "Max"
+    }
+  ],
+  "default_effort": "medium",
+  "capabilities": [
+    "worktree",
+    "takeover",
+    "interrupt",
+    "queue",
+    "attachments",
+    "effort",
+    "history",
+    "commands"
+  ],
+  "attach": "channel",
+  "attach_ready": true,
+  "shared_interrupt": true,
+  "shared_settings": true,
+  "shared_settings_keys": [
+    "model",
+    "effort"
+  ],
+  "shared_attachments": false,
+  "accounts": [
+    {
+      "provider": "anthropic",
+      "method": "account",
+      "plan": "max",
+      "tier": "Max 5x",
+      "email": "me@example.com",
+      "limits": [
+        {
+          "window_minutes": 300,
+          "used_percent": 16,
+          "resets_at": 1789487040000
+        },
+        {
+          "window_minutes": 10080,
+          "used_percent": 54,
+          "resets_at": 1789596000000
+        },
+        {
+          "window_minutes": 10080,
+          "scope": "Fable",
+          "used_percent": 64,
+          "resets_at": 1789596000000
+        }
+      ],
+      "limits_checked_at": 1789470000000
+    }
+  ]
+}

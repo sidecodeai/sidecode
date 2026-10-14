@@ -1,0 +1,91 @@
+{
+  "agent": "pi",
+  "available": true,
+  "version": "0.85.1",
+  "path": "/Users/me/.local/bin/pi",
+  "models": [
+    {
+      "id": "anthropic/claude-sonnet-4-5",
+      "label": "Claude Sonnet 4.5"
+    },
+    {
+      "id": "openai/gpt-5",
+      "label": "GPT-5"
+    }
+  ],
+  "default_model": "anthropic/claude-sonnet-4-5",
+  "permission_modes": [
+    {
+      "id": "untrusted",
+      "label": "Ask for everything"
+    },
+    {
+      "id": "on-request",
+      "label": "Ask when needed"
+    },
+    {
+      "id": "never",
+      "label": "Never ask"
+    }
+  ],
+  "default_permission_mode": "on-request",
+  "efforts": [
+    {
+      "id": "off",
+      "label": "Off"
+    },
+    {
+      "id": "low",
+      "label": "Low"
+    },
+    {
+      "id": "medium",
+      "label": "Medium"
+    },
+    {
+      "id": "high",
+      "label": "High"
+    }
+  ],
+  "default_effort": "medium",
+  "capabilities": [
+    "worktree",
+    "interrupt",
+    "queue",
+    "steer",
+    "attachments",
+    "effort",
+    "history",
+    "commands"
+  ],
+  "attach": "extension",
+  "attach_ready": true,
+  "shared_interrupt": true,
+  "shared_settings": true,
+  "shared_attachments": true,
+  "accounts": [
+    {
+      "provider": "anthropic",
+      "method": "account",
+      "plan": "max",
+      "limits": [
+        {
+          "window_minutes": 300,
+          "used_percent": 16,
+          "resets_at": 1789487040000
+        },
+        {
+          "window_minutes": 10080,
+          "used_percent": 54,
+          "resets_at": 1789596000000
+        }
+      ],
+      "limits_checked_at": 1789470000000
+    },
+    {
+      "provider": "openai",
+      "method": "api_key",
+      "endpoint": "api.relay.example"
+    }
+  ]
+}

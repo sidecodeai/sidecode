@@ -1,0 +1,12 @@
+{
+  "type": "preferences.updated",
+  "preferences": {
+    "resume_after_limit": true,
+    "language": "zh-Hans",
+    "stt_language": "zh",
+    "polish_enabled": true,
+    "polish_model": "gpt-5.4-mini",
+    "polish_strength": "moderate",
+    "timeline_detail": "detailed"
+  }
+}

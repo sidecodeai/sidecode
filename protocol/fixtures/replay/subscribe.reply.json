@@ -1,0 +1,195 @@
+{
+  "type": "reply",
+  "id": "47314f1e-329c-4f98-bd49-c61871b608a3",
+  "ok": true,
+  "result": {
+    "session": {
+      "session_id": "ad2c9abb-4a1e-470a-835c-228778fc17f0",
+      "device_id": "c5efb1ec-2912-4619-90f7-93b5172fd712",
+      "agent": "claude",
+      "title": "Fix flaky auth refresh test",
+      "cwd": "/Users/me/dev/gateway",
+      "git": {
+        "branch": "main",
+        "dirty": false,
+        "ahead": 0,
+        "behind": 0,
+        "worktree": false
+      },
+      "state": "idle",
+      "state_detail": null,
+      "origin": "remote",
+      "control": "remote",
+      "model": "claude-sonnet-4-5",
+      "permission_mode": "default",
+      "effort": "medium",
+      "created_at": 1788942600000,
+      "updated_at": 1788944461100,
+      "last_seq": 41,
+      "archived": false,
+      "turn": null,
+      "todos": {
+        "total": 4,
+        "done": 4
+      },
+      "usage": {
+        "input_tokens": 48120,
+        "output_tokens": 6210,
+        "total_tokens": 54330,
+        "context_used": 61000,
+        "context_window": 200000,
+        "cost_usd": 0.42
+      },
+      "queued": 0
+    },
+    "events": [
+      {
+        "seq": 31,
+        "ts": 1788944453500,
+        "kind": "status",
+        "state": "running"
+      },
+      {
+        "seq": 32,
+        "ts": 1788944453800,
+        "kind": "tool_call",
+        "block_id": "0959b0cc-c67b-4d42-97e8-afe1d66bd66c",
+        "tool": "Edit",
+        "tool_kind": "edit",
+        "title": "rc_gateway/auth/tokens.py",
+        "status": "succeeded",
+        "input": {
+          "file_path": "/Users/me/dev/gateway/rc_gateway/auth/tokens.py"
+        },
+        "diff": {
+          "path": "rc_gateway/auth/tokens.py",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "--- a/rc_gateway/auth/tokens.py\n+++ b/rc_gateway/auth/tokens.py\n@@ -12,1 +12,2 @@\n-REFRESH_WINDOW = 5.0\n+REFRESH_WINDOW = 5.0\n+MAX_CLOCK_SKEW = 2.5\n"
+        },
+        "summary": "+2 -1",
+        "started_at": 1788944453800,
+        "ended_at": 1788944453900,
+        "duration_ms": 70
+      },
+      {
+        "seq": 33,
+        "ts": 1788944454000,
+        "kind": "tool_call",
+        "block_id": "800abd0f-e2ac-4edf-a0b4-5e722dcde09a",
+        "tool": "Bash",
+        "tool_kind": "shell",
+        "title": "pytest -k refresh --count 20",
+        "status": "running",
+        "input": {
+          "command": "pytest -k refresh --count 20",
+          "timeout": 120000
+        },
+        "started_at": 1788944454000
+      },
+      {
+        "seq": 34,
+        "ts": 1788944459900,
+        "kind": "tool_call",
+        "first_seq": 33,
+        "block_id": "800abd0f-e2ac-4edf-a0b4-5e722dcde09a",
+        "tool": "Bash",
+        "tool_kind": "shell",
+        "title": "pytest -k refresh --count 20",
+        "status": "succeeded",
+        "input": {
+          "command": "pytest -k refresh --count 20",
+          "timeout": 120000
+        },
+        "output": "tests/test_auth.py ....................                                  [100%]\n\n============================== 20 passed in 5.71s ==============================\n",
+        "summary": "20 passed",
+        "started_at": 1788944454000,
+        "ended_at": 1788944459900,
+        "duration_ms": 5900
+      },
+      {
+        "seq": 35,
+        "ts": 1788944460000,
+        "kind": "todos",
+        "items": [
+          {
+            "id": "t1",
+            "text": "Reproduce the flake",
+            "status": "completed"
+          },
+          {
+            "id": "t2",
+            "text": "Find the timing dependency",
+            "status": "completed"
+          },
+          {
+            "id": "t3",
+            "text": "Fix the refresh window",
+            "status": "completed"
+          },
+          {
+            "id": "t4",
+            "text": "Run the test 20 times",
+            "status": "completed"
+          }
+        ]
+      },
+      {
+        "seq": 36,
+        "ts": 1788944460400,
+        "kind": "assistant_text",
+        "block_id": "cbe34579-6f2c-4db5-9d2d-b95a7a2f4468",
+        "delta": "The flake came from comparing a monotonic ",
+        "done": false
+      },
+      {
+        "seq": 37,
+        "ts": 1788944460500,
+        "kind": "assistant_text",
+        "first_seq": 36,
+        "block_id": "cbe34579-6f2c-4db5-9d2d-b95a7a2f4468",
+        "delta": "deadline against `time.time()`. ",
+        "done": false
+      },
+      {
+        "seq": 38,
+        "ts": 1788944460800,
+        "kind": "assistant_text",
+        "first_seq": 36,
+        "block_id": "cbe34579-6f2c-4db5-9d2d-b95a7a2f4468",
+        "text": "The flake came from comparing a monotonic deadline against `time.time()`. `should_refresh` now clamps clock skew to half the refresh window, and `pytest -k refresh --count 20` passes 20 out of 20.",
+        "done": true
+      },
+      {
+        "seq": 39,
+        "ts": 1788944460900,
+        "kind": "meta",
+        "title": "Fix flaky auth refresh test",
+        "model": "claude-sonnet-4-5"
+      },
+      {
+        "seq": 40,
+        "ts": 1788944461100,
+        "kind": "turn_completed",
+        "turn_id": "ad5ec709-3ce6-44c6-80a5-af2cb46308bc",
+        "stop_reason": "completed",
+        "duration_ms": 71400,
+        "usage": {
+          "input_tokens": 48120,
+          "output_tokens": 6210,
+          "total_tokens": 54330,
+          "context_used": 61000,
+          "context_window": 200000,
+          "cost_usd": 0.42
+        }
+      },
+      {
+        "seq": 41,
+        "ts": 1788944461100,
+        "kind": "status",
+        "state": "idle"
+      }
+    ],
+    "resync": false
+  }
+}

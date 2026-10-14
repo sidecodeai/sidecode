@@ -1,0 +1,4 @@
+{
+  "type": "update.failed",
+  "message": "the wheel's SHA-256 did not match the requested build"
+}

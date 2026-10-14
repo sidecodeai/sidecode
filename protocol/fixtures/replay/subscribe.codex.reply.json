@@ -1,0 +1,193 @@
+{
+  "type": "reply",
+  "id": "393ab352-34aa-4086-a1c4-23f41dd7b103",
+  "ok": true,
+  "result": {
+    "session": {
+      "session_id": "9cabb33b-a6e2-4faf-a905-865f89dcfa8e",
+      "device_id": "c5efb1ec-2912-4619-90f7-93b5172fd712",
+      "agent": "codex",
+      "title": "Typecheck the web app",
+      "cwd": "/Users/me/dev/web",
+      "git": {
+        "branch": "feat/settings-drawer",
+        "dirty": true,
+        "ahead": 2,
+        "behind": 0,
+        "worktree": false
+      },
+      "state": "running",
+      "state_detail": null,
+      "origin": "remote",
+      "control": "remote",
+      "model": "gpt-5.4-codex",
+      "permission_mode": "on-request",
+      "effort": "medium",
+      "created_at": 1788944940000,
+      "updated_at": 1788945028800,
+      "last_seq": 22,
+      "archived": false,
+      "turn": {
+        "turn_id": "192a2a3b-0e93-4d42-bf6c-9d395dda731e",
+        "started_at": 1788945001100
+      },
+      "todos": {
+        "total": 3,
+        "done": 2
+      },
+      "usage": null,
+      "queued": 1
+    },
+    "events": [
+      {
+        "seq": 14,
+        "ts": 1788945012800,
+        "kind": "status",
+        "state": "running"
+      },
+      {
+        "seq": 15,
+        "ts": 1788945013000,
+        "kind": "tool_call",
+        "block_id": "5e808f56-b645-41fa-bba5-9a49992f3d57",
+        "tool": "shell",
+        "tool_kind": "shell",
+        "title": "npm run typecheck",
+        "status": "running",
+        "input": {
+          "command": [
+            "npm",
+            "run",
+            "typecheck"
+          ],
+          "cwd": "/Users/me/dev/web"
+        },
+        "started_at": 1788945013000
+      },
+      {
+        "seq": 16,
+        "ts": 1788945020800,
+        "kind": "tool_call",
+        "first_seq": 15,
+        "block_id": "5e808f56-b645-41fa-bba5-9a49992f3d57",
+        "tool": "shell",
+        "tool_kind": "shell",
+        "title": "npm run typecheck",
+        "status": "failed",
+        "input": {
+          "command": [
+            "npm",
+            "run",
+            "typecheck"
+          ],
+          "cwd": "/Users/me/dev/web"
+        },
+        "output": "src/state/sessions.ts(74,11): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.\n",
+        "summary": "1 error",
+        "started_at": 1788945013000,
+        "ended_at": 1788945020800,
+        "duration_ms": 7800
+      },
+      {
+        "seq": 17,
+        "ts": 1788945023800,
+        "kind": "user_message",
+        "block_id": "faf38b44-3516-44e8-bf66-ddc93f3037f1",
+        "text": "While you are in there, also check the settings drawer.",
+        "source": "remote"
+      },
+      {
+        "seq": 18,
+        "ts": 1788945023900,
+        "kind": "notice",
+        "level": "info",
+        "text": "Message steered into the running turn."
+      },
+      {
+        "seq": 19,
+        "ts": 1788945024200,
+        "kind": "tool_call",
+        "block_id": "643de5d9-01ef-47ef-816e-432020d413a0",
+        "tool": "fuzzyFileSearch",
+        "tool_kind": "search",
+        "title": "settings drawer",
+        "status": "succeeded",
+        "input": {
+          "query": "settings drawer"
+        },
+        "output": "src/ui/SettingsDrawer.tsx\nsrc/ui/SettingsDrawer.test.tsx\n",
+        "summary": "2 files",
+        "started_at": 1788945024200,
+        "ended_at": 1788945024400,
+        "duration_ms": 180
+      },
+      {
+        "seq": 20,
+        "ts": 1788945024600,
+        "kind": "tool_call",
+        "block_id": "ab5cb1a9-2833-4cfa-bec9-592efca4f6c3",
+        "tool": "apply_patch",
+        "tool_kind": "edit",
+        "title": "src/state/sessions.ts",
+        "status": "succeeded",
+        "input": {
+          "path": "src/state/sessions.ts"
+        },
+        "diff": {
+          "path": "src/state/sessions.ts",
+          "additions": 3,
+          "deletions": 1,
+          "patch": "--- a/src/state/sessions.ts\n+++ b/src/state/sessions.ts\n@@ -71,7 +71,9 @@\n-  return byDevice(session.device_id)\n+  if (!session.device_id) return undefined\n+  return byDevice(session.device_id)\n"
+        },
+        "summary": "+3 -1",
+        "started_at": 1788945024600,
+        "ended_at": 1788945024800,
+        "duration_ms": 120
+      },
+      {
+        "seq": 21,
+        "ts": 1788945024800,
+        "kind": "todos",
+        "items": [
+          {
+            "id": "p1",
+            "text": "Run npm run typecheck",
+            "status": "completed"
+          },
+          {
+            "id": "p2",
+            "text": "Fix reported type errors",
+            "status": "completed"
+          },
+          {
+            "id": "p3",
+            "text": "Re-run typecheck",
+            "status": "in_progress"
+          }
+        ]
+      },
+      {
+        "seq": 22,
+        "ts": 1788945028800,
+        "kind": "queue",
+        "pending": [
+          {
+            "id": "573d2674-debc-4db0-973c-16e8a7c2e9b1",
+            "text": "Then run the full test suite.",
+            "ts": 1788945028800
+          }
+        ]
+      }
+    ],
+    "resync": false,
+    "queue": {
+      "pending": [
+        {
+          "id": "573d2674-debc-4db0-973c-16e8a7c2e9b1",
+          "text": "Then run the full test suite.",
+          "ts": 1788945028800
+        }
+      ]
+    }
+  }
+}

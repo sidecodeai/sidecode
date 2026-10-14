@@ -1,0 +1,8 @@
+{
+  "code": "RC-7K42-QX9M",
+  "expires_at": 1788945000000,
+  "install": {
+    "macos": "curl -fsSL https://rc.example.com/install.sh | sh -s -- --pair RC-7K42-QX9M",
+    "linux": "curl -fsSL https://rc.example.com/install.sh | sh -s -- --pair RC-7K42-QX9M"
+  }
+}

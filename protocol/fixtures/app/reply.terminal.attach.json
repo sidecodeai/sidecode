@@ -1,0 +1,11 @@
+{
+  "type": "reply",
+  "id": "af4b2d85-6c7e-4ab9-85ba-2d3f8a4c9b16",
+  "ok": true,
+  "result": {
+    "terminal_id": "2f8d4b6a-1c3e-4a75-9b0d-6e2f8c4a1d57",
+    "cols": 100,
+    "rows": 32,
+    "scrollback": "JCBscyAtbGENCnRvdGFsIDAKJCA="
+  }
+}

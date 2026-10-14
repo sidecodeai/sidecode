@@ -1,0 +1,109 @@
+/*
+ * A43 — the queue as one control. The chip is one more pill of the control
+ * row, drawn by `.composer-bottom .pill` like the others; this is the list it
+ * opens, one line per message in the order they will go, and the strip over
+ * the field while it holds one of them.
+ */
+
+.up-next {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 240px;
+}
+
+.up-next-title {
+  margin: 0;
+  padding: 6px 10px 2px;
+  font-size: var(--fs-12);
+  font-weight: 500;
+  color: var(--ink-secondary);
+}
+
+.up-next-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.up-next-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* The message itself: a button that edits it, or plain text where it cannot. */
+.up-next-message {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: inherit;
+  font-size: var(--fs-14);
+  text-align: left;
+}
+
+.up-next-message:hover:not(.static) {
+  background: var(--surface-hover);
+}
+
+.up-next-message.static {
+  cursor: default;
+}
+
+.up-next-words {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.up-next-files {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  font-size: var(--fs-12);
+  color: var(--ink-secondary);
+}
+
+/*
+ * Over the field while it holds a queued message: one quiet line, and the way
+ * back out of it at the trailing edge.
+ */
+.editing-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-2);
+  padding: 6px var(--sp-3);
+  border-radius: var(--r-md);
+  background: var(--surface-muted);
+  font-size: var(--fs-13);
+  color: var(--ink-secondary);
+}
+
+.editing-strip-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.editing-strip .link-btn {
+  flex: none;
+}
+
+.editing-strip .link-btn:disabled {
+  color: var(--ink-tertiary);
+  cursor: default;
+}

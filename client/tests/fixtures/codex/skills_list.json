@@ -1,0 +1,39 @@
+{
+  "data": [
+    {
+      "cwd": "/repo",
+      "skills": [
+        {
+          "name": "pdf-tables",
+          "description": "Extract tables from a PDF into CSV. Use when the user has a report in PDF form and wants the numbers in a spreadsheet.",
+          "shortDescription": "Extract tables from a PDF into CSV",
+          "path": "/home/dev/.agents/skills/pdf-tables/SKILL.md",
+          "scope": "user",
+          "enabled": true,
+          "pluginId": null
+        },
+        {
+          "name": "release-notes",
+          "description": "Draft release notes from the commits since the last tag.",
+          "shortDescription": null,
+          "path": "/repo/.codex/skills/release-notes/SKILL.md",
+          "scope": "repo",
+          "enabled": false,
+          "pluginId": null
+        },
+        {
+          "name": "computer-history:computer-history",
+          "description": "Answer questions about recent activity from a local event stream.",
+          "shortDescription": null,
+          "path": "/home/dev/.codex/plugins/cache/computer-history/SKILL.md",
+          "scope": "user",
+          "enabled": true,
+          "pluginId": "computer-history@openai-bundled"
+        }
+      ],
+      "errors": [
+        {"path": "/repo/.codex/skills/broken/SKILL.md", "message": "missing a description"}
+      ]
+    }
+  ]
+}

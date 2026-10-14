@@ -1,0 +1,83 @@
+{
+  "agent": "codex",
+  "available": true,
+  "version": "0.154.0",
+  "path": "/Users/me/.codex/packages/standalone/current/bin/codex",
+  "models": [
+    {
+      "id": "gpt-5.4-codex",
+      "label": "GPT-5.4 Codex"
+    },
+    {
+      "id": "gpt-5.4-codex-mini",
+      "label": "GPT-5.4 Codex mini"
+    }
+  ],
+  "default_model": "gpt-5.4-codex",
+  "permission_modes": [
+    {
+      "id": "untrusted",
+      "label": "Ask for everything"
+    },
+    {
+      "id": "on-request",
+      "label": "Ask when needed"
+    },
+    {
+      "id": "never",
+      "label": "Never ask"
+    }
+  ],
+  "default_permission_mode": "on-request",
+  "efforts": [
+    {
+      "id": "low",
+      "label": "Low"
+    },
+    {
+      "id": "medium",
+      "label": "Medium"
+    },
+    {
+      "id": "high",
+      "label": "High"
+    }
+  ],
+  "default_effort": "medium",
+  "capabilities": [
+    "worktree",
+    "interrupt",
+    "queue",
+    "steer",
+    "attachments",
+    "effort",
+    "history",
+    "commands"
+  ],
+  "attach": "daemon",
+  "attach_ready": true,
+  "shared_interrupt": true,
+  "shared_settings": true,
+  "shared_attachments": true,
+  "accounts": [
+    {
+      "provider": "openai",
+      "method": "account",
+      "plan": "pro",
+      "email": "me@example.com",
+      "limits": [
+        {
+          "window_minutes": 300,
+          "used_percent": 37,
+          "resets_at": 1789484400000
+        },
+        {
+          "window_minutes": 10080,
+          "used_percent": 12,
+          "resets_at": 1789900800000
+        }
+      ],
+      "limits_checked_at": 1789470000000
+    }
+  ]
+}

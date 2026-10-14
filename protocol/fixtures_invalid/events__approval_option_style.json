@@ -1,0 +1,32 @@
+{
+  "seq": 19,
+  "ts": 1788944409800,
+  "kind": "approval",
+  "block_id": "3db744e1-a6c3-4f21-bc51-a8ca32c6cd9a",
+  "request_id": "0f99737c-e8c1-4242-ac23-42f50fe1654e",
+  "tool": "Edit",
+  "tool_kind": "edit",
+  "title": "rc_gateway/auth/tokens.py",
+  "input": {
+    "file_path": "/Users/me/dev/gateway/rc_gateway/auth/tokens.py"
+  },
+  "diff": {
+    "path": "rc_gateway/auth/tokens.py",
+    "additions": 4,
+    "deletions": 2,
+    "patch": "--- a/rc_gateway/auth/tokens.py\n+++ b/rc_gateway/auth/tokens.py\n@@ -41,9 +41,11 @@ def should_refresh(token: Token) -> bool:\n-    remaining = token.expires_at - time.time()\n-    return remaining < REFRESH_WINDOW\n+    remaining = token.expires_at - time.monotonic_offset()\n+    skew = min(MAX_CLOCK_SKEW, REFRESH_WINDOW / 2)\n+    return remaining < REFRESH_WINDOW + skew\n"
+  },
+  "options": [
+    {
+      "id": "allow",
+      "label": "Allow",
+      "style": "warning"
+    },
+    {
+      "id": "deny",
+      "label": "Deny",
+      "style": "danger"
+    }
+  ],
+  "status": "pending"
+}

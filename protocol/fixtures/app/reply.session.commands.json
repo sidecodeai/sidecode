@@ -1,0 +1,41 @@
+{
+  "type": "reply",
+  "id": "0f6c2b5e-7d3a-4c1e-9b8f-2a4d6e8c0b13",
+  "ok": true,
+  "result": {
+    "commands": [
+      {
+        "name": "compact",
+        "description": "Summarise the conversation to free up context",
+        "group": "Built-in"
+      },
+      {
+        "name": "review",
+        "description": "Review the working tree's changes and report issues",
+        "argument": "instructions",
+        "group": "Built-in"
+      },
+      {
+        "name": "init",
+        "description": "Write an AGENTS.md for this repository",
+        "group": "Built-in"
+      },
+      {
+        "name": "status",
+        "description": "Show the session's model, settings and token use",
+        "group": "Built-in"
+      },
+      {
+        "name": "release-notes",
+        "description": "Draft release notes from the commits since the last tag",
+        "argument": "tag",
+        "group": "Prompts"
+      },
+      {
+        "name": "skill:pdf-tables",
+        "description": "Extract tables from a PDF into CSV",
+        "group": "Skills"
+      }
+    ]
+  }
+}

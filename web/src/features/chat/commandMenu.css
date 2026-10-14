@@ -1,0 +1,119 @@
+/*
+ * A27 — the slash-command panel, anchored above the composer's field.
+ *
+ * It is not a popover: nothing opened it, a keystroke did, so it is drawn in
+ * the composer's own flow rather than in a portal, sits directly on the field,
+ * and never moves the field down when it appears.
+ */
+
+.composer-field {
+  position: relative;
+}
+
+.command-menu,
+.command-hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + var(--sp-2));
+  z-index: var(--z-sticky);
+  padding: var(--sp-1);
+  background: var(--surface);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-pop);
+  animation: rc-command-pop var(--dur-fast) var(--ease);
+}
+
+@keyframes rc-command-pop {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+
+.command-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  /* Eight rows, then it scrolls — the list is read, not scrolled through. */
+  max-height: calc(8 * 34px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.command-group {
+  list-style: none;
+}
+
+.command-group-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Where the commands come from, at metadata weight: Skills, Prompts, Built-in. */
+.command-group-name {
+  display: block;
+  padding: var(--sp-2) 10px 4px;
+  font-size: var(--fs-11);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-tertiary);
+}
+
+.command-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  height: 34px;
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.command-row.active {
+  background: var(--surface-hover);
+}
+
+/* A27: a command waits for the turn, so the rows read as unavailable. */
+.command-row.dim {
+  opacity: 0.45;
+}
+
+.command-name {
+  flex: none;
+  font-size: var(--fs-13);
+  color: var(--ink);
+}
+
+.command-desc {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-13);
+  color: var(--ink-secondary);
+}
+
+/* The placeholder for whatever follows the name, at the trailing edge. */
+.command-arg {
+  flex: none;
+  font-size: var(--fs-12);
+  color: var(--ink-tertiary);
+}
+
+.command-foot {
+  margin: 0;
+  padding: 6px 10px 4px;
+  font-size: var(--fs-12);
+  color: var(--ink-tertiary);
+}
+
+.command-hint {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  padding: 8px 10px;
+}

@@ -1,0 +1,4 @@
+{
+  "type": "stt.error",
+  "message": "speech to text backend returned 502"
+}

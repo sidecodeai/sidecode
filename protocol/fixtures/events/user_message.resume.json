@@ -1,0 +1,8 @@
+{
+  "seq": 42,
+  "ts": 1788966060000,
+  "kind": "user_message",
+  "block_id": "4c9e7a12-5b3d-4f80-a6e1-8d2c0b7f3e54",
+  "text": "The usage limit has reset. Continue where you left off, and let any subagents you started continue their work.",
+  "source": "resume"
+}

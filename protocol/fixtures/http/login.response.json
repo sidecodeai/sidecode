@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "token": "rc1.7f3c2a19d84b4e0f9a6c1b25e30d7a48.5c9e1f",
+  "exp": 1791536400000,
+  "user": {
+    "username": "admin",
+    "role": "admin"
+  }
+}

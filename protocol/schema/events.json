@@ -1,0 +1,1021 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://remote-control.dev/schema/v1/events.json",
+  "title": "remote-control session events (protocol v1)",
+  "description": "One session timeline entry. Produced by a device, forwarded verbatim by the gateway, rendered by apps. Discriminated by `kind`. additionalProperties stays open everywhere: unknown fields must be ignored, not rejected.",
+  "$ref": "#/$defs/Event",
+  "$defs": {
+    "Event": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/UserMessage"
+        },
+        {
+          "$ref": "#/$defs/AssistantText"
+        },
+        {
+          "$ref": "#/$defs/Thinking"
+        },
+        {
+          "$ref": "#/$defs/ToolCall"
+        },
+        {
+          "$ref": "#/$defs/Todos"
+        },
+        {
+          "$ref": "#/$defs/Approval"
+        },
+        {
+          "$ref": "#/$defs/Question"
+        },
+        {
+          "$ref": "#/$defs/TurnStarted"
+        },
+        {
+          "$ref": "#/$defs/TurnCompleted"
+        },
+        {
+          "$ref": "#/$defs/Status"
+        },
+        {
+          "$ref": "#/$defs/Meta"
+        },
+        {
+          "$ref": "#/$defs/Queue"
+        },
+        {
+          "$ref": "#/$defs/Notice"
+        },
+        {
+          "$ref": "#/$defs/EventError"
+        },
+        {
+          "$ref": "#/$defs/Resume"
+        }
+      ]
+    },
+    "EventBase": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "$ref": "objects.json#/$defs/Seq"
+        },
+        "ts": {
+          "$ref": "objects.json#/$defs/Timestamp"
+        },
+        "kind": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "kind"
+      ]
+    },
+    "BlockBase": {
+      "description": "Mixin for kinds that own a block. A later event with the same block_id fully replaces the earlier one, except that streaming `delta` events append. Display order is by `first_seq ?? seq`, so a block that finishes late stays where it started.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/EventBase"
+        }
+      ],
+      "properties": {
+        "block_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "first_seq": {
+          "description": "The seq at which this block first appeared in the session, equal to seq on the block's first event (amendment A8). Devices set it on replacement events and on session.history and session.block results. Apps order blocks by first_seq ?? seq.",
+          "$ref": "objects.json#/$defs/Seq"
+        },
+        "parent_block_id": {
+          "description": "Set when the event was produced inside a sub-agent. The parent is a tool_call with tool_kind \"subagent\".",
+          "$ref": "objects.json#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "block_id"
+      ]
+    },
+    "EventKind": {
+      "enum": [
+        "user_message",
+        "assistant_text",
+        "thinking",
+        "tool_call",
+        "todos",
+        "approval",
+        "question",
+        "turn_started",
+        "turn_completed",
+        "status",
+        "meta",
+        "queue",
+        "notice",
+        "error",
+        "resume"
+      ]
+    },
+    "ToolKind": {
+      "enum": [
+        "shell",
+        "read",
+        "edit",
+        "write",
+        "search",
+        "web",
+        "mcp",
+        "subagent",
+        "todo",
+        "other"
+      ]
+    },
+    "ToolStatus": {
+      "enum": [
+        "running",
+        "succeeded",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "RequestStatus": {
+      "enum": [
+        "pending",
+        "resolved",
+        "expired"
+      ]
+    },
+    "Trigger": {
+      "description": "Who caused a message or a turn: an app, a person at the terminal, the device's queue, another agent whose words the CLI filed as a user turn (A30), or the device resuming the session after a usage limit reset (A35).",
+      "enum": [
+        "remote",
+        "terminal",
+        "queue",
+        "agent",
+        "resume"
+      ]
+    },
+    "Delivery": {
+      "description": "What happened to a user message injected into an attached CLI. Set only on sessions whose control is \"shared\". A held message is a queue entry, not a block, until it is injected (A19).",
+      "enum": [
+        "delivered",
+        "absorbed"
+      ]
+    },
+    "StopReason": {
+      "enum": [
+        "completed",
+        "interrupted",
+        "error"
+      ]
+    },
+    "NoticeLevel": {
+      "enum": [
+        "info",
+        "warn",
+        "error"
+      ]
+    },
+    "OptionStyle": {
+      "enum": [
+        "primary",
+        "secondary",
+        "danger"
+      ]
+    },
+    "TodoStatus": {
+      "enum": [
+        "pending",
+        "in_progress",
+        "completed"
+      ]
+    },
+    "Diff": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "additions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deletions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "patch": {
+          "description": "Unified diff, at most 32 KiB inside an event.",
+          "type": "string"
+        },
+        "patch_truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "additions",
+        "deletions"
+      ]
+    },
+    "ApprovalOption": {
+      "allOf": [
+        {
+          "$ref": "objects.json#/$defs/LabeledId"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "style": {
+          "$ref": "#/$defs/OptionStyle"
+        }
+      },
+      "required": [
+        "style"
+      ]
+    },
+    "QuestionOption": {
+      "allOf": [
+        {
+          "$ref": "objects.json#/$defs/LabeledId"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string"
+        }
+      }
+    },
+    "QuestionItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QuestionOption"
+          }
+        },
+        "multi": {
+          "type": "boolean"
+        },
+        "allow_text": {
+          "type": "boolean"
+        },
+        "secret": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "prompt",
+        "options",
+        "multi",
+        "allow_text"
+      ]
+    },
+    "Answers": {
+      "description": "Map of question id to the chosen option ids, or to free text.",
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "TodoItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/TodoStatus"
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "status"
+      ]
+    },
+    "QueuedMessage": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The id of the original session.send request.",
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "text": {
+          "type": "string"
+        },
+        "ts": {
+          "$ref": "objects.json#/$defs/Timestamp"
+        },
+        "attachments": {
+          "description": "A43: how many files the held message carries; absent when it carries none. Such an entry can be removed but not edited.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "ts"
+      ]
+    },
+    "UserMessage": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/BlockBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "user_message"
+        },
+        "text": {
+          "type": "string"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "$ref": "objects.json#/$defs/Attachment"
+          }
+        },
+        "source": {
+          "$ref": "#/$defs/Trigger"
+        },
+        "delivery": {
+          "$ref": "#/$defs/Delivery"
+        }
+      },
+      "required": [
+        "kind",
+        "text",
+        "source"
+      ]
+    },
+    "AssistantText": {
+      "description": "Streaming text. Events with `delta` append to the block; the final event carries `done: true` and the full `text` with no delta. History keeps only final events.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/BlockBase"
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "done": {
+                "const": true
+              }
+            },
+            "required": [
+              "done"
+            ]
+          },
+          "then": {
+            "required": [
+              "text"
+            ],
+            "not": {
+              "required": [
+                "delta"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "done": {
+                "const": false
+              }
+            },
+            "required": [
+              "done"
+            ]
+          },
+          "then": {
+            "required": [
+              "delta"
+            ]
+          }
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "assistant_text"
+        },
+        "delta": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "done": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "done"
+      ]
+    },
+    "Thinking": {
+      "description": "Reasoning text. Same streaming rule as assistant_text; may be summary-only.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/BlockBase"
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "done": {
+                "const": true
+              }
+            },
+            "required": [
+              "done"
+            ]
+          },
+          "then": {
+            "required": [
+              "text"
+            ],
+            "not": {
+              "required": [
+                "delta"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "done": {
+                "const": false
+              }
+            },
+            "required": [
+              "done"
+            ]
+          },
+          "then": {
+            "required": [
+              "delta"
+            ]
+          }
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "thinking"
+        },
+        "delta": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "done": {
+          "type": "boolean"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "kind",
+        "done"
+      ]
+    },
+    "ToolCall": {
+      "description": "One tool invocation. `input` is bounded to 8 KiB of JSON, `output` to 16 KiB and `diff.patch` to 32 KiB inside an event; larger content sets the matching *_truncated flag and is fetched with session.block.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/BlockBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "tool_call"
+        },
+        "tool": {
+          "description": "The agent's own tool name, e.g. \"Bash\".",
+          "type": "string",
+          "minLength": 1
+        },
+        "tool_kind": {
+          "$ref": "#/$defs/ToolKind"
+        },
+        "title": {
+          "description": "One-line human summary produced by the device: command line, file path, query.",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ToolStatus"
+        },
+        "input": {
+          "type": "object"
+        },
+        "input_truncated": {
+          "type": "boolean"
+        },
+        "output": {
+          "type": "string"
+        },
+        "output_truncated": {
+          "type": "boolean"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "diff": {
+          "$ref": "#/$defs/Diff"
+        },
+        "started_at": {
+          "$ref": "objects.json#/$defs/Timestamp"
+        },
+        "ended_at": {
+          "$ref": "objects.json#/$defs/Timestamp"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "kind",
+        "tool",
+        "tool_kind",
+        "title",
+        "status",
+        "started_at"
+      ]
+    },
+    "Todos": {
+      "description": "Snapshot; replaces the previous list. Not a block: it carries no block_id.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/EventBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "todos"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TodoItem"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "items"
+      ]
+    },
+    "Approval": {
+      "description": "A tool permission request. Option ids are agent-defined and opaque; the UI renders exactly the options it is given. At least one option has style \"primary\" and one has style \"danger\".",
+      "allOf": [
+        {
+          "$ref": "#/$defs/BlockBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "approval"
+        },
+        "request_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "tool": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tool_kind": {
+          "$ref": "#/$defs/ToolKind"
+        },
+        "title": {
+          "type": "string"
+        },
+        "input": {
+          "type": "object"
+        },
+        "diff": {
+          "$ref": "#/$defs/Diff"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApprovalOption"
+          },
+          "minItems": 2,
+          "allOf": [
+            {
+              "contains": {
+                "type": "object",
+                "properties": {
+                  "style": {
+                    "const": "primary"
+                  }
+                },
+                "required": [
+                  "style"
+                ]
+              }
+            },
+            {
+              "contains": {
+                "type": "object",
+                "properties": {
+                  "style": {
+                    "const": "danger"
+                  }
+                },
+                "required": [
+                  "style"
+                ]
+              }
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/RequestStatus"
+        },
+        "decision": {
+          "type": "object",
+          "properties": {
+            "option_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "by": {
+              "enum": [
+                "remote",
+                "terminal",
+                "policy"
+              ]
+            }
+          },
+          "required": [
+            "option_id",
+            "by"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "request_id",
+        "tool",
+        "tool_kind",
+        "title",
+        "options",
+        "status"
+      ]
+    },
+    "Question": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/BlockBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "question"
+        },
+        "request_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "questions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QuestionItem"
+          },
+          "minItems": 1
+        },
+        "status": {
+          "$ref": "#/$defs/RequestStatus"
+        },
+        "answers": {
+          "$ref": "#/$defs/Answers"
+        },
+        "by": {
+          "enum": [
+            "remote",
+            "terminal"
+          ],
+          "description": "Who answered a resolved question: an app through session.answer, or the person at the terminal (A20)."
+        }
+      },
+      "required": [
+        "kind",
+        "request_id",
+        "questions",
+        "status"
+      ]
+    },
+    "TurnStarted": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/EventBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "turn_started"
+        },
+        "turn_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "trigger": {
+          "$ref": "#/$defs/Trigger"
+        }
+      },
+      "required": [
+        "kind",
+        "turn_id",
+        "trigger"
+      ]
+    },
+    "TurnCompleted": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/EventBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "turn_completed"
+        },
+        "turn_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "stop_reason": {
+          "$ref": "#/$defs/StopReason"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "usage": {
+          "$ref": "objects.json#/$defs/Usage"
+        },
+        "limit": {
+          "description": "Present when the turn ended because the vendor's usage limit was reached; stop_reason is error (A35).",
+          "$ref": "objects.json#/$defs/LimitStop"
+        }
+      },
+      "required": [
+        "kind",
+        "turn_id",
+        "stop_reason",
+        "duration_ms"
+      ]
+    },
+    "Status": {
+      "description": "Emitted on every session state change. Only status and turn_* events change a session's state.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/EventBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "status"
+        },
+        "state": {
+          "$ref": "objects.json#/$defs/SessionState"
+        },
+        "detail": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "state"
+      ]
+    },
+    "Meta": {
+      "description": "Partial update of Session fields.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/EventBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "meta"
+        },
+        "title": {
+          "type": "string"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "git": {
+          "anyOf": [
+            {
+              "$ref": "objects.json#/$defs/Git"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "control": {
+          "$ref": "objects.json#/$defs/Control"
+        },
+        "agent_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "speed": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The session's speed tier, or null for the standard speed (A21)."
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "Queue": {
+      "description": "Snapshot of queued remote messages, in the order they will be delivered (ts order, A43).",
+      "allOf": [
+        {
+          "$ref": "#/$defs/EventBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "queue"
+        },
+        "pending": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QueuedMessage"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "pending"
+      ]
+    },
+    "Notice": {
+      "description": "System line: context compaction, takeover, reconnect.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/EventBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "notice"
+        },
+        "level": {
+          "$ref": "#/$defs/NoticeLevel"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "level",
+        "text"
+      ]
+    },
+    "EventError": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/EventBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "error"
+        },
+        "message": {
+          "type": "string"
+        },
+        "code": {
+          "$ref": "objects.json#/$defs/ErrorCode"
+        },
+        "block_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "kind",
+        "message"
+      ]
+    },
+    "Resume": {
+      "description": "What the device did about a resume after a usage limit (A35).",
+      "allOf": [
+        {
+          "$ref": "#/$defs/EventBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "resume"
+        },
+        "status": {
+          "enum": [
+            "scheduled",
+            "rescheduled",
+            "fired",
+            "cancelled",
+            "dropped"
+          ]
+        },
+        "at": {
+          "$ref": "objects.json#/$defs/Timestamp"
+        },
+        "estimated": {
+          "type": "boolean"
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 400
+        }
+      },
+      "required": [
+        "kind",
+        "status"
+      ]
+    }
+  }
+}

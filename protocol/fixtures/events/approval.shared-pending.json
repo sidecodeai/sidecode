@@ -1,0 +1,28 @@
+{
+  "seq": 20,
+  "ts": 1788946155200,
+  "kind": "approval",
+  "block_id": "da14866c-5c58-4fde-a29c-74d62432a4ca",
+  "request_id": "e04453a4-e671-4e04-9976-68754f2b5099",
+  "tool": "Bash",
+  "tool_kind": "shell",
+  "title": "pytest -k pairing",
+  "input": {
+    "tool_name": "Bash",
+    "description": "Run the pairing code tests",
+    "input_preview": "pytest -k pairing -q"
+  },
+  "options": [
+    {
+      "id": "allow",
+      "label": "Allow",
+      "style": "primary"
+    },
+    {
+      "id": "deny",
+      "label": "Deny",
+      "style": "danger"
+    }
+  ],
+  "status": "pending"
+}

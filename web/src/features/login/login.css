@@ -1,0 +1,65 @@
+.login {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-6);
+  background: var(--canvas);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  padding: var(--sp-8);
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-1);
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-2);
+}
+
+.login-brand h1 {
+  font-size: var(--fs-22);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.login-card .hint {
+  margin-bottom: var(--sp-6);
+}
+
+.login-card .label {
+  margin-bottom: var(--sp-2);
+}
+
+.login-card .field {
+  margin-bottom: var(--sp-4);
+}
+
+.login-error {
+  margin: -6px 0 var(--sp-4);
+  color: var(--danger);
+  font-size: var(--fs-13);
+}
+
+/** A24: the one line under the button that swaps the card for the other form. */
+.login-switch {
+  margin-top: var(--sp-4);
+  align-self: center;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--fs-13);
+  cursor: pointer;
+}
+
+.login-switch:hover {
+  text-decoration: underline;
+}

@@ -1,0 +1,28 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+web/dist/
+*.tsbuildinfo
+
+# Runtime & secrets
+.env
+data/
+secrets/
+*.p8
+*.p12
+*.cer
+*.certSigningRequest
+*.mobileprovision

@@ -1,0 +1,84 @@
+{
+  "agent": "grok",
+  "available": true,
+  "version": "1.0.30",
+  "path": "/Users/me/.grok/bin/agent",
+  "models": [
+    {
+      "id": "grok-4.6",
+      "label": "Grok 4.6"
+    },
+    {
+      "id": "grok-4.5",
+      "label": "Grok 4.5"
+    }
+  ],
+  "default_model": "grok-4.6",
+  "permission_modes": [
+    {
+      "id": "default",
+      "label": "Ask when needed"
+    },
+    {
+      "id": "acceptEdits",
+      "label": "Auto-accept edits"
+    },
+    {
+      "id": "auto",
+      "label": "Auto mode"
+    },
+    {
+      "id": "dontAsk",
+      "label": "Deny unless allowed"
+    },
+    {
+      "id": "plan",
+      "label": "Plan mode"
+    },
+    {
+      "id": "bypassPermissions",
+      "label": "Bypass permissions"
+    }
+  ],
+  "default_permission_mode": "default",
+  "efforts": [
+    {
+      "id": "low",
+      "label": "Low"
+    },
+    {
+      "id": "medium",
+      "label": "Medium"
+    },
+    {
+      "id": "high",
+      "label": "High"
+    },
+    {
+      "id": "xhigh",
+      "label": "Extra high"
+    }
+  ],
+  "default_effort": "high",
+  "capabilities": [
+    "worktree",
+    "interrupt",
+    "queue",
+    "effort",
+    "history",
+    "commands"
+  ],
+  "attach": "leader",
+  "attach_ready": true,
+  "shared_interrupt": true,
+  "shared_settings": true,
+  "shared_attachments": false,
+  "accounts": [
+    {
+      "provider": "xai",
+      "method": "account",
+      "plan": null,
+      "email": "me@example.com"
+    }
+  ]
+}

@@ -1,0 +1,179 @@
+.boot {
+  height: 100%;
+  background: var(--canvas);
+}
+
+.shell {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--canvas);
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: saturate(180%) blur(12px);
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar-inner {
+  max-width: var(--content-max);
+  margin: 0 auto;
+  height: var(--header-h);
+  padding: 0 var(--sp-6);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  flex: none;
+}
+
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-pill);
+  color: var(--ink-secondary);
+  text-decoration: none;
+  font-size: var(--fs-14);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.tab:hover {
+  color: var(--ink);
+  background: var(--surface-hover);
+}
+
+.tab.active {
+  background: var(--surface-muted);
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.topbar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.conn-chip {
+  display: inline-flex;
+  align-items: center;
+}
+
+.origin {
+  font-size: var(--fs-12);
+  color: var(--ink-secondary);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--ink-inverse);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--fs-11);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  flex: none;
+}
+
+.page {
+  flex: 1;
+  width: 100%;
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: var(--sp-8) var(--sp-6) var(--sp-10);
+}
+
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-6);
+}
+
+.page-head h1 {
+  font-size: var(--fs-30);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.page-head .hint {
+  margin-top: 2px;
+}
+
+@media (max-width: 760px) {
+  .topbar-inner {
+    padding: 0 var(--sp-4);
+    gap: var(--sp-2);
+  }
+
+  .origin {
+    display: none;
+  }
+
+  /* Keep the mark, drop the wordmark, and let the tabs take the rest. */
+  .brand span {
+    display: none;
+  }
+
+  .tabs {
+    flex: 1;
+    min-width: 0;
+    justify-content: flex-start;
+  }
+
+  .tab {
+    padding: 0 10px;
+    font-size: var(--fs-13);
+  }
+
+  .topbar-right {
+    gap: var(--sp-2);
+  }
+
+  .page {
+    padding: var(--sp-5) var(--sp-4) var(--sp-8);
+  }
+
+  .page-head h1 {
+    font-size: var(--fs-22);
+  }
+}
+
+@media (max-width: 420px) {
+  .topbar-inner {
+    padding: 0 var(--sp-3);
+  }
+
+  .tab {
+    padding: 0 8px;
+  }
+}

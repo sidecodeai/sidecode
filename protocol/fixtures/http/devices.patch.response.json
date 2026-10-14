@@ -1,0 +1,141 @@
+{
+  "device": {
+    "device_id": "c5efb1ec-2912-4619-90f7-93b5172fd712",
+    "name": "studio",
+    "platform": "macos",
+    "hostname": "mac-studio.local",
+    "arch": "arm64",
+    "client_version": "0.1.0",
+    "online": true,
+    "last_seen": 1788944400000,
+    "created_at": 1788426000000,
+    "latency_ms": 18,
+    "agents": [
+      {
+        "agent": "claude",
+        "available": true,
+        "version": "2.1.266",
+        "path": "/Users/me/.local/bin/claude",
+        "models": [
+          {
+            "id": "claude-opus-4-6",
+            "label": "Opus 4.6"
+          },
+          {
+            "id": "claude-sonnet-4-5",
+            "label": "Sonnet 4.5"
+          },
+          {
+            "id": "claude-haiku-4-5",
+            "label": "Haiku 4.5"
+          }
+        ],
+        "default_model": "claude-sonnet-4-5",
+        "permission_modes": [
+          {
+            "id": "default",
+            "label": "Ask before edits"
+          },
+          {
+            "id": "acceptEdits",
+            "label": "Auto-accept edits"
+          },
+          {
+            "id": "plan",
+            "label": "Plan mode"
+          },
+          {
+            "id": "bypassPermissions",
+            "label": "Bypass permissions"
+          }
+        ],
+        "default_permission_mode": "default",
+        "efforts": [
+          {
+            "id": "low",
+            "label": "Low"
+          },
+          {
+            "id": "medium",
+            "label": "Medium"
+          },
+          {
+            "id": "high",
+            "label": "High"
+          },
+          {
+            "id": "max",
+            "label": "Max"
+          }
+        ],
+        "default_effort": "medium",
+        "capabilities": [
+          "worktree",
+          "takeover",
+          "interrupt",
+          "queue",
+          "attachments",
+          "effort",
+          "history"
+        ]
+      },
+      {
+        "agent": "codex",
+        "available": true,
+        "version": "0.153.4",
+        "path": "/opt/homebrew/bin/codex",
+        "models": [
+          {
+            "id": "gpt-5.4-codex",
+            "label": "GPT-5.4 Codex"
+          },
+          {
+            "id": "gpt-5.4-codex-mini",
+            "label": "GPT-5.4 Codex mini"
+          }
+        ],
+        "default_model": "gpt-5.4-codex",
+        "permission_modes": [
+          {
+            "id": "untrusted",
+            "label": "Ask for everything"
+          },
+          {
+            "id": "on-request",
+            "label": "Ask when needed"
+          },
+          {
+            "id": "never",
+            "label": "Never ask"
+          }
+        ],
+        "default_permission_mode": "on-request",
+        "efforts": [
+          {
+            "id": "low",
+            "label": "Low"
+          },
+          {
+            "id": "medium",
+            "label": "Medium"
+          },
+          {
+            "id": "high",
+            "label": "High"
+          }
+        ],
+        "default_effort": "medium",
+        "capabilities": [
+          "worktree",
+          "interrupt",
+          "queue",
+          "steer",
+          "attachments",
+          "effort",
+          "history",
+          "commands"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "subscription": {
+    "endpoint": "https://web.push.apple.com/QK9x2Lm4Vb7Nc0Zp",
+    "expirationTime": null,
+    "keys": {
+      "p256dh": "BM3kQ8vT1yR5nW7cZ2aX9dF4gH6jL0pS",
+      "auth": "9tR2wX5nQ7vB1cM4"
+    }
+  }
+}

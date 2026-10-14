@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://remote-control.dev/schema/v1/device_frames.json",
+  "title": "remote-control device <-> gateway frames (protocol v1)",
+  "description": "Every JSON text frame on WS /ws/device, in both directions. The socket is authenticated with `Authorization: Bearer <device_token>`. Discriminated by `type`. additionalProperties stays open: unknown fields must be ignored.",
+  "$ref": "#/$defs/DeviceFrame",
+  "$defs": {
+    "DeviceFrame": {
+      "oneOf": [
+        { "$ref": "#/$defs/Hello" },
+        { "$ref": "#/$defs/HelloAck" },
+        { "$ref": "#/$defs/Preferences" },
+        { "$ref": "#/$defs/SessionUpdated" },
+        { "$ref": "#/$defs/SessionRemoved" },
+        { "$ref": "#/$defs/SessionEvent" },
+        { "$ref": "#/$defs/AgentsUpdated" },
+        { "$ref": "#/$defs/UpdateFailed" },
+        { "$ref": "#/$defs/TerminalOutput" },
+        { "$ref": "#/$defs/TerminalExited" },
+        { "$ref": "#/$defs/Ping" },
+        { "$ref": "#/$defs/Pong" },
+        { "$ref": "#/$defs/Reply" },
+        { "$ref": "#/$defs/ForwardedRequest" }
+      ]
+    },
+
+    "ConnectionId": {
+      "description": "Opaque app-connection id stamped by the gateway and echoed by the device.",
+      "type": "string",
+      "minLength": 1
+    },
+
+    "Hello": {
+      "description": "Device -> gateway, first frame on the socket. A second connection for the same device replaces the first; the old socket is closed with code 4001.",
+      "type": "object",
+      "properties": {
+        "type": { "const": "hello" },
+        "protocol": { "const": 1 },
+        "client_version": { "type": "string", "minLength": 1 },
+        "client_build": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$", "description": "SHA-256 of the installed wheel, or null (A22)." },
+        "name": { "type": "string", "minLength": 1 },
+        "platform": { "$ref": "objects.json#/$defs/Platform" },
+        "hostname": { "type": "string" },
+        "arch": { "$ref": "objects.json#/$defs/Arch" },
+        "agents": { "type": "array", "items": { "$ref": "objects.json#/$defs/AgentInfo" } },
+        "sessions": { "type": "array", "items": { "$ref": "objects.json#/$defs/Session" } },
+        "terminal": { "type": "boolean", "description": "Whether this device offers a shell over the gateway (7.3, A38)." }
+      },
+      "required": ["type", "protocol", "client_version", "name", "platform", "hostname", "arch", "agents", "sessions"]
+    },
+
+    "HelloAck": {
+      "description": "Gateway -> device, answer to hello.",
+      "type": "object",
+      "properties": {
+        "type": { "const": "hello_ack" },
+        "device_id": { "$ref": "objects.json#/$defs/Uuid" },
+        "server_time": { "$ref": "objects.json#/$defs/Timestamp" },
+        "config": {
+          "type": "object",
+          "properties": {
+            "delta_flush_ms": { "type": "integer", "minimum": 0 },
+            "max_event_bytes": { "type": "integer", "minimum": 1 }
+          },
+          "required": ["delta_flush_ms", "max_event_bytes"]
+        }
+      },
+      "required": ["type", "device_id", "server_time", "config"]
+    },
+
+    "Preferences": {
+      "description": "Gateway -> device, after hello_ack and whenever the account's preferences change (A35).",
+      "type": "object",
+      "properties": {
+        "type": { "const": "preferences" },
+        "preferences": { "$ref": "objects.json#/$defs/Preferences" }
+      },
+      "required": ["type", "preferences"]
+    },
+
+    "SessionUpdated": {
+      "description": "Device -> gateway, unsolicited.",
+      "type": "object",
+      "properties": {
+        "type": { "const": "session.updated" },
+        "session": { "$ref": "objects.json#/$defs/Session" }
+      },
+      "required": ["type", "session"]
+    },
+    "SessionRemoved": {
+      "description": "Device -> gateway, unsolicited.",
+      "type": "object",
+      "properties": {
+        "type": { "const": "session.removed" },
+        "session_id": { "$ref": "objects.json#/$defs/Id" }
+      },
+      "required": ["type", "session_id"]
+    },
+    "SessionEvent": {
+      "description": "Device -> gateway, unsolicited. Frames larger than 64 KiB are dropped by the gateway.",
+      "type": "object",
+      "properties": {
+        "type": { "const": "session.event" },
+        "session_id": { "$ref": "objects.json#/$defs/Id" },
+        "event": { "$ref": "events.json#/$defs/Event" }
+      },
+      "required": ["type", "session_id", "event"]
+    },
+    "AgentsUpdated": {
+      "description": "Device -> gateway, unsolicited.",
+      "type": "object",
+      "properties": {
+        "type": { "const": "agents.updated" },
+        "agents": { "type": "array", "items": { "$ref": "objects.json#/$defs/AgentInfo" } }
+      },
+      "required": ["type", "agents"]
+    },
+    "UpdateFailed": {
+      "description": "Device -> gateway, unsolicited: an app-requested client update did not complete and the old client is still running (A22).",
+      "type": "object",
+      "properties": {
+        "type": { "const": "update.failed" },
+        "message": { "type": "string", "minLength": 1, "maxLength": 400 }
+      },
+      "required": ["type", "message"]
+    },
+    "TerminalOutput": {
+      "description": "Device -> gateway: bytes a terminal produced, for the one app connection `to` names (7.3, A38). Base64, at most 16 KiB decoded; `seq` starts at 1 and rises by one per frame per terminal.",
+      "type": "object",
+      "properties": {
+        "type": { "const": "terminal.output" },
+        "terminal_id": { "$ref": "objects.json#/$defs/Uuid" },
+        "to": { "$ref": "#/$defs/ConnectionId" },
+        "seq": { "type": "integer", "minimum": 1 },
+        "data": { "type": "string", "pattern": "^[A-Za-z0-9+/]*={0,2}$", "maxLength": 21848 }
+      },
+      "required": ["type", "terminal_id", "to", "seq", "data"]
+    },
+    "TerminalExited": {
+      "description": "Device -> gateway: the shell ended and the terminal is gone (A38).",
+      "type": "object",
+      "properties": {
+        "type": { "const": "terminal.exited" },
+        "terminal_id": { "$ref": "objects.json#/$defs/Uuid" },
+        "to": { "$ref": "#/$defs/ConnectionId" },
+        "code": { "type": ["integer", "null"] }
+      },
+      "required": ["type", "terminal_id", "to", "code"]
+    },
+    "Ping": {
+      "description": "Gateway -> device every 25 s.",
+      "type": "object",
+      "properties": { "type": { "const": "ping" } },
+      "required": ["type"]
+    },
+    "Pong": {
+      "description": "Device -> gateway, answer to ping.",
+      "type": "object",
+      "properties": { "type": { "const": "pong" } },
+      "required": ["type"]
+    },
+
+    "ReplyBase": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "reply" },
+        "id": { "description": "Echoed from the forwarded request.", "$ref": "objects.json#/$defs/Uuid" },
+        "from": { "$ref": "#/$defs/ConnectionId" },
+        "ok": { "type": "boolean" }
+      },
+      "required": ["type", "id", "from", "ok"]
+    },
+    "ReplyOk": {
+      "allOf": [{ "$ref": "#/$defs/ReplyBase" }],
+      "type": "object",
+      "properties": {
+        "ok": { "const": true },
+        "result": { "type": "object" }
+      },
+      "required": ["result"]
+    },
+    "ReplyError": {
+      "allOf": [{ "$ref": "#/$defs/ReplyBase" }],
+      "type": "object",
+      "properties": {
+        "ok": { "const": false },
+        "error": { "$ref": "objects.json#/$defs/Error" }
+      },
+      "required": ["error"]
+    },
+    "Reply": {
+      "description": "Device -> gateway. The gateway strips `from` and delivers the reply only to that app connection. Result shapes are the app_frames.json Result* defs.",
+      "oneOf": [{ "$ref": "#/$defs/ReplyOk" }, { "$ref": "#/$defs/ReplyError" }]
+    },
+
+    "ForwardedRequest": {
+      "description": "Gateway -> device: an app request forwarded unchanged, plus `from` (the app connection id) and `device_id` (added by the gateway when the request was addressed by session_id).",
+      "allOf": [
+        { "$ref": "app_frames.json#/$defs/ForwardableRequest" },
+        {
+          "type": "object",
+          "properties": {
+            "from": { "$ref": "#/$defs/ConnectionId" },
+            "device_id": { "$ref": "objects.json#/$defs/Uuid" }
+          },
+          "required": ["from", "device_id"]
+        }
+      ]
+    }
+  }
+}

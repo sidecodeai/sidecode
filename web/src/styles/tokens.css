@@ -1,0 +1,131 @@
+/*
+ * Design tokens — see docs/DESIGN.md. Light theme only in v1.
+ *
+ * The app is one canvas. Sections are separated by spacing and type, not by
+ * bordered boxes: a group is a single soft surface, rows inside it are parted
+ * by a hairline at most, and no element carries a border, a shadow and a
+ * divider at once.
+ */
+:root {
+  /* surfaces */
+  --canvas: #f5f5f4;
+  --surface: #ffffff;
+  --surface-sunken: #fafaf9;
+  --surface-muted: #f1f1ef;
+  --surface-hover: #f5f5f4;
+  --surface-active: #ececea;
+  --overlay: rgba(24, 24, 22, 0.28);
+
+  /* lines */
+  --line: #e6e5e1;
+  --line-strong: #d6d5d0;
+  /* A bar's edge — the chat header, a page's section break — and never a line
+     between two rows: every list, Settings included, is parted by spacing. */
+  --hairline: rgba(17, 17, 17, 0.08);
+
+  /* A list row under the pointer, and the stronger step the selected row holds. */
+  --hover: rgba(17, 17, 17, 0.04);
+  --hover-selected: rgba(17, 17, 17, 0.07);
+
+  /* Every device and session row is this tall, whichever list it sits in.
+     A narrow screen stacks the row's last line, and a phone stacks the device
+     meta as well, so each stacked form has a height of its own. */
+  --row-h: 64px;
+  --row-h-stacked: 96px;
+  --row-h-stacked-tall: 108px;
+  /* Three lines of text — a title and two meta lines — with the same breathing room. */
+  --row-h-three: 84px;
+  /* A settings row is a floor, not a clip: a sentence that wraps makes its row
+     taller and moves nothing at the widths where it does not wrap. */
+  --row-h-setting: 56px;
+
+  /* ink */
+  --ink: #111111;
+  --ink-secondary: #6b6b6b;
+  --ink-tertiary: #767570;
+  --ink-inverse: #ffffff;
+
+  /* status */
+  --running: #22a06b;
+  --running-soft: #e7f4ee;
+  /* Amber, not orange: a blocked session reads as yellow beside the greens,
+     and stays above 3:1 on every row background (3.67:1 on --surface). */
+  --attention: #b07c00;
+  --attention-soft: #fbf3e0;
+  --idle: #b5b5b0;
+  --danger: #d23f31;
+  --danger-soft: #fdeceb;
+  --accent: #111111;
+  /* A status dot, and the red dot of a session that stopped and waits for you
+     (A47), which is a step larger so it reads apart from the status beside it. */
+  --status-dot: 7px;
+  --unseen-dot: 8px;
+
+  /* diff */
+  --diff-add: #1f7a4d;
+  --diff-add-bg: #eefaf3;
+  --diff-del: #c23a2c;
+  --diff-del-bg: #fdeeec;
+
+  /* type */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+  --fs-11: 11px;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-15: 15px;
+  --fs-16: 16px;
+  --fs-17: 17px;
+  --fs-22: 22px;
+  --fs-30: 30px;
+
+  /* space */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+
+  /* radii */
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-pill: 999px;
+
+  /* elevation */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.06);
+  /* A group surface is lifted off the canvas by this alone — never a border. */
+  --shadow-soft: 0 1px 2px rgba(24, 24, 22, 0.04), 0 0 1px rgba(24, 24, 22, 0.06);
+  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.1);
+  --shadow-modal: 0 24px 60px rgba(0, 0, 0, 0.12);
+
+  /* motion */
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+
+  /*
+   * Layering. A popover is always drawn by the thing that opened it, so it has
+   * to clear every overlay: its panel is a portal on `document.body`, a sibling
+   * of the modal and drawer overlays rather than a descendant.
+   */
+  --z-sticky: 20;
+  --z-overlay: 60;
+  --z-popover: 100;
+
+  /* layout */
+  --sidebar-w: 264px;
+  --header-h: 60px;
+  --content-max: 1080px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur: 0ms;
+  }
+}
