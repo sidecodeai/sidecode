@@ -5,14 +5,16 @@ static checks run in CI (`.github/workflows/ci.yml`) on every push to `main` and
 
 ## Checks
 
-Run each from the repository root. They need `uv` (Python 3.12) and Node 22 or newer.
+Run each from the repository root. They need `uv` (Python 3.12) and Node 22 or newer. The
+second mypy pass checks the Linux view of `sys.platform` branches, which CI sees and a Mac does
+not.
 
 ```sh
 (cd protocol && uv run --no-project --with jsonschema python scripts/validate_fixtures.py)
 (cd gateway && uv sync --locked && uv run ruff check . && uv run ruff format --check . \
-  && uv run mypy rc_gateway tests && uv run pytest -q)
+  && uv run mypy rc_gateway tests && uv run mypy --platform linux rc_gateway tests && uv run pytest -q)
 (cd client && uv sync --locked && uv run ruff check . && uv run ruff format --check . \
-  && uv run mypy rc_client tests && uv run pytest -q)
+  && uv run mypy rc_client tests && uv run mypy --platform linux rc_client tests && uv run pytest -q)
 (cd web && npm ci && npm test -- --run && npm run typecheck && npm run lint && npm run build)
 docker build -f gateway/Dockerfile -t rc-gateway:check .
 ```

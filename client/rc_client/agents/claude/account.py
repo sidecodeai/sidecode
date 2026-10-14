@@ -28,6 +28,9 @@ PROVIDER = "anthropic"
 VENDOR_HOST = "api.anthropic.com"
 KEYCHAIN_SERVICE = "Claude Code-credentials"
 KEYCHAIN_TIMEOUT = 5.0
+# A flag rather than an inline `sys.platform` test, so a type check run on Linux
+# still reads the Keychain path below as reachable.
+IS_MACOS = sys.platform == "darwin"
 EXPIRED = "signed-in token expired; open Claude Code once to refresh it"
 # Either of these, or an `apiKeyHelper`, puts Claude Code on a key rather than
 # on the person's own Anthropic account.
@@ -73,7 +76,7 @@ async def detect(limits: bool, keychain: KeychainReader | None = None) -> list[A
 
 async def read_keychain() -> str | None:
     """The Claude Code credential item, as the `security` CLI prints it."""
-    if sys.platform != "darwin":
+    if not IS_MACOS:
         return None
     try:
         process = await asyncio.create_subprocess_exec(
