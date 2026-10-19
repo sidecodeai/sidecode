@@ -51,7 +51,7 @@ about to download will run as a service, so the path has to be one nobody can si
 | Flag | Effect |
 | --- | --- |
 | `--pair RC-XXXX-XXXX` | The pairing code from an app. Omit it to pair by scanning instead |
-| `--name NAME` | The device name shown in the apps. Defaults to the hostname |
+| `--name NAME` | The device name shown in the apps until it is renamed there. Defaults to the hostname |
 | `--proxy env\|URL` | Reach the gateway through an http or https proxy: `env` takes the one this host's proxy variables name, a URL names one and is exported for the installer's own `curl` and `uv` steps. The default dials directly; see "Reaching the gateway through a proxy" |
 | `--gateway ORIGIN` | Override the origin baked into the script |
 | `--manual` | Print the steps instead of running them, for a host without `curl` in the pipeline |
@@ -2002,7 +2002,7 @@ daemon for a change to take effect.
 | --- | --- | --- |
 | `gateway_origin` | from enrollment | The gateway this device dials |
 | `device_id`, `device_token` | from enrollment | The device's identity and its bearer token |
-| `name` | the hostname | The device name shown in the apps |
+| `name` | the hostname | The name the device enrolled with, which the apps show until it is renamed there. The daemon still sends it in `hello`, where the gateway does not apply it, so editing it afterwards renames nothing (A50) |
 | `[mirror] max_sessions` | `50` | How many terminal sessions the initial mirror import publishes |
 | `[mirror] max_age_days` | `14` | How far back that import reaches |
 | `[claude] setting_sources` | `["project", "local"]` | Which Claude settings layers a remote session loads |

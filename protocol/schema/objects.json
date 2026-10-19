@@ -528,7 +528,8 @@
         },
         "name": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "The name the device enrolled with, changed only by PATCH /api/devices/{device_id} (A50)."
         },
         "platform": {
           "$ref": "#/$defs/Platform"

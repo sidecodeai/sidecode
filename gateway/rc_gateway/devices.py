@@ -359,7 +359,10 @@ class DeviceStore:
         terminal: bool | None = None,
         **fields: str,
     ) -> None:
-        """Persist the identity, agent inventory and terminal capability a device announced."""
+        """Persist the machine facts, agent inventory and terminal capability a device announced.
+
+        Never its name (A50): enrolment sets that, and only a rename changes it.
+        """
         await asyncio.to_thread(self._describe, device_id, fields, agents, terminal)
 
     def _describe(
@@ -369,7 +372,7 @@ class DeviceStore:
         agents: list[dict[str, Any]] | None,
         terminal: bool | None = None,
     ) -> None:
-        allowed = {"name", "platform", "hostname", "arch", "client_version"}
+        allowed = {"platform", "hostname", "arch", "client_version"}
         updates: dict[str, Any] = {
             key: value for key, value in fields.items() if key in allowed and value
         }

@@ -38,7 +38,7 @@
         "protocol": { "const": 1 },
         "client_version": { "type": "string", "minLength": 1 },
         "client_build": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$", "description": "SHA-256 of the installed wheel, or null (A22)." },
-        "name": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1, "description": "What the device calls itself, its configured name or its hostname. Accepted and not applied: the device keeps the name it enrolled with until a rename (A50)." },
         "platform": { "$ref": "objects.json#/$defs/Platform" },
         "hostname": { "type": "string" },
         "arch": { "$ref": "objects.json#/$defs/Arch" },

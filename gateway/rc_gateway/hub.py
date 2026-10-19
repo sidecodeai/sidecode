@@ -465,10 +465,11 @@ class Hub:
             return False
         connection.hello = frame
         connection.agents = _agent_list(frame.get("agents"))
+        # A50: `name` is what the device calls itself, and it is not applied. Enrolment names the
+        # device and only a rename changes it, so a reconnect never undoes what a person chose.
         await self.device_store.describe(
             connection.device_id,
             agents=connection.agents,
-            name=text_field(frame, "name"),
             platform=text_field(frame, "platform"),
             hostname=text_field(frame, "hostname"),
             arch=text_field(frame, "arch"),

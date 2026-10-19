@@ -75,7 +75,7 @@ def test_health_and_config_match_the_fixture_shape(
 
 
 def test_device_hello_fixture_is_accepted(client: TestClient, auth: dict[str, str]) -> None:
-    enrolled = enroll_device(client, auth)
+    enrolled = enroll_device(client, auth, name="enrolled-name")
     hello = fixture("device", "hello.json")
     expected_ack = fixture("device", "hello_ack.json")
     headers = {"Authorization": f"Bearer {enrolled['device_token']}"}
@@ -94,7 +94,10 @@ def test_device_hello_fixture_is_accepted(client: TestClient, auth: dict[str, st
     assert {item["device_id"] for item in sessions} == {enrolled["device_id"]}
 
     devices = client.get("/api/devices", headers=auth).json()["devices"]
-    assert devices[0]["name"] == hello["name"]
+    # A50: the hello's `name` is accepted and not applied; the device keeps its enrolled name.
+    assert hello["name"] != "enrolled-name"
+    assert devices[0]["name"] == "enrolled-name"
+    assert devices[0]["hostname"] == hello["hostname"]
     assert [agent["agent"] for agent in devices[0]["agents"]] == ["claude", "codex"]
 
 

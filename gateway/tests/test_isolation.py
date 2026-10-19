@@ -19,6 +19,7 @@ from .conftest import add_member, device_hello, drain_until, enroll_device, sess
 
 SESSION_A = "aaaa1111-2222-4333-8444-555555555555"
 SESSION_B = "bbbb1111-2222-4333-8444-555555555555"
+UNKNOWN_DEVICE = "cccc1111-2222-4333-8444-555555555555"
 
 
 def _headers(enrolled: dict[str, Any]) -> dict[str, str]:
@@ -294,3 +295,19 @@ def test_pairing_progress_reaches_only_the_account_that_minted_the_code(
         progress = drain_until(watcher, "pairing.progress")
     assert progress["code"] == member_code
     assert progress["step"] == "waiting"
+
+
+def test_a_member_cannot_rename_another_accounts_device(
+    client: TestClient, auth: dict[str, str]
+) -> None:
+    member = add_member(client, auth, "alice")
+    mine = enroll_device(client, auth, name="admin-mac")
+    refused = client.patch(
+        f"/api/devices/{mine['device_id']}", json={"name": "taken"}, headers=member
+    )
+    unknown = client.patch(f"/api/devices/{UNKNOWN_DEVICE}", json={"name": "taken"}, headers=member)
+    # Indistinguishable from a device that does not exist, and the name stays the owner's.
+    assert refused.status_code == unknown.status_code == 404
+    assert refused.json() == unknown.json()
+    devices = client.get("/api/devices", headers=auth).json()["devices"]
+    assert [item["name"] for item in devices] == ["admin-mac"]

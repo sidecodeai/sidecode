@@ -379,7 +379,7 @@ with a note. Only the caller's own preferences are readable or writable.
 | Method | Path | Request | Response | Notes |
 | --- | --- | --- | --- | --- |
 | GET | `/api/devices` | – | `DeviceListResponse` | |
-| PATCH | `/api/devices/{device_id}` | `DevicePatchRequest` | `DeviceResponse` | Renames the device |
+| PATCH | `/api/devices/{device_id}` | `DevicePatchRequest` | `DeviceResponse` | Renames the device. The name holds until the next rename; the device's `hello` never changes it (A50) |
 | DELETE | `/api/devices/{device_id}` | – | `OkResponse` | Revokes the device token, closes its socket, drops its sessions from the gateway index |
 | POST | `/api/devices/pairing` | – | `PairingResponse` | Code format `RC-XXXX-XXXX`, Crockford base32 without I, L, O and U. Single use, 10-minute lifetime. |
 | DELETE | `/api/devices/pairing/{code}` | – | `OkResponse` | Cancels an outstanding code |
@@ -711,7 +711,7 @@ Schema: `schema/objects.json`. These objects appear in HTTP bodies and in frames
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `device_id` | uuid | yes | Assigned by the gateway at enrollment |
-| `name` | string | yes | User-editable display name |
+| `name` | string | yes | User-editable display name: the `name` the device enrolled with, changed only by `PATCH /api/devices/{device_id}` (A50) |
 | `platform` | `macos` \| `linux` | yes | |
 | `hostname` | string | yes | Reported by the device |
 | `arch` | `arm64` \| `x86_64` | yes | |
@@ -3212,6 +3212,11 @@ Schema: `schema/device_frames.json`. Endpoint `WS /ws/device`, header
 The device sends `hello` first and the gateway answers `hello_ack`. A second connection for the same
 device replaces the first; the old socket is closed with code 4001.
 
+`hello.name` is what the device calls itself, its configured name or its hostname. The gateway
+accepts it and does not apply it (A50): a device keeps the `name` it enrolled with until
+`PATCH /api/devices/{device_id}` renames it, so neither a reconnect nor a gateway restart undoes a
+rename. The rest of what `hello` says about the machine is stored on every connection.
+
 | Direction | Type | Payload |
 | --- | --- | --- |
 | device → gateway | `hello` | `protocol`, `client_version`, `client_build?`, `name`, `platform`, `hostname`, `arch`, `agents`, `sessions`, `terminal?` (A38) |
@@ -3765,6 +3770,9 @@ one app connection that asked. The gateway relays bytes and never reads them.
 - [ ] Has its speech provider detect the language of every transcription, on `/ws/stt` and
       `POST /api/stt/transcribe` alike; ignores a `language` a client sends; reports `stt.languages`
       as `["auto"]` (A44).
+- [ ] Names a device with the `name` it enrolled with and changes it only on
+      `PATCH /api/devices/{device_id}`, for the owning account alone; accepts `name` in `hello`
+      without applying it, so a rename survives reconnects and restarts (A50).
 
 ### 9.2 Device
 
@@ -4561,3 +4569,13 @@ states what A39's close does with held messages: they are discarded, never sent,
 publishes an empty `queue` with the close. Nothing else changes on the wire;
 `fixtures/objects/agent.claude-attach.json` and `agent.grok.json` show the new values. See 4.2,
 4.8, 6.3 and 9.
+
+**2026-10-19 A50 — a device keeps the name it was given.** The gateway wrote `hello.name` over a
+device's stored name on every connection, and a device names itself from its own configuration or
+its hostname, so a rename made in an app lasted only until the next reconnect or gateway restart. A
+device's name is now the `name` it enrolled with until `PATCH /api/devices/{device_id}` renames it:
+the gateway accepts `name` in `hello` without applying it and stores the rest of `hello` as before.
+Changing the name in a device's own configuration after enrollment no longer renames it; an app's
+Rename does. `name` stays required in `hello`, so devices and gateways on either side of this
+amendment exchange the same frame, and a gateway that predates it still overwrites a rename.
+Nothing else changes on the wire. See 3.3, 4.1, 7 and 9.1.

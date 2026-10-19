@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from rc_gateway.app import build_state, create_app
 from rc_gateway.devices import (
     DeviceStore,
     generate_pairing_code,
@@ -18,11 +19,14 @@ from rc_gateway.state import GatewayState
 
 from .conftest import (
     ORIGIN,
+    PASSWORD,
     add_member,
     close_code_for,
     device_hello,
     drain_until,
     enroll_device,
+    make_config,
+    sign_in,
 )
 
 
@@ -119,6 +123,61 @@ def test_rename_broadcasts_to_apps(client: TestClient, auth: dict[str, str]) -> 
         assert renamed.json()["device"]["name"] == "office"
         pushed = drain_until(app, "device.updated")
         assert pushed["device"]["name"] == "office"
+
+
+def test_a_rename_survives_the_devices_next_hello(client: TestClient, auth: dict[str, str]) -> None:
+    """A50: a device names itself in every `hello`, and that no longer undoes a rename."""
+    enrolled = enroll_device(client, auth)
+    headers = {"Authorization": f"Bearer {enrolled['device_token']}"}
+    with client.websocket_connect("/ws/device", headers=headers) as first:
+        first.send_json(device_hello())
+        first.receive_json()
+        renamed = client.patch(
+            f"/api/devices/{enrolled['device_id']}", json={"name": "office"}, headers=auth
+        )
+        assert renamed.status_code == 200, renamed.text
+        with client.websocket_connect("/ws/app", headers=auth) as app:
+            drain_until(app, "hello")
+            # The device dials again and names itself as its config does, not as it was renamed.
+            with client.websocket_connect("/ws/device", headers=headers) as again:
+                again.send_json(
+                    device_hello(
+                        name="mac-studio",
+                        hostname="studio-2.local",
+                        client_version="0.2.0",
+                        terminal=True,
+                    )
+                )
+                again.receive_json()
+                announced = drain_until(app, "device.updated")["device"]
+    listed = client.get("/api/devices", headers=auth).json()["devices"][0]
+    for device in (announced, listed):
+        assert device["name"] == "office"
+        # Everything else the hello says is stored as before.
+        assert device["hostname"] == "studio-2.local"
+        assert device["client_version"] == "0.2.0"
+        assert device["terminal"] is True
+
+
+def test_a_rename_survives_a_gateway_restart(tmp_path: Path) -> None:
+    """A50: the name the person chose outlives the process and the first hello after it."""
+    config = make_config(tmp_path)
+    with TestClient(create_app(build_state(config))) as first:
+        auth = {"Authorization": f"Bearer {sign_in(first, 'admin', PASSWORD)}"}
+        enrolled = enroll_device(first, auth)
+        renamed = first.patch(
+            f"/api/devices/{enrolled['device_id']}", json={"name": "office"}, headers=auth
+        )
+        assert renamed.status_code == 200, renamed.text
+
+    # A brand new process over the same DATA_DIR, as a restart produces.
+    with TestClient(create_app(build_state(config))) as second:
+        headers = {"Authorization": f"Bearer {enrolled['device_token']}"}
+        with second.websocket_connect("/ws/device", headers=headers) as device:
+            device.send_json(device_hello())
+            device.receive_json()
+        listed = second.get("/api/devices", headers=auth).json()["devices"]
+    assert [item["name"] for item in listed] == ["office"]
 
 
 def test_device_socket_rejects_a_bad_token(client: TestClient) -> None:

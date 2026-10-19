@@ -391,7 +391,7 @@ carries: `agent`, `control`, `state`, `archived`, `updated_at` and `title`.
 **Devices are the outer grouping.** A device gets a group when at least one of its sessions passes
 the current filters; a device with nothing to show is not drawn at all. Devices holding something
 active come first, and each half of the list is ordered by its most recent activity. The header
-carries the device name exactly as the device reported it, its online dot and a disclosure chevron.
+carries the device name exactly as the gateway reports it, its online dot and a disclosure chevron.
 Groups are expanded by default, collapse on a click or a tap, and the choice is kept per device id —
 `localStorage` on the web, the app's own settings on the phone.
 

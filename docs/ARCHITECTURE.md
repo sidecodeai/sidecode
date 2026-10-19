@@ -741,7 +741,7 @@ deliberately absent: a device is one person's machine.
 
 ## The contract
 
-`protocol/PROTOCOL.md` is normative. Its amendments (A1…A49, dated at the end of it) are all part
+`protocol/PROTOCOL.md` is normative. Its amendments (A1…A50, dated at the end of it) are all part
 of the frozen contract; the first eleven, which shaped the architecture above, are:
 
 | Amendment | Ruling |
