@@ -1,8 +1,8 @@
 # The device daemon
 
 `rc-client` runs on every machine where your agents live. It dials out to the gateway, drives the
-locally installed Claude Code and Codex CLIs, and mirrors the sessions you start yourself in a
-terminal. Nothing listens on the machine and no model credential ever leaves it.
+locally installed Claude Code, Codex, Grok Build and pi CLIs, and mirrors the sessions you start
+yourself in a terminal. Nothing listens on the machine and no model credential ever leaves it.
 
 ## What the installer does
 
@@ -18,8 +18,9 @@ curl -fsSL https://rc.example.com/install.sh | sh -s -- --pair RC-7K42-QX9M  # p
 It installs `uv` into `~/.local/bin` if it is not already there, installs Python 3.12, creates a
 private virtual environment at `~/.rc-client/venv`, downloads the `rc_client` wheel from the
 gateway, records which wheel that was, enrolls the device, registers the background service, starts
-it, installs the `claude` shim, sets up the shared Codex daemon, installs the pi extension, and
-prints the agents it found. Re-running upgrades in place.
+it, installs the `claude` shim, sets up the shared Codex daemon, installs the pi extension, turns on
+Grok Build's leader mode (`rc-client grok setup`), and prints the agents it found. Re-running
+upgrades in place.
 
 It reports as it goes. A bold title and a one-line tagline open the run, then each step is a single
 line: a braille spinner and a present-tense label while it works, a green `✓` and the result when it
@@ -27,10 +28,10 @@ is done. The step's own output is captured, not printed, so a successful run is 
 a step that fails prints a red `✗` and that captured output indented underneath, and stops there.
 Enrolment is the exception and keeps its terminal: the QR code, the claim URL and the `Enrolled as …`
 lines all pass straight through, with the `✓ Enrolled` line printed after them. The `claude` shim,
-the shared Codex daemon and the pi extension are never fatal — each one that does not come up prints
-a dim `–` line naming the `status` command that explains it, and the install carries on. The run ends
-with **Detected agents**, one line per agent with its version or `(not installed)`, and a two-column
-list of the commands you are most likely to want next.
+the shared Codex daemon, the pi extension and the Grok leader are never fatal — each one that does
+not come up prints a dim `–` line naming the `status` command that explains it, and the install
+carries on. The run ends with **Detected agents**, one line per agent with its version or
+`(not installed)`, and a two-column list of the commands you are most likely to want next.
 
 The colours, the spinner, the hidden cursor and the Unicode marks are for a terminal only. Piped
 into a file or another program, with `TERM=dumb`, or with `NO_COLOR` set, the same lines print with
@@ -57,6 +58,7 @@ about to download will run as a service, so the path has to be one nobody can si
 | `--manual` | Print the steps instead of running them, for a host without `curl` in the pipeline |
 | `--no-shell-rc` | Do not put the shim directory in front of `PATH` in your shell startup file |
 | `--no-codex` | Skip the shared Codex app-server daemon setup |
+| `--no-grok` | Leave Grok's leader flag alone in `~/.grok/config.toml` |
 | `--uninstall` | Stop and remove the service, keeping `~/.rc-client` |
 | `-h`, `--help` | Usage |
 
@@ -383,8 +385,10 @@ add` on a new branch under `<repo>/.rc-worktrees/<slug>` and uses that as the wo
 an agent can work without touching your checkout.
 
 A session id is the agent's own: for Claude it is the Claude session id, named up front and passed
-to the SDK; for Codex it is the thread id. That is what makes a session resumable and what lets a
-terminal session and a remote session be the same thing.
+to the SDK; for Codex it is the thread id; for Grok Build it is Grok's own session UUID; for pi it
+is pi's session id, named up front with `--session-id` when the device starts the session. That is
+what makes a session resumable and what lets a terminal session and a remote session be the same
+thing.
 
 The daemon queues a message that arrives while a turn is running and launches it at the turn
 boundary, with `trigger: "queue"` so the UI can tell a queued turn from a typed one. Codex sessions
@@ -691,6 +695,11 @@ Every ten seconds the daemon scans for agent sessions it did not create:
 - **Codex** — rollout files under `~/.codex/sessions`, identified by the `session_meta` record that
   starts each one. That record also says whose thread it is, and only this device's own threads and
   a terminal's are mirrored: see "Work another application owns" below.
+- **Grok Build** — update logs under `~/.grok/sessions`, for a `grok` the leader does not hold: see
+  "Terminal sessions outside the leader" below.
+
+pi needs no scan: its terminal sessions reach the device through the extension that
+`rc-client pi setup` installs (see "pi").
 
 A discovered session is published with `origin: "terminal"` and its rows are mirrored into the same
 block timeline, with `source: "terminal"` on the user messages. The mirror keeps its place in each
@@ -1943,8 +1952,10 @@ rc-client uninstall --purge   # also delete config, state and logs
 
 `uninstall` also deletes `bin/claude` and `state/claude-settings.json`, takes the pi extension back
 out of `~/.pi/agent/extensions/`, and strips the `# >>> remote-control >>>` block from your shell
-startup file. Pass `--no-shell-rc` to leave that file alone. pi, Claude Code and Codex themselves are
-left exactly as they were.
+startup file. Pass `--no-shell-rc` to leave that file alone. pi, Claude Code, Codex and Grok Build
+themselves are left exactly as they were, and so is the `[cli] use_leader = true` that
+`rc-client grok setup` wrote to `~/.grok/config.toml`: turn it off there if you no longer want
+Grok's leader mode.
 
 or, from the gateway's own script:
 
