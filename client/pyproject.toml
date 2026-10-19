@@ -1,7 +1,7 @@
 [project]
 name = "rc-client"
 version = "1.14.0"
-description = "remote-control device daemon: drives Claude Code and Codex on this machine"
+description = "remote-control device daemon: drives Claude Code, Codex, Grok Build and pi on this machine"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
