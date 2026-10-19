@@ -1,19 +1,22 @@
 # rc-client — remote-control device daemon
 
 `rc-client` runs on a developer machine, drives the coding agents installed
-there (Claude Code and Codex), and answers requests forwarded from the
-remote-control gateway. It dials out only: nothing listens on the device, and
-model credentials never leave it.
+there (Claude Code, Codex, Grok Build and pi), and answers requests forwarded
+from the remote-control gateway. It dials out only: nothing listens on the
+device, and model credentials never leave it.
 
 It also picks up sessions you started yourself in a terminal. A Claude session
-started through the installed `claude` shim, and any session started as a bare
-`codex`, is *attached* rather than mirrored: the apps get a live composer and
-the session's permission prompts, and the CLI keeps running throughout. Codex
-goes further still, because the whole machine shares one `codex app-server`
-daemon, so stop, settings and attachments work on a terminal session too.
-Anything the device cannot attach to is mirrored read-only and, for Claude, can
-be taken over while its terminal is idle. See "Attached terminal sessions" and
-"Codex on the shared daemon" in `docs/CLIENT.md`.
+started through the installed `claude` shim, a bare `codex` on the machine's
+shared `codex app-server` daemon, a `grok` started after `rc-client grok setup`
+has put Grok Build in leader mode, and a `pi` started after `rc-client pi setup`
+has installed the device's extension are *attached* rather than mirrored: the
+CLI keeps running, and the apps can send to it, stop it, change its model and
+effort, attach files and answer its permission prompts. The one-line installer
+runs both setup commands. Any other Claude, Codex or Grok session is mirrored
+read-only, and a Claude one can be taken over while its terminal is idle; a pi
+session started without the extension does not reach the apps. See "Attached
+terminal sessions", "Codex on the shared daemon", "Grok Build" and "pi" in
+`docs/CLIENT.md`.
 
 ## Install
 
@@ -42,6 +45,8 @@ remove the service.
 | `rc-client service install\|uninstall\|start\|stop\|status` | Manage the background service |
 | `rc-client shim install\|remove\|status [--no-shell-rc]` | Manage the `claude` shim that makes terminal sessions attachable |
 | `rc-client codex setup\|status [--no-install]` | Bring up and check the shared Codex app-server daemon |
+| `rc-client grok setup\|status` | Turn on Grok Build's leader mode in `~/.grok/config.toml` and check the leader that makes terminal Grok sessions attachable |
+| `rc-client pi setup\|status\|remove` | Install, check and remove the pi extension that makes terminal pi sessions attachable |
 | `rc-client channel` | The channel bridge Claude Code spawns; never run it by hand |
 | `rc-client uninstall [--purge] [--no-shell-rc]` | Remove the service and the shim, and with `--purge` the data |
 
@@ -119,8 +124,11 @@ survives logout).
   80 ms, applies the protocol size bounds, persists history and publishes
   session summaries.
 * **Adapters** — `agents/claude/` drives `claude-agent-sdk`; `agents/codex/`
-  drives a private `codex app-server` over stdio JSON-RPC. Both translate their
-  agent's output into the same block timeline.
+  drives a private `codex app-server` over stdio JSON-RPC; `agents/grok/` speaks
+  the Agent Client Protocol to Grok Build, on the machine's leader when it runs
+  one; `agents/pi/` runs `pi --mode rpc` over JSONL and joins terminal pi
+  sessions through the extension it installs. All four translate their agent's
+  output into the same block timeline.
 * **Codex daemon** (`agents/codex/daemon/`) — one JSON-RPC connection, spoken as
   WebSocket over the machine's shared `codex app-server` control socket, that
   becomes the session index and the event stream for every Codex thread when the
@@ -132,9 +140,11 @@ survives logout).
   kept ten minutes for an `attach` before it ends. Nothing that travels through
   a terminal is logged.
 * **Mirroring** (`sessions/mirror.py`) — discovers recent transcripts under
-  `~/.claude/projects` and rollouts under `~/.codex/sessions`, tails them by
-  file size, and decides who controls a session from a process scan. In Codex
-  daemon mode it handles only the threads that daemon cannot see.
+  `~/.claude/projects`, rollouts under `~/.codex/sessions` and Grok Build's
+  update logs under `~/.grok/sessions`, tails them by file size, and decides
+  who controls a session from a process scan. In Codex daemon mode it handles
+  only the threads that daemon cannot see, and with a Grok leader only the
+  sessions that leader does not hold.
 
 ## Development
 
@@ -147,8 +157,8 @@ uv run ruff check . && uv run ruff format --check .
 uv run mypy rc_client
 ```
 
-Tests never call a real agent by default. To exercise the installed CLIs with
-one short prompt each:
+Tests never call a real agent by default. To exercise the installed Claude Code
+and Codex CLIs with one short prompt each:
 
 ```sh
 RC_REAL_AGENTS=1 uv run pytest -q tests/test_real_agents.py
