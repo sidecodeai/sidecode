@@ -17,7 +17,10 @@ Three rules make that safe to do to somebody else's terminal.
   are the only route this file knows.
 - **The transcript decides.** A script is done when the CLI has written the
   command and its answer, not when the keystrokes went out; until then the
-  phone is told nothing and the session's `meta` says the old value.
+  phone is told nothing and the session's `meta` says the old value. The
+  answer is also what the session then says: where the model or the person's
+  settings cap the effort, the CLI takes a lower level than the one asked for,
+  and the session reports that one.
 
 Stopping a turn (amendment A42) is the one script those rules do not fit. Escape
 is what the person would press, and a running turn is exactly when they want it
@@ -56,7 +59,9 @@ QUIET_SECONDS = 2.0
 PICKER_TIMEOUT = 2.0
 POLL_INTERVAL = 0.1
 # How long the transcript has to show the command and its answer. The mirror
-# reads the file every two seconds, so this is several passes.
+# reads the file every two seconds, and once more the moment the wait begins,
+# finding the transcript of a session that had none until now, so this is
+# several passes.
 CONFIRM_TIMEOUT = 8.0
 # How long a typed command stays claimed, so its transcript row is known for
 # ours however late the tailer gets to it.
@@ -75,10 +80,15 @@ EFFORT_COMMAND = "/effort"
 COMPACT_COMMAND = "/compact"
 
 # What the CLI prints when it has taken the change, matched loosely: the rest
-# of the sentence says where it was saved, which is what we are avoiding. The
-# effort answer goes on to name the level, and that has to be the one asked for.
+# of the sentence says where it was saved, which is what we are avoiding.
 MODEL_CONFIRMS = "set model"
-EFFORT_CONFIRMS = "set effort level to"
+# Every answer to `/effort` names it, and says which level it set: the one asked
+# for, or the nearest one the model or the person's settings allow. A slider that
+# stops short says so the first way below, a cap in their settings the second
+# ("… exceeds the cap …; set to 'high' instead"), and that level is what the
+# session then reports.
+EFFORT_CONFIRMS = "effort"
+_EFFORT_TAKEN = re.compile(r"set effort level to ([a-z]+)|set to '([a-z]+)' instead")
 
 # Our model ids against the words the picker draws. The rows carry more than
 # the name ("Opus (1M context)", "Default (recommended)"), so only the first
@@ -125,14 +135,15 @@ PROMPT_TIMEOUT = 1.5
 class TypedCommand:
     """A command the device typed, waiting for the transcript to say it ran.
 
-    `confirms` is the prefix of the CLI's own answer; a command that only
-    needs its row claimed — `/compact`, whose outcome is the compaction the
-    apps hear about anyway — leaves it empty.
+    `confirms` is what the CLI's own answer says; a command that only needs
+    its row claimed — `/compact`, whose outcome is the compaction the apps hear
+    about anyway — leaves it empty. `done` gets the whole answer, lower case,
+    or `None` when the CLI said something else or the script gave up.
     """
 
     command: str
     confirms: str = ""
-    done: asyncio.Future[bool] | None = None
+    done: asyncio.Future[str | None] | None = None
     seen: bool = False
     expires_at: float = field(default_factory=lambda: time.monotonic() + ECHO_WINDOW)
 
@@ -140,9 +151,9 @@ class TypedCommand:
     def expired(self) -> bool:
         return time.monotonic() >= self.expires_at
 
-    def resolve(self, ok: bool) -> None:
+    def resolve(self, answer: str | None) -> None:
         if self.done is not None and not self.done.done():
-            self.done.set_result(ok)
+            self.done.set_result(answer)
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,6 +189,15 @@ def _shows(text: str, marks: tuple[str, ...]) -> bool:
     return any(mark in text for mark in marks)
 
 
+def effort_taken(answer: str) -> str:
+    """The level an `/effort` answer says the CLI set, which has to be one we know."""
+    found = _EFFORT_TAKEN.search(answer)
+    level = (found.group(1) or found.group(2)) if found is not None else None
+    if level is None or level not in EFFORT_ORDER:
+        raise RcError("conflict", REFUSED)
+    return level
+
+
 class Typist:
     """One script of keystrokes into one terminal, from one request."""
 
@@ -207,22 +227,27 @@ class Typist:
         await self.entry.channel.set_meta(model=choice)
 
     async def set_effort(self, level: str) -> None:
-        """`/effort`, all the way left, right to the level, `s`."""
+        """`/effort`, all the way left, right to the level, `s`.
+
+        The session reports the level the CLI's answer names, which a capped
+        model, or a cap in the person's settings, makes lower than the one asked
+        for.
+        """
         if level not in EFFORT_ORDER:
             raise RcError("bad_request", f"unknown effort for claude: {level}")
         await self._gate()
-        pending = self.control.expect(self.entry, EFFORT_COMMAND, f"{EFFORT_CONFIRMS} {level}")
+        pending = self.control.expect(self.entry, EFFORT_COMMAND, EFFORT_CONFIRMS)
         try:
             await self.link.keys(EFFORT_COMMAND + ENTER, clear=True)
             await self._wait_for_text(EFFORT_HINTS, "the effort slider did not open")
             await self.link.keys(LEFT * EFFORT_STEPS + RIGHT * EFFORT_ORDER.index(level))
             await self.link.keys(THIS_SESSION, clear=True)
             await self._accept(EFFORT_PROMPTS)
-            await self._confirmed(pending)
+            taken = effort_taken(await self._confirmed(pending))
         except RcError:
             await self._give_up(pending)
             raise
-        await self.entry.channel.set_meta(effort=level)
+        await self.entry.channel.set_meta(effort=taken)
 
     async def compact(self, block_id: str) -> None:
         """`/compact`: the command's own row in the transcript is our echo."""
@@ -316,17 +341,24 @@ class Typist:
             await asyncio.sleep(POLL_INTERVAL)
         raise RcError("conflict", failure)
 
-    async def _confirmed(self, pending: TypedCommand) -> None:
-        """Wait for the CLI's own record that the change happened."""
+    async def _confirmed(self, pending: TypedCommand) -> str:
+        """Wait for the CLI's own record that the change happened, and return it.
+
+        The rows are being written now, so the transcript is read at once
+        rather than at the next pass; a session that had no transcript yet has
+        one from this command on, and it is looked for as well.
+        """
         future = pending.done
         if future is None:
-            return
+            return ""
+        self.control.read_soon()
         try:
-            taken = await asyncio.wait_for(asyncio.shield(future), timeout=CONFIRM_TIMEOUT)
+            answer = await asyncio.wait_for(asyncio.shield(future), timeout=CONFIRM_TIMEOUT)
         except TimeoutError as exc:
             raise RcError("conflict", REFUSED) from exc
-        if not taken:
+        if answer is None:
             raise RcError("conflict", REFUSED)
+        return answer
 
     async def _give_up(self, pending: TypedCommand) -> None:
         """Close whatever is open and leave the terminal as it was found."""

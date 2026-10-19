@@ -43,6 +43,8 @@ log = logger("rc_client.claude")
 APPROVAL_TIMEOUT = 30 * 60.0
 DRAIN_TIMEOUT = 15.0
 DEFAULT_MODEL_ID = "default"
+# What follows a bubble whose message the CLI never got (A49).
+UNREAD = "the agent was stopped before it read your message"
 # How often a turn held open for its subagents asks whether they are done.
 SUBAGENT_POLL_S = 5.0
 
@@ -367,12 +369,15 @@ class ClaudeRunner:
         """Publish the message, then start the turn that answers it.
 
         A message whose prompt never reaches the CLI takes its files with it
-        (A49): nothing will ever read the paths.
+        (A49): nothing will ever read the paths. That includes a send stopped
+        on the way, as a close stops a drain (A39), whose bubble then says the
+        message went unread; the cancellation itself goes on.
         """
         if self._client is None:
             raise RcError("agent_unavailable", "the Claude session is not connected")
         written: list[Attachment] = await store(self.channel.session.session_id, attachments)
         prompt = describe(text, written)
+        shown = False
         try:
             # The message goes out before the SDK is touched. Applying a new
             # effort level restarts Claude, which takes seconds, and the apps
@@ -384,7 +389,13 @@ class ClaudeRunner:
                 source=source,
                 **({"attachments": wire_attachments(written)} if written else {}),
             )
+            shown = True
             await self._query(prompt, source)
+        except asyncio.CancelledError:
+            await drop(written)
+            if shown:
+                await self.channel.notice("warn", UNREAD)
+            raise
         except Exception:
             await drop(written)
             raise
@@ -399,13 +410,21 @@ class ClaudeRunner:
             raise RcError("agent_unavailable", "the Claude session is not connected")
         self._turn_done.clear()
         self._turn_started_at = now_ms()
-        await self.channel.begin_turn(source)
         try:
+            await self.channel.begin_turn(source)
             await client.query(prompt)
+        except asyncio.CancelledError:
+            await self._abandon_turn("interrupted")
+            raise
         except Exception as exc:
-            self._turn_done.set()
-            await self.channel.end_turn("error", max(0, now_ms() - self._turn_started_at))
+            await self._abandon_turn("error")
             raise RcError("internal", f"claude query failed: {type(exc).__name__}") from exc
+
+    async def _abandon_turn(self, stop_reason: str) -> None:
+        """End a turn whose prompt never got to the CLI: no result is coming to end it."""
+        self._turn_done.set()
+        if self.channel.session.turn is not None:
+            await self.channel.end_turn(stop_reason, max(0, now_ms() - self._turn_started_at))
 
     async def interrupt(self) -> bool:
         client = self._client

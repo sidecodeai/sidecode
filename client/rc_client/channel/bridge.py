@@ -3,6 +3,12 @@
 It never writes to stdout except JSON-RPC, never logs prompt text, and exits the
 moment stdin closes. Claude Code does not reap this process, so a bridge that
 outlives its parent would hold the daemon socket open forever.
+
+The bridge registers with the daemon as soon as Claude Code says `initialize`,
+but Claude Code only listens for channel messages once it has listed this
+server's tools, and drops one that arrives before that without a word. A
+message the daemon injects that early is held here and written, in order, once
+Claude Code listens.
 """
 
 from __future__ import annotations
@@ -21,6 +27,10 @@ from .link import DaemonLink
 CLOSE_GRACE = 0.05
 SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
 PROJECT_ENV = "CLAUDE_PROJECT_DIR"
+# How long after answering `tools/list` Claude Code is given to start listening,
+# and how long a bridge waits for that request before writing what it holds.
+LISTEN_GRACE = 0.25
+LISTEN_TIMEOUT = 3.0
 
 
 def warn(text: str) -> None:
@@ -36,6 +46,10 @@ class ChannelBridge:
         self._session_id = session_id
         self._cwd = cwd
         self._registered = False
+        # Injected messages Claude Code is not listening for yet, oldest first;
+        # `None` once it listens and everything goes straight out.
+        self._held: list[dict[str, Any]] | None = []
+        self._listed = asyncio.Event()
 
     # ------------------------------------------------------- Claude -> daemon
 
@@ -51,7 +65,23 @@ class ChannelBridge:
             return None
         if method == "initialize":
             self._start_registration(rpc.client_version(params))
+        elif method == "tools/list":
+            self._listed.set()
         return rpc.handle_request(method, message.get("id"), params)
+
+    async def listen(self) -> None:
+        """Write what is held once Claude Code listens for channel messages.
+
+        It registers its handler right after the tool list it asked for comes
+        back, so the grace runs from the answer; a CLI that never asks is
+        written to after the timeout, as every message was before.
+        """
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(self._listed.wait(), LISTEN_TIMEOUT)
+        await asyncio.sleep(LISTEN_GRACE)
+        held, self._held = self._held or [], None
+        for frame in held:
+            write(frame)
 
     def _start_registration(self, claude_version: str | None) -> None:
         if self._registered or not self._session_id:
@@ -67,11 +97,13 @@ class ChannelBridge:
     async def on_daemon(self, message: dict[str, Any]) -> None:
         kind = message.get("type")
         if kind == wire.INJECT:
-            write(
-                rpc.channel_message(
-                    str(message.get("message_id") or ""), str(message.get("text") or "")
-                )
+            frame = rpc.channel_message(
+                str(message.get("message_id") or ""), str(message.get("text") or "")
             )
+            if self._held is None:
+                write(frame)
+            else:
+                self._held.append(frame)
         elif kind == wire.PERMISSION:
             write(
                 rpc.permission_verdict(
@@ -117,6 +149,7 @@ async def serve() -> int:
     link = DaemonLink(socket, on_daemon)
     bridge = ChannelBridge(link, session_id, cwd)
     _install_exit_signals()
+    listening = asyncio.create_task(bridge.listen())
 
     reader = await _stdin_lines()
     async for line in reader:
@@ -131,6 +164,7 @@ async def serve() -> int:
         if outbound is not None:
             write(outbound)
 
+    listening.cancel()
     # The daemon also treats socket EOF as a close; this frame just makes the
     # reason explicit when it arrives in time.
     link.send(wire.closed())

@@ -150,19 +150,23 @@ def discover(
     candidates.sort(reverse=True)
     found: list[TranscriptInfo] = []
     for mtime, path in candidates[:limit]:
-        row = _first_row(path)
-        if row is None:
-            continue
-        found.append(
-            TranscriptInfo(
-                session_id=str(row.get("sessionId") or path.stem),
-                path=str(path),
-                cwd=str(row.get("cwd") or ""),
-                size=path.stat().st_size,
-                mtime=mtime,
-            )
-        )
+        info = _info(path, mtime)
+        if info is not None:
+            found.append(info)
     return found
+
+
+def _info(path: Path, mtime: float) -> TranscriptInfo | None:
+    row = _first_row(path)
+    if row is None:
+        return None
+    return TranscriptInfo(
+        session_id=str(row.get("sessionId") or path.stem),
+        path=str(path),
+        cwd=str(row.get("cwd") or ""),
+        size=path.stat().st_size,
+        mtime=mtime,
+    )
 
 
 def find_transcript(session_id: str) -> Path | None:
@@ -176,6 +180,17 @@ def find_transcript(session_id: str) -> Path | None:
     for path in PROJECTS_DIR.glob(f"*/{session_id}.jsonl"):
         return path
     return None
+
+
+def find_info(session_id: str) -> TranscriptInfo | None:
+    """One session's transcript as `discover` describes it, once there is one to read."""
+    path = find_transcript(session_id)
+    if path is None:
+        return None
+    try:
+        return _info(path, path.stat().st_mtime)
+    except OSError:
+        return None
 
 
 @dataclass(slots=True, frozen=True)
@@ -272,7 +287,9 @@ def latest_settings(path: str | Path, limit: int = SETTINGS_SCAN_BYTES) -> dict[
                     continue
                 try:
                     row = json.loads(line)
-                except json.JSONDecodeError:
+                except ValueError:
+                    # Not JSON, or not even UTF-8: a row cut short or written
+                    # over says nothing about the settings the others record.
                     continue
                 if isinstance(row, dict):
                     found.update(read_settings(row))
@@ -514,29 +531,25 @@ class TranscriptTailer:
             return limited
         message = row.get("message") or {}
         message_id = str(message.get("id") or row.get("uuid") or "msg")
+        first = _first_block_index(row)
         emits: list[Emit] = []
         has_tool = False
-        for index, block in enumerate(message.get("content") or []):
+        for position, block in enumerate(message.get("content") or []):
             if not isinstance(block, dict):
                 continue
             block_type = block.get("type")
+            block_id = f"{message_id}:{first + position}"
             if block_type == "text":
                 text = str(block.get("text") or "")
                 if text:
                     emits.append(
-                        Emit(
-                            "assistant_text",
-                            {"block_id": f"{message_id}:{index}", "text": text, "done": True},
-                        )
+                        Emit("assistant_text", {"block_id": block_id, "text": text, "done": True})
                     )
             elif block_type == "thinking":
                 text = str(block.get("thinking") or "")
                 if text:
                     emits.append(
-                        Emit(
-                            "thinking",
-                            {"block_id": f"{message_id}:{index}", "text": text, "done": True},
-                        )
+                        Emit("thinking", {"block_id": block_id, "text": text, "done": True})
                     )
             elif block_type == "tool_use":
                 has_tool = True
@@ -622,6 +635,20 @@ class TranscriptTailer:
         if name == QUESTION_TOOL:
             emits.append(Emit(QUESTION_ANSWERED, {"answers": _question_answers(row)}))
         return emits
+
+
+def _first_block_index(row: dict[str, Any]) -> int:
+    """Where the row's first block sits in its message, so each block has an id of its own.
+
+    Claude Code files each block of a message as a row of its own, at position 0
+    of that row, and records the block's place in the message as `apiBlockIndex`.
+    Counting from the row alone gave a thought the CLI shows and the answer after
+    it one id, and the answer replaced the thought. It is the index the SDK
+    streams the block under, and a row read twice names the same block again. A
+    row without it — a synthetic one, a whole message in one row — counts from 0.
+    """
+    index = row.get("apiBlockIndex")
+    return index if isinstance(index, int) and index >= 0 else 0
 
 
 def _question_answers(row: dict[str, Any]) -> dict[str, Any]:

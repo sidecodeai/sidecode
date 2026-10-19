@@ -50,6 +50,13 @@ _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 _EXTENSION = re.compile(r"[A-Za-z0-9]{1,15}")
 _HEADING = "Attached files:\n"
 _LISTED = re.compile(r"- ([A-Za-z0-9._-]+): (.+)")
+# A message's file below the attachments folder, however the path to it starts:
+# `attachments/<session>/<message>/<name>`, the message a fresh twelve hex digits.
+_STORED = re.compile(
+    r"(?<![A-Za-z0-9._-])attachments/[A-Za-z0-9._-]{1,64}/[0-9a-f]{12}/([A-Za-z0-9._-]+)"
+)
+# What ends a path written into a sentence.
+_PATH_END = re.compile(r"[\s'\"`<>()\[\]{}]")
 LINKED_ROOT = "attachments are refused: the attachments folder on this device is a link"
 
 
@@ -247,20 +254,34 @@ def split_prompt(text: str) -> tuple[str, list[dict[str, Any]]]:
 
 
 def without_paths(text: str) -> str:
-    """`text` with every path under the attachments root cut down to its file name.
+    """`text` with every path to an attachment cut down to its file name.
 
     An agent's own words about a session — the title it gives it, the error it
-    reports — may quote the prompt it was given; the apps get a file's name and
-    never where it lives.
+    reports — may quote the prompt it was given, or write a path its own way:
+    from `~`, from the folder it works in, through a link. The apps get a
+    file's name and never where it lives.
     """
     root = str(state_root()) + os.sep
-    if root not in text:
-        return text
-    return re.sub(
-        re.escape(root) + r"[A-Za-z0-9._/-]*",
-        lambda found: os.path.basename(found.group(0).rstrip("/")),
-        text,
-    )
+    if root in text:
+        text = re.sub(
+            re.escape(root) + r"[A-Za-z0-9._/-]*",
+            lambda found: os.path.basename(found.group(0).rstrip("/")),
+            text,
+        )
+    return _without_stored(text) if "attachments/" in text else text
+
+
+def _without_stored(text: str) -> str:
+    """Every `…attachments/<session>/<message>/<name>` left, whatever leads to it, as `<name>`."""
+    kept: list[str] = []
+    done = 0
+    for found in _STORED.finditer(text):
+        start = found.start()
+        while start > done and not _PATH_END.match(text[start - 1]):
+            start -= 1
+        kept += [text[done:start], found.group(1)]
+        done = found.end()
+    return "".join(kept) + text[done:]
 
 
 def _listed(line: str, root: str) -> dict[str, Any] | None:

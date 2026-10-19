@@ -1,7 +1,10 @@
 """Mirror agent sessions that were started in a terminal on this device.
 
-Discovery re-scans every 10 s; live files are tailed every 2 s. A session the
-daemon drives itself is never ingested from disk, so events are never doubled.
+Discovery re-scans every 10 s; live files are tailed every 2 s, and at once when
+something waits on the rows an attached session is writing. An attached Claude
+session's transcript is looked for on every tail pass until it is found. A
+session the daemon drives itself is never ingested from disk, so events are
+never doubled.
 """
 
 from __future__ import annotations
@@ -115,21 +118,30 @@ class MirrorService:
         # Sessions whose transcript has already been read once for the settings
         # in force (A17); the backfill costs a whole file and is worth doing once.
         self._settings_read: set[str] = set()
+        # Set when something waits on rows an attached session is writing (A40).
+        self._wake = asyncio.Event()
         self._tasks: list[asyncio.Task[None]] = []
 
     def start(self) -> None:
+        self.hub.shared.reader = self
         self._tasks = [
             asyncio.create_task(self._scan_loop()),
             asyncio.create_task(self._tail_loop()),
         ]
 
     async def stop(self) -> None:
+        if self.hub.shared.reader is self:
+            self.hub.shared.reader = None
         for task in self._tasks:
             task.cancel()
         for task in self._tasks:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         self._tasks = []
+
+    def read_soon(self) -> None:
+        """Make the next tail pass now rather than at the end of the interval."""
+        self._wake.set()
 
     # ---------------------------------------------------------------- scans
 
@@ -168,7 +180,7 @@ class MirrorService:
             await self.codex_daemon.tick(resolve_codex())
         if self.grok_leader is not None:
             await self.grok_leader.tick(resolve_grok())
-        adopted = self._adopt_claude(found_claude)
+        self._adopt_claude(found_claude)
         # After the adoption, so a session whose transcript was just found is
         # never mistaken for one that never had one.
         await self.hub.sweep_ghosts()
@@ -178,7 +190,9 @@ class MirrorService:
         await self._refresh_claude_control()
         await self._refresh_codex_control()
         await self._refresh_grok_control()
-        await self._backfill_settings(adopted)
+        # Every mirrored session whose settings have not been read yet: the
+        # ones just adopted, and any whose read failed last time.
+        await self._backfill_settings(list(self._claude))
 
     def _driven_claude(self) -> set[str]:
         """Claude sessions this device is running right now.
@@ -268,6 +282,27 @@ class MirrorService:
             adopted.append(info.session_id)
         return adopted
 
+    async def _adopt_attached(self) -> None:
+        """Read an attached session from its first row, not from the next scan.
+
+        A terminal attaches before it has written anything, and its transcript
+        appears with the first row: a message, or a command the device typed
+        and is waiting to see confirmed (A40). The scan finds a new file up to
+        ten seconds later, longer than that wait, so every tail pass looks for
+        the transcripts attached sessions still lack.
+        """
+        found: list[transcripts.TranscriptInfo] = []
+        for session_id, entry in list(self.hub.entries.items()):
+            if entry.shared is None or entry.session.agent != "claude":
+                continue
+            if session_id in self._claude or not self._adoptable(entry):
+                continue
+            info = await asyncio.to_thread(transcripts.find_info, session_id)
+            if info is not None:
+                found.append(info)
+        if found:
+            await self._backfill_settings(self._adopt_claude(found))
+
     # ------------------------------------------------------------- settings
 
     async def _backfill_known(self) -> None:
@@ -286,7 +321,11 @@ class MirrorService:
         )
 
     async def _backfill_settings(self, session_ids: list[str]) -> None:
-        """Publish what the terminal chose, from one whole-file read per session."""
+        """Publish what the terminal chose, from one whole-file read per session.
+
+        Only a read that worked counts as done: one that failed is tried again
+        at the next scan, and never keeps the other sessions from theirs.
+        """
         for session_id in session_ids:
             entry = self.hub.entries.get(session_id)
             if entry is None or session_id in self._settings_read:
@@ -297,7 +336,12 @@ class MirrorService:
             if path is None:
                 continue
             self._settings_read.add(session_id)
-            settings = await asyncio.to_thread(transcripts.latest_settings, path)
+            try:
+                settings = await asyncio.to_thread(transcripts.latest_settings, path)
+            except Exception as exc:
+                self._settings_read.discard(session_id)
+                log.warning("reading a session's settings failed", error=type(exc).__name__)
+                continue
             if settings:
                 await entry.channel.set_meta(**settings)
 
@@ -540,7 +584,9 @@ class MirrorService:
 
     async def _tail_loop(self) -> None:
         while True:
-            await asyncio.sleep(TAIL_INTERVAL)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._wake.wait(), TAIL_INTERVAL)
+            self._wake.clear()
             try:
                 await self.tail_once()
             except asyncio.CancelledError:
@@ -549,6 +595,7 @@ class MirrorService:
                 log.exception("terminal session tail failed")
 
     async def tail_once(self) -> None:
+        await self._adopt_attached()
         for session_id, claude_mirror in list(self._claude.items()):
             entry = self._live_entry(session_id, self._claude)
             if entry is None:
@@ -703,8 +750,18 @@ class MirrorService:
         if emit.kind == "user_message" and emit.fields.get("source") != "agent":
             # A session is named after its first message, and a teammate's
             # report is not one the person sent (amendment A30).
-            await titles.from_prompt(entry.channel, str(emit.fields.get("text") or ""))
+            await self._name_after(entry, emit.fields)
         await entry.channel.emit(emit.kind, **emit.fields)
+
+    @staticmethod
+    async def _name_after(entry: SessionEntry, message: dict[str, Any]) -> None:
+        """The words of a message name its session, or its files when it has none (A49)."""
+        files = message.get("attachments")
+        await titles.from_prompt(
+            entry.channel,
+            str(message.get("text") or ""),
+            files if isinstance(files, list) else None,
+        )
 
     async def _channel_echo(self, entry: SessionEntry, emit: Any) -> None:
         """Internal transcript signals about our own injections; never published."""

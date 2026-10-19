@@ -69,6 +69,8 @@ ELSEWHERE = "elsewhere"
 REFUSED_REQUEST = (-32600, -32601, -32602)
 # The one option an attachment read is answered with: this call, nothing more.
 ALLOW_ONCE = "allow-once"
+# What follows a bubble whose message Grok was never sent (A49).
+UNREAD = "the agent was stopped before it read your message"
 # What Grok's own `read_file` may carry in `rawInput`: where the file is, how
 # much of it to read, and the variant it names itself by. A key outside these
 # is something this device does not understand, and is asked about.
@@ -503,6 +505,13 @@ class GrokRunner:
         prompt = describe(text, written)
         try:
             await self._announce(text, prompt, written, source, block_id)
+        except asyncio.CancelledError:
+            # Stopped before Grok was asked anything, as a close stops a drain
+            # (A39): nothing will read the files, and the turn the bubble
+            # opened ends saying the message went unread.
+            await drop(written)
+            await self._unread()
+            raise
         except Exception:
             await drop(written)
             raise
@@ -541,6 +550,13 @@ class GrokRunner:
         )
         self._turn_started_at = now_ms()
         await self.channel.begin_turn(source)
+
+    async def _unread(self) -> None:
+        """End the turn a message announced and never sent, if it got that far."""
+        if self.channel.session.turn is None:
+            return
+        await self.channel.end_turn("interrupted", max(0, now_ms() - self._turn_started_at))
+        await self.channel.notice("warn", UNREAD)
 
     async def _run_turn(self, transport: GrokTransport, prompt: str, sent: _Prompt) -> None:
         try:

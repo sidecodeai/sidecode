@@ -491,10 +491,12 @@ the summary once and answers. The whole close is bounded (8 s); an agent that wi
 go of anyway, because the person asked for the session to end and a request that never answers
 helps nobody. Messages held for the session are discarded, never sent: while the channel is
 `closing` the end of the interrupted turn drains nothing, a drain already under way is stopped
-before the agent is asked anything (files it was still writing are deleted; files already named
-to the agent are left to the age limit), and the close empties
+before the agent is asked anything, and the close empties
 the queue, deletes the folders of their attachments and publishes the empty `queue` before the
-summary.
+summary. A stopped drain deletes the files it was still writing, and those of a message whose
+bubble it had already shown but whose prompt the agent never got: the turn that message opened
+ends as `interrupted`, and a `notice` of level `warn` follows the bubble ("the agent was stopped
+before it read your message"). Files already named to the agent are left to the age limit.
 `archived: false` only clears the flag. `shutdown()` is the runner protocol's second ending beside
 `close()` — `close` lets go of the agent, `shutdown` ends it:
 
@@ -618,7 +620,10 @@ A session has three possible names, in order of precedence:
    and announces it with `thread/name/updated`. The device reads the Claude rows in all three places
    a transcript is read: a session it drives itself, an attached session and a mirrored terminal one.
 3. **The first line of the first message**, which is what a session is called until something better
-   shows up.
+   shows up. A first message of files and no words names the session after the files
+   (`shot.png, notes.txt`), and then the agent's summary is not taken until the person has said
+   something: the agent was given nothing but the files' paths, and its summary of them was made
+   of words from those paths (A49). A typed slash command does not count as saying something.
 
 Every source is capped at 60 characters. A change is published as a `meta` event and a republished
 session summary, so the sidebars follow it live.
@@ -700,6 +705,13 @@ Every ten seconds the daemon scans for agent sessions it did not create:
 
 pi needs no scan: its terminal sessions reach the device through the extension that
 `rc-client pi setup` installs (see "pi").
+
+An attached Claude session does not wait for the scan. A terminal attaches before its CLI has
+written anything, and the transcript appears with the first row, so every tail pass (every two
+seconds) looks for the transcripts attached sessions still lack, by session id and in any
+project directory, and reads a new one from its first row. Attaching asks for a pass at once, and
+so does a change typed into the terminal when it starts waiting for the rows that confirm it
+(A40). Only attached sessions are looked for this way; the scan finds the rest.
 
 A discovered session is published with `origin: "terminal"` and its rows are mirrored into the same
 block timeline, with `source: "terminal"` on the user messages. The mirror keeps its place in each
@@ -806,12 +818,14 @@ each assistant message. A change is published as a `meta` event and a republishe
 `/model` typed in the terminal reaches the apps within one tail interval. The model is recorded only
 when it changes, which usually puts the value in force far behind the point a mirror starts reading,
 so the whole transcript is read once — off the event loop, capped at 64 MiB — when the session is
-adopted, and for every mirrored Claude session the daemon starts with. The ids are the agent's own
-and kept verbatim, suffix and all, whether or not they appear in the advertised lists: `auto` is a
-permission mode only the terminal sets, `claude-opus-5[1m]` a model no list carries, and an app shows
-either by its id. All three rows are internal to Claude Code, so one of an unknown shape is read as
-"no settings" rather than as an error, exactly as the title rows are. A session this device drives
-sets these itself and is never read this way.
+adopted, and for every mirrored Claude session the daemon starts with. A line that is not JSON, or
+not even UTF-8, is skipped like any other unreadable row, and only a read that worked counts: one
+that failed is tried again at the next scan and keeps no other session from its read. The ids are
+the agent's own and kept verbatim, suffix and all, whether or not they appear in the advertised
+lists: `auto` is a permission mode only the terminal sets, `claude-opus-5[1m]` a model no list
+carries, and an app shows either by its id. All three rows are internal to Claude Code, so one of an
+unknown shape is read as "no settings" rather than as an error, exactly as the title rows are. A
+session this device drives sets these itself and is never read this way.
 
 ## Attached terminal sessions
 
@@ -835,6 +849,15 @@ registers with the daemon and stays until stdin closes. It survives a daemon res
 buffered and the registration is replayed on reconnect. It logs nothing but warnings, and never the
 text of a message.
 
+The bridge registers when Claude Code sends `initialize`, so the session is `shared` and the
+device may inject from that moment. Claude Code, though, starts listening for channel messages
+only once it has the server's tool list, and drops a message that comes earlier without a word,
+which would lose a message sent within about 0.4 s of an attachment starting. So the bridge holds
+what the daemon injects until a quarter of a second after it has answered `tools/list` — three
+seconds after it started at the latest, for a CLI that never asks — and then writes it all, oldest
+first; anything later goes straight through. Permission verdicts are never held: the CLI asks for
+one only once it is listening.
+
 The daemon injects a message **only when the session is idle**. A message injected during a turn is
 handed to the model as untrusted external data it is told not to obey, which is why anything sent
 mid-turn is held on the device as a `queue` entry and injected at the next idle point. Until then it
@@ -854,6 +877,13 @@ looks exactly like the last row of a turn. The device reads the row's `stop_reas
 `stop_sequence`, `max_tokens`, or none at all — ends it. Reading the blocks instead once drained a
 phone's held messages into a turn that was still running, which is how they came to be absorbed
 (A34).
+
+Each of those rows holds its block at position 0 and records the block's place in the message as
+`apiBlockIndex`, so a mirrored or attached session names a text or thinking block after its
+message and that place: the index the SDK streams the block under, the same however often the row
+is read. A row without the field (a synthetic one, or a whole message in one row) counts from its
+own first block. Counting from the row alone would give a thought the CLI shows and the answer
+after it one id, and the answer would replace the thought.
 
 ### The shim
 
@@ -934,7 +964,7 @@ This table is the Claude channel. Codex on the shared daemon does more; see the 
 | Approve or deny a tool call | Yes, `allow` and `deny` only — the relay offers no session-scoped grant |
 | Answer a question | Yes, through the `PermissionRequest` hook; the terminal's dialog and the card are one question |
 | Stop the turn | Yes since A42: Escape typed into the terminal while a turn runs (or a just-injected message is still on its way into the transcript); `conflict` ("answer the prompt first") while an approval or a question is on screen; nothing typed when no turn runs |
-| Change model or effort | Yes since A40, typed into the terminal through its pickers, this session only; `conflict` while the terminal is busy, and the reply waits for the transcript to confirm |
+| Change model or effort | Yes since A40, typed into the terminal through its pickers, this session only; `conflict` while the terminal is busy, and the reply waits for the transcript to confirm; a model whose effort is capped takes the nearest level it has, which the reply reports |
 | Change permission mode | No, `unsupported`: change it in the terminal. The value is shown, read from the transcript (A17) |
 | `/compact` | Yes since A40, typed into the terminal; other commands are `unsupported` |
 | Rename | Yes |
@@ -1011,12 +1041,19 @@ else's terminal:
   the slider counts as open when any of its own words is on screen whole (`←/→ to adjust`, that
   footer, `Smarter`, `Ultracode`).
 - **The transcript decides.** The reply to `session.set` waits for the CLI to write the command and
-  its answer (`Set model …` matched loosely; `Set effort level to <the level asked for>`, so a
-  capped slider that stopped short is refused); until then the app's `Session` says the old value.
-  A picker that does not open, or an answer that does not come within eight seconds, presses Escape
-  and answers `conflict`. The rows the device typed are claimed, so A32 draws no terminal bubble for
-  them; `/compact` is echoed as the app's own `user_message` (A27) and the compaction notice is
-  A32's as before.
+  its answer (`Set model …` matched loosely; `Set effort level to <level>`); until then the app's
+  `Session` says the old value. The level is the one the answer names, and that is what the
+  `Session` and its `meta` then say: a capped slider stops short of the level asked for, the CLI
+  sets the nearest one it has, and the change succeeds with that level. A cap in the person's
+  settings or their organization's is answered the other way Claude Code 2.1.303 words it,
+  `Effort '<asked>' exceeds the cap for <model> …; set to '<level>' instead`, and read the same.
+  An answer naming a level the device does not offer is refused. The transcript is read the moment
+  the wait begins, and a session that had no transcript until this command started one has it
+  found then (see "Terminal sessions"), so the first change typed into a fresh session is confirmed
+  like any other. A picker that does not open, or an answer that does not come within eight
+  seconds, presses Escape and answers `conflict`. The rows the device typed are claimed, so A32
+  draws no terminal bubble for them; `/compact` is echoed as the app's own `user_message` (A27) and
+  the compaction notice is A32's as before.
 
 **Stop is the fourth script, and the one the rules above do not fit (A42).** `session.stop` on a
 `shared` Claude session presses Escape, which is how a turn is stopped in that terminal. It keeps
@@ -1850,7 +1887,11 @@ prompt read back from an agent's own record — a Claude transcript, Grok's `upd
 leader's replay or echo — whose last lines name files under `state/attachments` is published the
 same way: the words, and for each file its name, the type its extension suggests, and its size while
 it is still there (0 once it has gone). A path never reaches an app: a title or an error the agent
-words itself that quotes one is published with the file's name in its place.
+words itself that quotes one is published with the file's name in its place, whether it quotes the
+path as the prompt gave it or writes it its own way — from `~`, from the folder it works in,
+through a link — as long as it ends in `attachments/<session>/<message>/<name>`. A message of files
+and no words names its session after the files, since the agent's own title for it could only be
+made of their paths (see "Titles").
 
 Opening one of those files asks nobody. When Claude asks to `Read` — through the SDK's `can_use_tool`
 on a session the device started, through the channel's permission relay on an attached one, whose
@@ -1882,7 +1923,10 @@ Nothing is kept for long:
 - A send that fails before the agent has the prompt deletes its folder: the SDK call that hands
   Claude the prompt failing, or Grok refusing `session/prompt` as it stood — a JSON-RPC
   invalid-request, method-not-found or invalid-params error — before it said anything after that
-  prompt. Any other failure keeps the files, which Grok may have opened, until the age limit.
+  prompt. So does a send stopped on its way, as a close stops a drain (A39): the bubble it already
+  showed is followed by a `warn` notice that the agent was stopped before it read the message, and
+  the turn it opened ends as `interrupted`. Any other failure keeps the files, which Grok may have
+  opened, until the age limit.
 
 The state folder may be reached through a link — it is resolved — but `state/attachments` itself
 must be a real folder: if it is a link, attachments are refused with an error and nothing is
@@ -2037,11 +2081,6 @@ and Codex out of step.
   a restarted daemon may briefly report a remote session as terminal-controlled. It self-corrects.
 - A mirrored session reports `readonly` during a long *silent* tool call, because the mirror infers
   activity from transcript rows arriving and a `sleep 45` writes nothing.
-- A mirrored or attached Claude session names a text or thinking block after its message and its
-  place in the transcript row, and the CLI files each block of a message as a row of its own. A
-  thought the CLI shows and the answer after it therefore share one block id, and the answer
-  replaces the thought. A thought it does not show publishes nothing, so nothing is lost then; a
-  session the device drives through the SDK takes the streamed index instead and is not affected.
 - The process scan runs about every ten seconds, so a very short terminal session can finish before
   the mirror sees the CLI holding it and appears directly as `control: "none"`. Only the live-control
   window is missed, never the timeline.

@@ -381,7 +381,7 @@ async def test_a_cached_conversation_asks_before_a_new_effort_and_the_device_say
     assert entry.session.effort == "max"
 
 
-async def test_a_capped_slider_that_stops_short_of_the_level_is_refused(
+async def test_a_capped_slider_sets_the_nearest_level_and_the_session_says_which(
     harness: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A model capped at `high` draws three levels; its answer names the one it took."""
@@ -393,10 +393,43 @@ async def test_a_capped_slider_that_stops_short_of_the_level_is_refused(
     assert terminal.applied_effort == "high"
 
     await harness.confirm(entry, "/effort", "Set effort level to high (this session only)")
+    reply = await asyncio.wait_for(change, timeout=2)
+    assert reply["session"]["effort"] == "high"
+    assert entry.session.effort == "high"
+    assert harness.events("meta")[-1]["effort"] == "high"
+    assert typist.ESCAPE not in terminal.typed, "the change took, so nothing is closed"
+
+
+async def test_a_cap_in_the_person_s_settings_is_read_the_way_the_cli_words_it(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Claude Code 2.1.303 answers a level over that cap with the one it set instead."""
+    monkeypatch.setattr(typist, "PROMPT_TIMEOUT", 0.05)
+    entry = await harness.attach(FakeTerminal(new_slider=True, level=0))
+    change = asyncio.create_task(harness.hub.set_options({"session_id": "sess-1", "effort": "max"}))
+    await _until(lambda: harness.terminal.applied_effort is not None)
+    await harness.confirm(
+        entry,
+        "/effort",
+        "Effort 'max' exceeds the cap for claude-opus-5 set by your settings or organization; "
+        "set to 'high' instead (this session only): Comprehensive implementation",
+    )
+    reply = await asyncio.wait_for(change, timeout=2)
+    assert (reply["session"]["effort"], entry.session.effort) == ("high", "high")
+
+
+async def test_an_effort_answer_naming_no_level_we_know_is_refused(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(typist, "PROMPT_TIMEOUT", 0.05)
+    entry = await harness.attach(FakeTerminal(new_slider=True, level=0))
+    change = asyncio.create_task(harness.hub.shared.set_settings(entry, None, "low"))
+    await _until(lambda: harness.terminal.applied_effort is not None)
+    await harness.confirm(entry, "/effort", "Set effort level to ultracode (this session only)")
     with pytest.raises(RcError) as caught:
         await asyncio.wait_for(change, timeout=2)
     assert (caught.value.code, caught.value.message) == ("conflict", typist.REFUSED)
-    assert entry.session.effort != "max"
+    assert entry.session.effort is None
 
 
 async def test_the_person_at_the_keyboard_always_wins(harness: Harness) -> None:

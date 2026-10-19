@@ -31,7 +31,7 @@ import json
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from .. import attachments
 from ..agents.claude.questions import (
@@ -214,11 +214,20 @@ def previewed_input(preview: str) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+class TranscriptReader(Protocol):
+    """What reads the transcripts of attached sessions: the mirror, in the daemon."""
+
+    def read_soon(self) -> None: ...
+
+
 class SharedControl:
     """Implements A10 section 6.3 for sessions with a live channel attachment."""
 
     def __init__(self, hub: SessionHub) -> None:
         self.hub = hub
+        # Set by the mirror while it runs. Turn state and every confirmation
+        # come from what it reads; on its own the hub has no reader at all.
+        self.reader: TranscriptReader | None = None
 
     # ------------------------------------------------------------- lifecycle
 
@@ -235,6 +244,9 @@ class SharedControl:
         await entry.channel.emit("meta", control="shared")
         await self._settle(entry)
         await entry.channel.publish_summary()
+        # Its transcript is looked for now, not at the next scan: turn state,
+        # and every change typed into the terminal, are read from it.
+        self.read_soon()
 
     async def closed(self, entry: SessionEntry, attachment: Attachment, control: str) -> None:
         """Detach and hand the session back to the terminal, or to nobody."""
@@ -417,7 +429,7 @@ class SharedControl:
             await entry.channel.revive()
             if source != "resume":
                 # The resume prompt is the device's sentence, not a title (A35).
-                await titles.from_prompt(entry.channel, text)
+                await titles.from_prompt(entry.channel, text, attachments.wire_attachments(written))
         except Exception:
             await attachments.drop(written)
             raise
@@ -538,7 +550,7 @@ class SharedControl:
         """The terminal went away mid-script: whoever is waiting gets a refusal."""
         pending, state.typed = state.typed, None
         if pending is not None:
-            pending.resolve(False)
+            pending.resolve(None)
 
     def expect(self, entry: SessionEntry, command: str, confirms: str = "") -> TypedCommand:
         """Claim the transcript rows the command about to be typed will leave."""
@@ -558,7 +570,18 @@ class SharedControl:
         state = entry.shared
         if state is not None and state.typed is pending:
             state.typed = None
-        pending.resolve(False)
+        pending.resolve(None)
+
+    def read_soon(self) -> None:
+        """Have the transcript reader make its next pass now (A40).
+
+        A command the device typed is confirmed by the rows it leaves, and
+        waiting for the reader's next pass on its own, or for the scan that
+        finds a transcript a fresh session has only just started, took longer
+        than the confirmation waits.
+        """
+        if self.reader is not None:
+            self.reader.read_soon()
 
     async def set_settings(
         self, entry: SessionEntry, model: str | None, effort: str | None
@@ -620,7 +643,8 @@ class SharedControl:
             return
         if state is not None:
             state.typed = None
-        pending.resolve(pending.confirms in text.lower())
+        said = text.lower()
+        pending.resolve(said if pending.confirms in said else None)
 
     # ------------------------------------------------------------- approvals
 

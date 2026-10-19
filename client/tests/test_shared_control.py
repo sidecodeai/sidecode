@@ -1132,7 +1132,7 @@ async def test_a_send_that_fails_before_it_is_held_leaves_no_files(
 
     await harness.attach()
 
-    async def broken(channel: Any, text: str) -> bool:
+    async def broken(channel: Any, text: str, files: Any = None) -> bool:
         raise RuntimeError("the summary could not be published")
 
     monkeypatch.setattr(titles, "from_prompt", broken)

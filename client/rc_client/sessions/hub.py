@@ -454,7 +454,7 @@ class SessionHub:
         if source != "resume":
             # A session is named after something somebody said, and the resume
             # prompt is the device's own sentence (A35, 7.2).
-            await titles.from_prompt(entry.channel, text)
+            await titles.from_prompt(entry.channel, text, attachments)
         await runner.send(text, attachments, source=source, block_id=request_id or None)
 
     def _check_shared_attachments(self, entry: SessionEntry) -> None:
@@ -684,6 +684,10 @@ class SessionHub:
         await self._check_speed(info, speed, model or entry.session.model)
         if self._is_shared(entry):
             await self._set_shared(entry, info, model, permission_mode, effort, speed)
+            if entry.session.agent == "claude":
+                # A40: the typist published what the transcript says the CLI
+                # took, which for a capped effort is lower than the level asked.
+                model = effort = None
         if entry.runner is not None:
             await entry.runner.apply_settings(model, permission_mode, effort, speed)
         if title is not None:
