@@ -204,16 +204,25 @@ class PiRunner:
             raise RcError("agent_unavailable", exc.message) from exc
 
     async def steer(self, text: str, block_id: str | None = None) -> bool:
+        return await self.steer_with_attachments(text, [], block_id)
+
+    async def steer_with_attachments(
+        self, text: str, attachments: list[dict[str, Any]], block_id: str | None = None
+    ) -> bool:
+        """`prompt` with `streamingBehavior: "steer"`, which takes `images` too."""
+        images = pi_images(attachments)
         process = self._process
         if process is None or not self._stream.streaming:
             return False
         try:
-            await process.command("prompt", message=text, streamingBehavior="steer")
+            await process.command(
+                "prompt", message=text, streamingBehavior="steer", **images.prompt()
+            )
         except RcError:
             return False
         # Amendment A14: the bubble waits for pi to take the message off its
         # steering queue, which is the step that reads it.
-        self._stream.remember(Steer(text, bubble_id(block_id)))
+        self._stream.remember(Steer(text, bubble_id(block_id), tuple(images.shown)))
         return True
 
     async def interrupt(self) -> bool:

@@ -32,6 +32,8 @@ from rc_client.sessions.hub import SessionHub
 from tests.uploads import shown, upload
 
 SESSION = "7f0a2b44-1c3d-4e5f-8a9b-0c1d2e3f4a5b"
+# A request id as apps send them, which the bubble keeps (A12).
+STEERED = "0d6b8e29-4a17-4c3f-9b52-8e1a6f70d3c4"
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "pi"
 
@@ -405,6 +407,64 @@ async def test_an_image_reaches_the_extension_and_a_pdf_does_not(bench: Bench) -
     )
     await settle()
     assert bench.events("user_message")[-1]["attachments"] == [shown(image)]
+    extension.close()
+
+
+async def test_an_image_sent_into_a_running_turn_is_steered_with_it(bench: Bench) -> None:
+    """A14: the bubble waits for pi to read the message, and names its image then."""
+    extension = await connect(bench)
+    await extension.hello()
+    await extension.event({"type": "agent_start"})
+    await settle()
+    image = upload()
+    steering = asyncio.create_task(
+        bench.hub.send(
+            {"session_id": SESSION, "id": STEERED, "text": "and this one", "attachments": [image]}
+        )
+    )
+    command = await extension.serve_command()
+    assert await steering == {"accepted": "steered"}
+    assert command["deliver"] == "steer"
+    assert command["images"] == [{"data": image["data_base64"], "mime_type": "image/png"}]
+    await extension.send(
+        {
+            "type": frames.INPUT,
+            "source": "extension",
+            "text": "and this one",
+            "block_id": STEERED,
+            "deliver": "steer",
+        }
+    )
+    await extension.event({"type": "queue_update", "steering": ["and this one"]})
+    await extension.event({"type": "queue_update", "steering": []})
+    await settle()
+    [bubble] = bench.events("user_message")
+    assert (bubble["block_id"], bubble["text"]) == (STEERED, "and this one")
+    assert bubble["attachments"] == [shown(image)]
+    extension.close()
+
+
+async def test_a_pdf_sent_into_a_running_turn_is_refused_not_dropped(bench: Bench) -> None:
+    extension = await connect(bench)
+    await extension.hello()
+    await extension.event({"type": "agent_start"})
+    await settle()
+    sending = bench.hub.send(
+        {
+            "session_id": SESSION,
+            "id": "req-6",
+            "text": "and read this",
+            "attachments": [upload("notes.pdf", "application/pdf")],
+        }
+    )
+    # Refused at once: a send that reached the extension would wait for it.
+    with pytest.raises(RcError) as caught:
+        await asyncio.wait_for(sending, timeout=2.0)
+    assert caught.value.code == "unsupported"
+    # Nothing went to pi: not the words, and not a queued message either.
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(extension.reader.readline(), timeout=0.2)
+    assert bench.entry().queue == []
     extension.close()
 
 

@@ -391,8 +391,11 @@ what makes a session resumable and what lets a terminal session and a remote ses
 thing.
 
 The daemon queues a message that arrives while a turn is running and launches it at the turn
-boundary, with `trigger: "queue"` so the UI can tell a queued turn from a typed one. Codex sessions
-advertise `steer`, so an app can redirect a turn in flight instead of queueing. A repeated
+boundary, with `trigger: "queue"` so the UI can tell a queued turn from a typed one. Codex and pi
+sessions advertise `steer`, so an app can redirect a turn in flight instead of queueing. A steer
+carries the message's files too where the runner takes files into a running turn
+(`AttachmentSteering`: both Codex paths and both pi paths); for any other runner a message with
+files is queued, and so is one whose steer the agent refuses, files and all. A repeated
 `session.send` with the same request id is recognised as a duplicate and never delivered twice.
 
 The launch is a task of the session's own (`SessionHub.schedule_drain`). A turn's end — a runner's,
@@ -438,6 +441,8 @@ a running turn where it was sent but at its next step, after whatever it was alr
 echoes the prompt as a `userMessage` item when it gets there. The device therefore holds the
 `user_message` until that echo arrives and publishes it then, under the request id, so `first_seq`
 places the bubble after the output that preceded it — where a terminal on the same thread draws it.
+It carries the words that were typed and the files as `{name, mime, size}`, never the paths named
+in the prompt Codex echoes (A49).
 `accepted: "steered"` still comes back immediately, and the app keeps its optimistic row at the
 bottom until the block lands. A turn that ends without ever reading the message publishes it at the
 turn's end instead, with a `notice` of level `warn` when the turn was interrupted, so a steered
@@ -1090,7 +1095,7 @@ A shared Codex session can do everything a remote one can, which is more than a 
 | Approve or deny a tool call | Yes, with whatever options the daemon offers for that prompt |
 | Answer a question | Yes |
 | Change model, permission mode, effort or speed | Yes, `thread/settings/update` changes the thread for everyone attached to it |
-| Attachments | Yes. Images become image inputs; other files are written to disk and named in the prompt |
+| Attachments | Yes, steered messages included. Images become image inputs; other files are written to disk and named in the prompt |
 | Run a slash command | Yes, for the nine the device maps to app-server methods; see "Slash commands" below |
 | Take over | No, `conflict`: the session is already attached |
 
@@ -1676,7 +1681,7 @@ are fetched when it ends.
 
 | Command | Used for |
 | --- | --- |
-| `prompt` | a turn. `images` carries an attachment; sent mid-turn with `streamingBehavior: "steer"`, which is the `steer` capability |
+| `prompt` | a turn. `images` carries an attachment, steered or not; sent mid-turn with `streamingBehavior: "steer"`, which is the `steer` capability |
 | `clear_queue`, then `abort` | Stop. That order is pi's own: `abort` alone resumes with whatever is still queued |
 | `set_model` (provider and id apart), `set_thinking_level` | live setting changes |
 | `get_state` | at startup: the model pi actually resolved, the thinking level, and the session id, published as `meta` (A17) |
@@ -1839,10 +1844,14 @@ own tool and is `other`; its title is the first string argument it was given.
 
 ### Attachments
 
-pi takes images and nothing else. An image rides on the prompt as pi's own `ImageContent` —
-`{type: "image", data, mimeType}` — on `prompt.images` for an RPC session and inside the message
-content for an attached one; the nested `source` form pi's documentation also shows is not what the
-running binary accepts. Any other attachment is refused with `unsupported` rather than dropped.
+pi takes images and nothing else. An image rides as pi's own `ImageContent` —
+`{type: "image", data, mimeType}`, where `data` is the upload's `data_base64`, checked as base64 of
+at most 6 MiB — on `prompt.images` for an RPC session and inside the message content for an
+attached one, on a steer as on any other message; the nested `source` form pi's documentation also
+shows is not what the running binary accepts. The `user_message` names the images as
+`{name, mime, size}`. Any other attachment refuses the whole message with `unsupported` before pi
+is sent anything; a held message meets the same refusal, as an `error`, when it goes out
+(`agents/pi/images.py`).
 
 ### What is not covered
 

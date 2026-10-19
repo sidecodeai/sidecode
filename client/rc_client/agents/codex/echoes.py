@@ -9,13 +9,15 @@ a reconnect from re-publishing a message the apps already show.
 
 A steered prompt is echoed when the agent reads it rather than when it was
 sent, which is why an echo can also carry the block the `user_message` for it
-is still owed (amendment A14).
+is still owed (amendment A14), and what that block shows when it is not the
+prompt itself: a prompt names the paths of its files, and a block never does.
 """
 
 from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
+from typing import Any
 
 # How many of our own prompts to keep around so Codex's echo of them can be
 # recognised; a turn only ever echoes the message that started it.
@@ -34,6 +36,23 @@ class Echo:
     # does: it publishes before it asks Codex anything, so the echo is news to
     # nobody. A steer leaves the block id here instead and the echo publishes.
     block_id: str | None = None
+    # The words the person typed, when the prompt also names their files, and
+    # those files as a `user_message` carries them (A49).
+    shown: str | None = None
+    attachments: tuple[dict[str, Any], ...] = ()
+
+    def bubble(self) -> dict[str, Any] | None:
+        """The `user_message` this prompt is still owed, or None once it is out."""
+        if self.block_id is None:
+            return None
+        fields: dict[str, Any] = {
+            "block_id": self.block_id,
+            "text": self.text if self.shown is None else self.shown,
+            "source": "remote",
+        }
+        if self.attachments:
+            fields["attachments"] = [dict(item) for item in self.attachments]
+        return fields
 
 
 @dataclass(slots=True)
@@ -47,7 +66,7 @@ class EchoLog:
     def __bool__(self) -> bool:
         return bool(self.pending)
 
-    def remember(self, text: str, block_id: str | None = None) -> Echo | None:
+    def remember(self, echo: Echo) -> Echo | None:
         """Record a prompt we just sent, so its echo can be recognised.
 
         Answers with the echo this one pushed out of the window when that echo
@@ -56,7 +75,7 @@ class EchoLog:
         """
         crowded = len(self.pending) == PENDING
         evicted = self.pending[0] if crowded and self.pending[0].block_id else None
-        self.pending.append(Echo(text, block_id))
+        self.pending.append(echo)
         return evicted
 
     def owns(self, client_id: str) -> bool:

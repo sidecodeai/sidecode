@@ -118,7 +118,7 @@ class PiTerminalSession:
         remote = source == "extension"
         files = self._sent_files.pop(block_id, ())
         if frame.get("deliver") == "steer":
-            self._stream.remember(Steer(text, block_id))
+            self._stream.remember(Steer(text, block_id, files))
             return
         await self.channel.emit(
             "user_message",
@@ -163,10 +163,17 @@ class PiTerminalSession:
         await self._deliver(text, images, bubble_id(block_id), steer=False)
 
     async def steer(self, text: str, block_id: str | None = None) -> bool:
+        return await self.steer_with_attachments(text, [], block_id)
+
+    async def steer_with_attachments(
+        self, text: str, attachments: list[dict[str, Any]], block_id: str | None = None
+    ) -> bool:
+        """`send` with `deliver: "steer"`: the extension hands pi the images either way."""
+        images = pi_images(attachments)
         if not self.busy:
             return False
         try:
-            await self._deliver(text, PiImages(), bubble_id(block_id), steer=True)
+            await self._deliver(text, images, bubble_id(block_id), steer=True)
         except RcError:
             return False
         return True

@@ -37,6 +37,8 @@ class Steer:
 
     text: str
     block_id: str
+    # Its images, as the `user_message` names them.
+    attachments: tuple[dict[str, Any], ...] = ()
 
 
 class PiStream:
@@ -187,8 +189,13 @@ class PiStream:
             await self._publish_steer(steer)
 
     async def _publish_steer(self, steer: Steer) -> None:
+        files = {"attachments": [dict(item) for item in steer.attachments]}
         await self.channel.emit(
-            "user_message", block_id=steer.block_id, text=steer.text, source="remote"
+            "user_message",
+            block_id=steer.block_id,
+            text=steer.text,
+            source="remote",
+            **(files if steer.attachments else {}),
         )
 
     async def _publish_unread(self, stop_reason: str) -> None:

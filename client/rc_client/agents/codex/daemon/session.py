@@ -17,7 +17,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from ....attachments import Attachment, describe, materialise, wire_attachments
+from ....attachments import Attachment, describe, discard, materialise, wire_attachments
 from ....errors import RcError
 from ....logging_setup import logger
 from ....models import UNSET, Command, SpeedSetting, now_ms
@@ -746,13 +746,9 @@ class CodexDaemonSession:
 
     async def _publish_steer(self, echo: Echo) -> None:
         """Publish the `user_message` a steer has been holding back."""
-        if echo.block_id is None:
+        fields = echo.bubble()
+        if fields is None:
             return
-        fields: dict[str, Any] = {
-            "block_id": echo.block_id,
-            "text": echo.text,
-            "source": "remote",
-        }
         if self.channel.session.control == "shared":
             fields["delivery"] = "delivered"
         await self.channel.emit("user_message", **fields)
@@ -846,7 +842,7 @@ class CodexDaemonSession:
         # round trip to the daemon, and the apps have drawn this bubble already.
         await self.channel.emit("user_message", **fields)
         subscribed = await self.try_resume()
-        evicted = self._echoes.remember(str(inputs[0]["text"]))
+        evicted = self._echoes.remember(Echo(str(inputs[0]["text"])))
         if evicted is not None:
             await self._publish_steer(evicted)
         self._local_turn = True
@@ -889,25 +885,42 @@ class CodexDaemonSession:
         await self._control_changed()
 
     async def steer(self, text: str, block_id: str | None = None) -> bool:
+        return await self.steer_with_attachments(text, [], block_id)
+
+    async def steer_with_attachments(
+        self, text: str, attachments: list[dict[str, Any]], block_id: str | None = None
+    ) -> bool:
+        """Steer the running turn with the message as `send` would start one.
+
+        `turn/steer` takes the inputs `turn/start` takes, so images travel as
+        inputs and other files are named in the prompt here too. Files Codex
+        never got, because it refused the steer, are taken back: the hub
+        queues the message instead, and its files are written again then.
+        """
         thread_id = self._thread_id
         turn_id = self._turn_id
         if thread_id is None or turn_id is None or turn_id.startswith("unknown:"):
             return False
+        written = materialise(self.channel.session.session_id, attachments) if attachments else []
+        inputs = self._inputs(text, written)
         try:
             await self._client.request(
                 "turn/steer",
-                {
-                    "threadId": thread_id,
-                    "expectedTurnId": turn_id,
-                    "input": [{"type": "text", "text": text}],
-                },
+                {"threadId": thread_id, "expectedTurnId": turn_id, "input": inputs},
             )
         except RcError:
+            discard(written)
             return False
         # Amendment A14: the bubble waits for Codex's echo of this prompt, which
         # arrives at the step that reads it. The apps hold their optimistic row
         # under the same block id until then.
-        evicted = self._echoes.remember(text, block_id or f"user:{uuid.uuid4()}")
+        echo = Echo(
+            str(inputs[0]["text"]),
+            block_id or f"user:{uuid.uuid4()}",
+            shown=text,
+            attachments=tuple(wire_attachments(written)),
+        )
+        evicted = self._echoes.remember(echo)
         if evicted is not None:
             await self._publish_steer(evicted)
         return True

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import attachments
-from ..agents.base import SessionRunner
+from ..agents.base import AttachmentSteering, SessionRunner
 from ..agents.claude import transcripts
 from ..agents.codex.daemon.service import CodexDaemonService
 from ..agents.codex.models import catalog_cache
@@ -419,11 +419,7 @@ class SessionHub:
                 await runner.interrupt()
                 await self._start_turn(entry, text, attachments, request_id, source)
                 result = {"accepted": "sent"}
-            elif (
-                mode == "auto"
-                and runner.supports_steer
-                and await runner.steer(text, request_id or None)
-            ):
+            elif mode == "auto" and await self._steer(runner, text, attachments, request_id):
                 result = {"accepted": "steered"}
             else:
                 result = await self._enqueue(entry, request_id, text, attachments, source, queue_ts)
@@ -456,6 +452,25 @@ class SessionHub:
             # prompt is the device's own sentence (A35, 7.2).
             await titles.from_prompt(entry.channel, text, attachments)
         await runner.send(text, attachments, source=source, block_id=request_id or None)
+
+    @staticmethod
+    async def _steer(
+        runner: SessionRunner, text: str, attachments: list[dict[str, Any]], request_id: str
+    ) -> bool:
+        """Steer the running turn with the whole message, files included (A14).
+
+        A runner that cannot take files into a running turn is not asked to
+        steer a message that has any: it is queued instead, so its files reach
+        the agent with its words when the turn ends rather than never.
+        """
+        if not runner.supports_steer:
+            return False
+        block_id = request_id or None
+        if not attachments:
+            return await runner.steer(text, block_id)
+        if isinstance(runner, AttachmentSteering):
+            return await runner.steer_with_attachments(text, attachments, block_id)
+        return False
 
     def _check_shared_attachments(self, entry: SessionEntry) -> None:
         """Refuse files a shared session's attachment cannot hand its agent (4.2, A49)."""

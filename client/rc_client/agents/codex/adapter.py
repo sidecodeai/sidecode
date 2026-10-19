@@ -8,7 +8,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from ...attachments import Attachment, describe, materialise, wire_attachments
+from ...attachments import Attachment, describe, discard, materialise, wire_attachments
 from ...child_env import sanitized_child_env
 from ...errors import RcError
 from ...logging_setup import logger
@@ -181,11 +181,9 @@ class CodexRunner:
             await self._publish_steer(claimed)
 
     async def _publish_steer(self, echo: Echo) -> None:
-        if echo.block_id is None:
-            return
-        await self.channel.emit(
-            "user_message", block_id=echo.block_id, text=echo.text, source="remote"
-        )
+        fields = echo.bubble()
+        if fields is not None:
+            await self.channel.emit("user_message", **fields)
 
     async def _publish_unread(self, stop_reason: str) -> None:
         """Show the steered messages this turn ended without ever reading."""
@@ -316,23 +314,42 @@ class CodexRunner:
         await self.channel.begin_turn(source)
 
     async def steer(self, text: str, block_id: str | None = None) -> bool:
+        return await self.steer_with_attachments(text, [], block_id)
+
+    async def steer_with_attachments(
+        self, text: str, attachments: list[dict[str, Any]], block_id: str | None = None
+    ) -> bool:
+        """Steer the running turn with the message, its files named as `send` names them.
+
+        Files Codex never got, because it refused the steer, are taken back:
+        the hub queues the message instead, and its files are written again then.
+        """
         server = self._server
         if server is None or self._thread_id is None or self._turn_id is None:
             return False
+        written = materialise(self.channel.session.session_id, attachments) if attachments else []
+        prompt = describe(text, written)
         try:
             await server.request(
                 "turn/steer",
                 {
                     "threadId": self._thread_id,
                     "expectedTurnId": self._turn_id,
-                    "input": [{"type": "text", "text": text}],
+                    "input": [{"type": "text", "text": prompt}],
                 },
             )
         except RcError:
+            discard(written)
             return False
         # Amendment A14: the bubble waits for Codex's echo of this prompt, which
         # arrives at the step that reads it, not where it was sent.
-        evicted = self._echoes.remember(text, block_id or f"user:{uuid.uuid4()}")
+        echo = Echo(
+            prompt,
+            block_id or f"user:{uuid.uuid4()}",
+            shown=text,
+            attachments=tuple(wire_attachments(written)),
+        )
+        evicted = self._echoes.remember(echo)
         if evicted is not None:
             await self._publish_steer(evicted)
         return True

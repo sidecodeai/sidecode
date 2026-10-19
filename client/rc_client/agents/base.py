@@ -125,3 +125,23 @@ class SessionRunner(Protocol):
         events. Raises `RcError("not_found")` for a name it does not offer.
         """
         ...
+
+
+@runtime_checkable
+class AttachmentSteering(Protocol):
+    """A runner that can steer a running turn with a message's files as well.
+
+    `SessionRunner.steer` carries words alone. The hub steers a message that
+    has attachments only into a runner that also has this; any other queues
+    it, so the files go out with the words once the turn has ended.
+    """
+
+    async def steer_with_attachments(
+        self, text: str, attachments: list[dict[str, Any]], block_id: str | None = None
+    ) -> bool:
+        """`steer`, with the files the app uploaded (`AttachmentUpload`, 4.8).
+
+        False means the agent was not steered, and nothing of the message
+        reached it; a file the agent can never take raises instead.
+        """
+        ...

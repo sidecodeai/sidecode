@@ -29,6 +29,8 @@ from tests.helpers import event_validator
 from tests.uploads import shown, upload
 
 SESSION = "0f2e1d3a-7c44-4b91-9d0e-2f6a5b8c1d20"
+# A request id as apps send them, which the bubble keeps (A12).
+STEERED = "0d6b8e29-4a17-4c3f-9b52-8e1a6f70d3c4"
 FAKE = Path(__file__).resolve().parent / "fixtures" / "pi" / "fake_pi.py"
 
 
@@ -326,6 +328,46 @@ async def test_an_image_rides_on_the_prompt_and_nothing_else_does(tmp_path: Path
     assert [event.get("attachments") for event in recorder.events("user_message")] == [
         [shown(image)]
     ]
+
+
+async def test_a_steered_image_goes_into_the_turn_and_its_bubble_names_it(
+    tmp_path: Path,
+) -> None:
+    """`prompt` with `streamingBehavior: "steer"` takes `images` as well."""
+    runner, recorder, peer = build(tmp_path, "steer")
+    await runner.start()
+    await runner.send("Reply with exactly OK")
+    await wait_for(lambda: recorder.events("assistant_text"))
+    image = upload()
+    assert await runner.steer_with_attachments("and this one", [image], STEERED) is True
+    await wait_for(lambda: recorder.events("turn_completed"))
+    await runner.close()
+
+    steered = peer.of("prompt")[-1]
+    assert steered["streamingBehavior"] == "steer"
+    assert steered["images"] == [
+        {"type": "image", "data": image["data_base64"], "mimeType": "image/png"}
+    ]
+    bubble = recorder.events("user_message")[-1]
+    assert (bubble["block_id"], bubble["text"]) == (STEERED, "and this one")
+    assert bubble["attachments"] == [shown(image)]
+
+
+async def test_a_file_pi_cannot_take_is_refused_before_anything_is_steered(
+    tmp_path: Path,
+) -> None:
+    runner, recorder, peer = build(tmp_path, "stall")
+    await runner.start()
+    await runner.send("Reply with exactly OK")
+    await wait_for(lambda: recorder.events("assistant_text"))
+    with pytest.raises(RcError) as caught:
+        await runner.steer_with_attachments(
+            "read this", [upload("notes.pdf", "application/pdf")], "steer-block"
+        )
+    await runner.close()
+    assert caught.value.code == "unsupported"
+    assert [command.get("streamingBehavior") for command in peer.of("prompt")] == [None]
+    assert [event["text"] for event in recorder.events("user_message")] == ["Reply with exactly OK"]
 
 
 async def test_an_approval_nobody_raised_cannot_be_answered(tmp_path: Path) -> None:
