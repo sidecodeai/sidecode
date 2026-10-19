@@ -1,6 +1,6 @@
 [project]
 name = "rc-gateway"
-version = "1.13.3"
+version = "1.14.0"
 description = "remote-control gateway: routes apps and devices, indexes sessions, proxies STT and push"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
