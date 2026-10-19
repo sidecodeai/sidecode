@@ -233,7 +233,8 @@ The versions close the screen as one caption line in the tertiary ink, centred, 
 `SideCode 1.5.1 · Gateway 1.5.0 · Protocol v1` on the phone, `Gateway 1.5.0 · Protocol v1`
 on the web (the browser has no version of its own), with **Diagnostics** as a text button beside
 it on the phone. There is no About group. In 中文 the group captions read 账户 · 你不在时 · 语音 ·
-阅读 · 安全, and the product names and numbers stay as they are.
+阅读 · 安全, the versions line reads `随码 1.5.1 · 网关 1.5.0 · 协议 v1`, and only the numbers stay
+as they are.
 
 **A row is two lines and no rule.** Every row is a title in the label weight with one sentence
 under it in the secondary ink at 12–13 px, and the control at the trailing edge, vertically
