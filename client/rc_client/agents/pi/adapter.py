@@ -21,6 +21,7 @@ from ...sessions.channel import SessionChannel
 from . import catalog as catalogue
 from . import install, paths, slash
 from .approvals import PiApprovals
+from .images import pi_images
 from .rpc import DRAIN_TIMEOUT, PiProcess
 from .stream import PiStream, Steer, bubble_id
 
@@ -28,10 +29,6 @@ log = logger("rc_client.pi")
 
 TurnEndCallback = Callable[[], Awaitable[None]]
 SessionIdCallback = Callable[[str], Awaitable[None]]
-
-# pi's `prompt` takes base64 images and nothing else, so any other attachment
-# is refused rather than silently dropped.
-IMAGE_PREFIX = "image/"
 
 
 class PiRunner:
@@ -190,10 +187,13 @@ class PiRunner:
         process = self._require_process()
         images = pi_images(attachments or [])
         await self.channel.emit(
-            "user_message", block_id=bubble_id(block_id), text=text, source=source
+            "user_message",
+            block_id=bubble_id(block_id),
+            text=text,
+            source=source,
+            **images.bubble(),
         )
-        extra: dict[str, Any] = {"images": images} if images else {}
-        await self._prompt(process, text, **extra)
+        await self._prompt(process, text, **images.prompt())
         await self._stream.begin(source)
 
     async def _prompt(self, process: PiProcess, text: str, **extra: Any) -> None:
@@ -319,23 +319,6 @@ class PiRunner:
         if process is None:
             raise RcError("agent_unavailable", "the pi session is not connected")
         return process
-
-
-def pi_images(attachments: list[dict[str, Any]]) -> list[dict[str, str]]:
-    """`prompt.images`, which is the only attachment pi takes (A26).
-
-    The shape is pi's own `ImageContent`: `{type, data, mimeType}`, verified
-    against a live session rather than taken from the documentation, which also
-    shows an older nested `source` form that pi no longer accepts.
-    """
-    images: list[dict[str, str]] = []
-    for item in attachments:
-        mime = str(item.get("mime") or item.get("mime_type") or "")
-        data = str(item.get("data") or "")
-        if not mime.startswith(IMAGE_PREFIX) or not data:
-            raise RcError("unsupported", "pi sessions take images and no other attachment")
-        images.append({"type": "image", "data": data, "mimeType": mime})
-    return images
 
 
 def usage_from_stats(stats: dict[str, Any], window: int | None) -> dict[str, Any] | None:

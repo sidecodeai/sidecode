@@ -25,9 +25,11 @@ from rc_client.agents.pi import paths as pi_paths
 from rc_client.agents.pi.link import Hello, PiExtensionServer, PiLink
 from rc_client.agents.pi.service import PiExtensionService
 from rc_client.agents.pi.terminal import PiTerminalSession
+from rc_client.errors import RcError
 from rc_client.models import AgentInfo, Choice
 from rc_client.registry import Registry
 from rc_client.sessions.hub import SessionHub
+from tests.uploads import shown, upload
 
 SESSION = "7f0a2b44-1c3d-4e5f-8a9b-0c1d2e3f4a5b"
 
@@ -82,6 +84,9 @@ class Bench:
         self.service = PiExtensionService(hub)
         hub.pi_extensions = self.service
         self.server = PiExtensionServer(path, self.service)
+        # Closed before the server stops, which waits for every connection: a
+        # test that fails before closing its own would otherwise never end.
+        self.extensions: list[FakeExtension] = []
 
     def events(self, kind: str) -> list[dict[str, Any]]:
         return [
@@ -165,13 +170,17 @@ async def bench(tmp_path: Path, socket_dir: Path) -> AsyncIterator[Bench]:
     try:
         yield made
     finally:
+        for extension in made.extensions:
+            extension.close()
         await made.server.stop()
         await hub.close()
 
 
 async def connect(bench: Bench) -> FakeExtension:
     reader, writer = await asyncio.open_unix_connection(str(bench.path))
-    return FakeExtension(reader, writer)
+    extension = FakeExtension(reader, writer)
+    bench.extensions.append(extension)
+    return extension
 
 
 async def settle() -> None:
@@ -368,31 +377,34 @@ async def test_a_message_sent_into_a_running_turn_is_steered(bench: Bench) -> No
 
 
 async def test_an_image_reaches_the_extension_and_a_pdf_does_not(bench: Bench) -> None:
+    """The uploads are the protocol's own `AttachmentUpload`, as every app sends it."""
     extension = await connect(bench)
     await extension.hello()
     await settle()
+    image = upload()
     sending = asyncio.create_task(
         bench.hub.send(
-            {
-                "session_id": SESSION,
-                "id": "req-2",
-                "text": "what is this?",
-                "attachments": [{"name": "shot.png", "mime": "image/png", "data": "aGk="}],
-            }
+            {"session_id": SESSION, "id": "req-2", "text": "what is this?", "attachments": [image]}
         )
     )
     command = await extension.serve_command()
     await sending
-    assert command["images"] == [{"data": "aGk=", "mime_type": "image/png"}]
-    with pytest.raises(Exception) as caught:
+    assert command["images"] == [{"data": image["data_base64"], "mime_type": "image/png"}]
+    with pytest.raises(RcError) as caught:
         await bench.hub.send(
             {
                 "session_id": SESSION,
                 "text": "read this",
-                "attachments": [{"name": "notes.pdf", "mime": "application/pdf", "data": "aGk="}],
+                "attachments": [upload("notes.pdf", "application/pdf")],
             }
         )
-    assert getattr(caught.value, "code", "") == "unsupported"
+    assert caught.value.code == "unsupported"
+    # pi's `input` carries the words alone; the bubble still names the file.
+    await extension.send(
+        {"type": frames.INPUT, "source": "extension", "text": "what is this?", "block_id": "req-2"}
+    )
+    await settle()
+    assert bench.events("user_message")[-1]["attachments"] == [shown(image)]
     extension.close()
 
 

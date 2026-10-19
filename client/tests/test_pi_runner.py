@@ -26,6 +26,7 @@ from rc_client.models import Session
 from rc_client.registry import Registry
 from rc_client.sessions.channel import SessionChannel
 from tests.helpers import event_validator
+from tests.uploads import shown, upload
 
 SESSION = "0f2e1d3a-7c44-4b91-9d0e-2f6a5b8c1d20"
 FAKE = Path(__file__).resolve().parent / "fixtures" / "pi" / "fake_pi.py"
@@ -306,19 +307,25 @@ async def test_a_speed_tier_is_unsupported_and_a_permission_mode_is_not(tmp_path
 
 
 async def test_an_image_rides_on_the_prompt_and_nothing_else_does(tmp_path: Path) -> None:
-    """A26: pi takes images through `prompt.images`, in its own content shape."""
-    runner, _, peer = build(tmp_path, "turn")
+    """A26: pi takes images through `prompt.images`, in its own content shape.
+
+    The uploads are the protocol's own `AttachmentUpload`, as every app sends it.
+    """
+    runner, recorder, peer = build(tmp_path, "turn")
     await runner.start()
-    await runner.send("look", [{"name": "shot.png", "mime": "image/png", "data": "aGk="}])
+    image = upload()
+    await runner.send("look", [image])
     with pytest.raises(RcError) as caught:
-        await runner.send(
-            "read", [{"name": "notes.pdf", "mime": "application/pdf", "data": "aGk="}]
-        )
+        await runner.send("read", [upload("notes.pdf", "application/pdf")])
     await runner.close()
-    assert peer.of("prompt")[0]["images"] == [
-        {"type": "image", "data": "aGk=", "mimeType": "image/png"}
+    assert [command["images"] for command in peer.of("prompt")] == [
+        [{"type": "image", "data": image["data_base64"], "mimeType": "image/png"}]
     ]
     assert caught.value.code == "unsupported"
+    # The bubble names the file it carried; the refused message has none.
+    assert [event.get("attachments") for event in recorder.events("user_message")] == [
+        [shown(image)]
+    ]
 
 
 async def test_an_approval_nobody_raised_cannot_be_answered(tmp_path: Path) -> None:

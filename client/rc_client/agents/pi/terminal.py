@@ -20,8 +20,9 @@ from ...logging_setup import logger
 from ...models import UNSET, Command, SpeedSetting
 from ...sessions.channel import SessionChannel
 from . import frames, slash
-from .adapter import pi_images, usage_from_stats
+from .adapter import usage_from_stats
 from .approvals import PiApprovals
+from .images import PiImages, pi_images
 from .link import PiLink
 from .stream import PiStream, Steer, bubble_id
 
@@ -29,6 +30,8 @@ log = logger("rc_client.pi.terminal")
 
 # How long an abort may take to settle before the device ends the turn itself.
 DRAIN_TIMEOUT = 60.0
+# How many sent messages' images are remembered until pi reports their input.
+MAX_SENT_FILES = 16
 
 TurnEndCallback = Callable[[], Awaitable[None]]
 
@@ -52,6 +55,9 @@ class PiTerminalSession:
         self._stream = PiStream(channel, usage=self._usage, on_turn_end=on_turn_end)
         self.approvals = PiApprovals(channel, link.answer)
         self._context_window: int | None = None
+        # The images of the messages this device sent, by block, as their
+        # bubbles name them: pi's `input` event carries the words alone.
+        self._sent_files: dict[str, tuple[dict[str, Any], ...]] = {}
 
     # ------------------------------------------------------------- lifecycle
 
@@ -110,6 +116,7 @@ class PiTerminalSession:
             return
         block_id = str(frame.get("block_id") or "") or bubble_id()
         remote = source == "extension"
+        files = self._sent_files.pop(block_id, ())
         if frame.get("deliver") == "steer":
             self._stream.remember(Steer(text, block_id))
             return
@@ -118,6 +125,7 @@ class PiTerminalSession:
             block_id=block_id,
             text=text,
             source="remote" if remote else "terminal",
+            **({"attachments": [dict(item) for item in files]} if files else {}),
         )
         await self._stream.begin("remote" if remote else "terminal")
 
@@ -158,22 +166,27 @@ class PiTerminalSession:
         if not self.busy:
             return False
         try:
-            await self._deliver(text, [], bubble_id(block_id), steer=True)
+            await self._deliver(text, PiImages(), bubble_id(block_id), steer=True)
         except RcError:
             return False
         return True
 
-    async def _deliver(
-        self, text: str, images: list[dict[str, str]], block_id: str, steer: bool
-    ) -> None:
+    async def _deliver(self, text: str, images: PiImages, block_id: str, steer: bool) -> None:
         fields: dict[str, Any] = {"text": text, "block_id": block_id}
-        if images:
+        if images.content:
             fields["images"] = [
-                {"data": image["data"], "mime_type": image["mimeType"]} for image in images
+                {"data": image["data"], "mime_type": image["mimeType"]} for image in images.content
             ]
+            self._remember_files(block_id, images)
         if steer:
             fields["deliver"] = "steer"
         await self.link.command(frames.SEND, **fields)
+
+    def _remember_files(self, block_id: str, images: PiImages) -> None:
+        """Keep what the bubble will name until pi's `input` for it comes back."""
+        self._sent_files[block_id] = tuple(images.shown)
+        for stale in list(self._sent_files)[:-MAX_SENT_FILES]:
+            self._sent_files.pop(stale, None)
 
     async def interrupt(self) -> bool:
         if not self.busy:
