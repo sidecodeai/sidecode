@@ -675,7 +675,7 @@ A steered message is drawn where the agent reads it, not where it was sent. Code
 its next step, after the sentence it was already writing, and the terminal shows the prompt there;
 the app shows the same order. A shared Claude session takes it at the turn's next batch of tool
 calls, or as the next turn when none is left, and under that batch the terminal prints
-`SideCode · from your phone: <message>` — a line only the terminal shows, always in English (A51).
+`SideCode · remote message: <message>` — a line only the terminal shows, always in English (A51).
 Until the device reports the message taken, the bubble stays at the bottom of the transcript as the
 optimistic row from sending, below whatever the turn is still producing. A bubble that jumped up
 into the middle of an answer would put the reply before the question.
