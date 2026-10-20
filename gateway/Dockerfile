@@ -1,4 +1,4 @@
-# remote-control gateway image.
+# SideCode gateway image.
 #
 # Build context is the repository ROOT, not gateway/: the image carries three artefacts that live in
 # sibling directories — the built web app, the rc_client wheel the installer downloads, and the

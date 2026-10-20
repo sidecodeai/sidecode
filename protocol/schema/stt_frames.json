@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://remote-control.dev/schema/v1/stt_frames.json",
-  "title": "remote-control STT streaming frames (protocol v1)",
+  "title": "SideCode STT streaming frames (protocol v1)",
   "description": "Text frames on WS /ws/stt?language=<code>. Audio travels as binary frames of PCM16LE, 16 kHz, mono (100-200 ms per frame recommended), which this schema does not cover. Limits: 120 s of audio per utterance, 4 MiB total.",
   "$ref": "#/$defs/SttFrame",
   "$defs": {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate every remote-control protocol fixture against the JSON Schemas.
+"""Validate every SideCode protocol fixture against the JSON Schemas.
 
 Run from the protocol directory:
 

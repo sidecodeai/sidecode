@@ -306,12 +306,12 @@ describe('the session row', () => {
     renderPage();
 
     // Running here; running inside a terminal; a terminal the device joined.
-    expect(wordIn('Fix flaky auth test')).toBe('Remote Control');
+    expect(wordIn('Fix flaky auth test')).toBe('Remote launch');
     expect(dotTone('Fix flaky auth test')).toBe('working');
     expect(wordIn('Refactor relay routing')).toBe('Terminal');
     expect(wordIn('Wire the channel shim')).toBe('Terminal');
     // A question waiting says nothing more than a quiet row does.
-    expect(wordIn('Migrate web to Vite 6')).toBe('Remote Control');
+    expect(wordIn('Migrate web to Vite 6')).toBe('Remote launch');
     expect(dotTone('Migrate web to Vite 6')).toBe('waiting');
   });
 
@@ -331,7 +331,7 @@ describe('the session row', () => {
     renderPage();
     await userEvent.click(screen.getByRole('button', { name: strings.sessions.archiveGroup(2) }));
 
-    expect(wordIn('Drop the legacy ingest path')).toBe('Archived · Remote Control');
+    expect(wordIn('Drop the legacy ingest path')).toBe('Archived · Remote launch');
   });
 
   it('says the origin on an offline device too, and greys the dot', () => {
@@ -504,7 +504,7 @@ describe('the close action', () => {
     // One row more in the device's own Archive, marked and gone quiet.
     await userEvent.click(screen.getByRole('button', { name: strings.sessions.archiveGroup(4) }));
     expect(archiveTitles()).toContain('Fix flaky auth test');
-    expect(wordIn('Fix flaky auth test')).toBe('Archived · Remote Control');
+    expect(wordIn('Fix flaky auth test')).toBe('Archived · Remote launch');
     expect(dotTone('Fix flaky auth test')).toBe('off');
     expect(closeIn('Fix flaky auth test')).toBeNull();
   });

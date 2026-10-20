@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://remote-control.dev/schema/v1/http.json",
-  "title": "remote-control gateway HTTP bodies (protocol v1)",
+  "title": "SideCode gateway HTTP bodies (protocol v1)",
   "description": "Request and response bodies for /api/*. Browsers authenticate with the HttpOnly cookie rc_session; native apps send Authorization: Bearer <token>. Cookie-authenticated mutating requests must carry Origin == PUBLIC_ORIGIN.",
   "$defs": {
     "ErrorResponse": {

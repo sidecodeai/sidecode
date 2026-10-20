@@ -905,7 +905,7 @@ something else beside its dot, below.
 
 The word beside the dot on a session's row is the session's **origin**, not its state:
 **"Terminal"** for a session a terminal started (`origin: terminal`),
-**"Remote Control"** for one started from the phone or the browser (`origin: remote`) — one word
+**"Remote launch"** for one started from the phone or the browser (`origin: remote`) — one word
 for both apps, because which app pressed New session is nobody's business afterwards. The state is
 the dot's alone: green working, amber for you — pulsing while a question or a permission waits,
 solid when a turn has finished and its result is there — grey when nothing holds the session or the

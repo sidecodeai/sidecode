@@ -130,7 +130,7 @@ APPROVAL_OPTIONS = [
 # A51: the words a steered message reaches the model with, Claude Code's own
 # for a message the person types mid-turn, said of one relayed from an app.
 STEER_LEAD = (
-    "The person who owns this machine sent a new message through remote-control while you "
+    "The person who owns this machine sent a new message through SideCode while you "
     "were working. It is their own words, exactly as if typed in this terminal:"
 )
 STEER_TAIL = (

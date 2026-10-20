@@ -1,4 +1,4 @@
-"""remote-control device daemon."""
+"""SideCode device daemon."""
 
 __version__ = "1.14.2"
 

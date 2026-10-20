@@ -4,7 +4,7 @@ The socket sits beside the channel socket in the device home and follows the
 same rule: a home deep enough to overflow the 104-byte `sun_path` limit falls
 back to a short per-user directory under the system temporary directory. The
 extension derives the same path for itself, so the rule is stated once here and
-mirrored in `extension/remote-control.ts`.
+mirrored in `extension/sidecode.ts`.
 """
 
 from __future__ import annotations
@@ -18,7 +18,11 @@ from ...channel.paths import MAX_SOCKET_PATH_BYTES
 from ...config import client_home, state_dir
 
 SOCKET_NAME = "pi-extension.sock"
-EXTENSION_NAME = "remote-control.ts"
+EXTENSION_NAME = "sidecode.ts"
+# Where earlier builds installed it, and the flag every copy sets in pi, which
+# is how a file under that name is known to be ours rather than somebody else's.
+LEGACY_EXTENSION_NAME = "remote-control.ts"
+MARKER = b"__rcRemoteControlPi"
 # The environment variable the device sets on the RPC children it starts, so
 # they never have to derive anything.
 SOCKET_ENV = "RC_PI_SOCKET"
@@ -49,3 +53,7 @@ def extensions_dir() -> Path:
 
 def installed_extension() -> Path:
     return extensions_dir() / EXTENSION_NAME
+
+
+def legacy_extension() -> Path:
+    return extensions_dir() / LEGACY_EXTENSION_NAME

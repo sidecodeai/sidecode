@@ -1,6 +1,6 @@
 # rc_gateway
 
-The remote-control gateway. It is the only component apps and devices talk to: it authenticates
+The SideCode gateway. It is the only component apps and devices talk to: it authenticates
 users, enrolls devices, routes requests between apps and devices, keeps a session index and a
 bounded replay buffer, proxies speech-to-text, sends push notifications and serves the web UI plus
 the client installer.

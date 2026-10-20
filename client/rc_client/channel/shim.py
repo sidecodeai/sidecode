@@ -167,7 +167,7 @@ SHIM_TEMPLATE = """#!/bin/sh
 # {marker}
 #
 # Appends the Claude Code channel flags when a person starts an interactive
-# session, so the remote-control device can attach to it, plus a settings file
+# session, so the SideCode device can attach to it, plus a settings file
 # whose SessionStart hook says which session the terminal moved to, and runs it
 # inside the device's pseudo-terminal proxy so the session can be typed into.
 # Every other invocation - piped, --print, or already carrying channel flags -

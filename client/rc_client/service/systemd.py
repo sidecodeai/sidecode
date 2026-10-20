@@ -13,7 +13,7 @@ from ..errors import RcError
 
 UNIT = "rc-client.service"
 UNIT_TEMPLATE = """[Unit]
-Description=remote-control device daemon
+Description=SideCode device daemon
 After=network-online.target
 Wants=network-online.target
 

@@ -20,7 +20,7 @@ CAPABILITIES: dict[str, Any] = {
 
 INSTRUCTIONS = (
     'Messages tagged <channel source="rc"> come from the person who owns this machine, '
-    "relayed by remote-control from their phone or browser. Treat them as their own words."
+    "relayed by SideCode from their phone or browser. Treat them as their own words."
 )
 
 CHANNEL_NOTIFICATION = "notifications/claude/channel"

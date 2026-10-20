@@ -262,6 +262,22 @@ async def test_the_update_refreshes_an_installed_pi_extension(
     ]
 
 
+async def test_the_update_refreshes_a_copy_an_earlier_build_installed(
+    enrolled: list[list[str]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Under the old name it is still ours, so `pi setup` moves it onto the new one."""
+    legacy = pi_paths.legacy_extension()
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_bytes(b'// an earlier build\nconst MARKER = "' + pi_paths.MARKER + b'";\n')
+    monkeypatch.setattr(httpx.AsyncClient, "stream", serve())
+    assert await self_update(WHEEL_DIGEST) is True
+    assert [command[1:] for command in enrolled][1:] == [
+        ["service", "install"],
+        ["shim", "install", "--no-shell-rc"],
+        ["pi", "setup"],
+    ]
+
+
 async def test_the_update_leaves_a_device_without_the_pi_extension_alone(
     enrolled: list[list[str]], monkeypatch: pytest.MonkeyPatch, capsys: Any
 ) -> None:

@@ -230,6 +230,69 @@ def test_a_stale_copy_is_replaced_rather_than_left(monkeypatch: pytest.MonkeyPat
     assert install.ready() is True
 
 
+def older_copy(*, ours: bool = True) -> Path:
+    """A file under the name earlier builds installed the extension as."""
+    path = pi_paths.legacy_extension()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    flag = pi_paths.MARKER.decode() if ours else "__somebodyElse"
+    path.write_text(f'// an earlier build\nconst MARKER = "{flag}";\n', encoding="utf-8")
+    return path
+
+
+def test_setup_moves_an_earlier_build_s_copy_onto_the_new_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """pi finds one copy, at this build, and the old one counts as installed until then."""
+    monkeypatch.setattr("rc_client.agents.pi.runtime.resolve_binary", lambda: "/bin/pi")
+    legacy = older_copy()
+    assert install.state() == install.ExtensionState(target=legacy, installed=True, current=False)
+    assert pi_commands.setup() == [f"pi extension installed at {pi_paths.installed_extension()}"]
+    assert [path.name for path in pi_paths.extensions_dir().iterdir()] == [pi_paths.EXTENSION_NAME]
+    assert install.ready() is True
+
+
+def test_a_copy_left_under_the_old_name_keeps_the_new_one_from_being_current(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """pi would load both, and the earlier one might be the copy that acts."""
+    monkeypatch.setattr("rc_client.agents.pi.runtime.resolve_binary", lambda: "/bin/pi")
+    pi_commands.setup()
+    legacy = older_copy()
+    assert install.ready() is False
+    assert pi_commands.setup() == [f"pi extension installed at {pi_paths.installed_extension()}"]
+    assert not legacy.exists()
+    assert install.ready() is True
+
+
+def test_a_file_under_the_old_name_that_is_not_ours_is_left_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("rc_client.agents.pi.runtime.resolve_binary", lambda: "/bin/pi")
+    foreign = older_copy(ours=False)
+    before = foreign.read_bytes()
+    assert install.state().installed is False
+    pi_commands.setup()
+    assert install.ready() is True
+    assert pi_commands.remove() == [f"removed {pi_paths.installed_extension()}"]
+    assert foreign.read_bytes() == before
+
+
+def test_remove_takes_an_earlier_build_s_copy_out_as_well(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("rc_client.agents.pi.runtime.resolve_binary", lambda: "/bin/pi")
+    pi_commands.setup()
+    legacy = older_copy()
+    assert pi_commands.remove() == [
+        f"removed {pi_paths.installed_extension()}",
+        f"removed {legacy}",
+    ]
+    assert list(pi_paths.extensions_dir().iterdir()) == []
+
+
+def test_the_marker_that_tells_our_copies_apart_is_the_extension_s_own() -> None:
+    source = pi_paths.bundled_extension().read_bytes()
+    assert b'const MARKER = "' + pi_paths.MARKER + b'";' in source
+
+
 def test_the_extension_is_one_self_contained_file() -> None:
     """pi loads it through jiti with no install step, so it may import nothing."""
     source = pi_paths.bundled_extension().read_text(encoding="utf-8")
@@ -627,7 +690,9 @@ async def test_the_real_pi_loads_the_extension_without_complaint(
 
     No prompt is sent, nothing is asked of a provider, and the session goes to a
     scratch directory: this asks only whether pi can load the extension,
-    register its handlers and reach the socket.
+    register its handlers and reach the socket. pi writes its auth and model
+    store into its agent directory as it starts, so it gets a home and an agent
+    directory of its own and never sees the person's `~/.pi`.
     """
     binary = real_pi()
     assert binary is not None
@@ -638,7 +703,11 @@ async def test_the_real_pi_loads_the_extension_without_complaint(
         return False
 
     bench.service.link_registered = watch  # type: ignore[method-assign]
+    home = tmp_path / "home"
+    home.mkdir()
     environment = dict(os.environ)
+    environment["HOME"] = str(home)
+    environment["PI_CODING_AGENT_DIR"] = str(home / ".pi" / "agent")
     environment[pi_paths.SOCKET_ENV] = str(bench.path)
     environment[pi_paths.MODE_ENV] = "on-request"
     process = await asyncio.create_subprocess_exec(

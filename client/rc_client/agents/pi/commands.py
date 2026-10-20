@@ -41,7 +41,7 @@ def summary() -> str:
 
 
 def remove() -> list[str]:
-    target = paths.installed_extension()
-    if install.remove():
-        return [f"removed {target}"]
-    return [f"no pi extension at {target}"]
+    removed = install.remove()
+    if not removed:
+        return [f"no pi extension at {paths.installed_extension()}"]
+    return [f"removed {path}" for path in removed]

@@ -160,7 +160,7 @@ def create_app(state: GatewayState | None = None) -> FastAPI:
                     await closer()
 
     app = FastAPI(
-        title="remote-control gateway",
+        title="SideCode gateway",
         version=VERSION,
         docs_url=None,
         redoc_url=None,

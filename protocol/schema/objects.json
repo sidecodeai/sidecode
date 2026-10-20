@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://remote-control.dev/schema/v1/objects.json",
-  "title": "remote-control shared objects (protocol v1)",
+  "title": "SideCode shared objects (protocol v1)",
   "description": "Shared value objects and the error envelope used by HTTP responses and by every WebSocket frame. Objects deliberately keep additionalProperties open: PROTOCOL.md requires every party to ignore unknown fields.",
   "$defs": {
     "Timestamp": {

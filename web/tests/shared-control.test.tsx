@@ -363,7 +363,7 @@ describe.runIf(fixturesAvailable())('A10 status line and list labels', () => {
     expect(sessionOriginLabel(sharedIdle)).toBe('Terminal');
     expect(sessionOriginLabel(sharedRunning)).toBe('Terminal');
     expect(sessionOriginLabel(terminalSession())).toBe('Terminal');
-    expect(sessionOriginLabel({ origin: 'remote' })).toBe('Remote Control');
+    expect(sessionOriginLabel({ origin: 'remote' })).toBe('Remote launch');
   });
 });
 

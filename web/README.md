@@ -1,7 +1,7 @@
-# web — remote-control app
+# web — SideCode web app
 
-The browser client for remote-control: devices, sessions, and an instant-messaging style
-remote control surface for Claude Code and Codex sessions running on your machines.
+The browser client for SideCode: devices, sessions, and an instant-messaging style
+control surface for Claude Code and Codex sessions running on your machines.
 It is a static single-page app; the gateway serves `web/dist` with an SPA fallback.
 
 Everything on the wire follows `protocol/PROTOCOL.md` (protocol version 1). The app never

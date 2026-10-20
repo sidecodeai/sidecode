@@ -1,4 +1,4 @@
-# remote-control stack: the gateway, plus an optional local speech-to-text service.
+# SideCode stack: the gateway, plus an optional local speech-to-text service.
 #
 # Voice is two separate settings in .env: STT_* turns dictation on, and the optional POLISH_* block
 # lets the apps clean a finished dictation up through an OpenAI-compatible model of yours.

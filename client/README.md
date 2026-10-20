@@ -1,8 +1,8 @@
-# rc-client — remote-control device daemon
+# rc-client — SideCode device daemon
 
 `rc-client` runs on a developer machine, drives the coding agents installed
 there (Claude Code, Codex, Grok Build and pi), and answers requests forwarded
-from the remote-control gateway. It dials out only: nothing listens on the
+from the SideCode gateway. It dials out only: nothing listens on the
 device, and model credentials never leave it.
 
 It also picks up sessions you started yourself in a terminal. A Claude session

@@ -1,4 +1,4 @@
-# remote-control wire protocol v1
+# SideCode wire protocol v1
 
 Normative specification for every component: the **gateway** (VPS service `rc_gateway`), a **device**
 (a machine running the client daemon `rc-client`), and an **app** (the web UI, the iOS app, the

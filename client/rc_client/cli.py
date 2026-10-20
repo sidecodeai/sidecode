@@ -46,7 +46,7 @@ EXIT_REFUSED = 3
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="rc-client", description="remote-control device daemon")
+    parser = argparse.ArgumentParser(prog="rc-client", description="SideCode device daemon")
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("--log-level", default=None, help="debug, info, warning or error")
     sub = parser.add_subparsers(dest="command", required=True)

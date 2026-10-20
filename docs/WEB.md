@@ -1031,7 +1031,7 @@ make, clash and refuse like the device; `tests/DirectoryPicker.test.tsx` drives 
 lines, each a `.session-line` that puts one thing at the leading edge and one at the trailing edge.
 The first is the title and the relative time. The second is the agent chip and, at the trailing
 edge, the `StatusDot` with the session's **origin** — `sessionOriginLabel` in `src/strings.ts`:
-"Terminal" for `origin: terminal`, "Remote Control" for `origin: remote`, `strings.labels.origin` —
+"Terminal" for `origin: terminal`, "Remote launch" for `origin: remote`, `strings.labels.origin` —
 in the secondary ink whatever the state (`docs/DESIGN.md` § "The session row says where it came
 from"). The state is the dot's colour alone; "running", "idle", "terminal · attached" and "device
 offline" are gone from the row, and a hand-archived row reads "Archived · <origin>". The chat

@@ -894,7 +894,7 @@ turn. What happens instead depends on how the phone sent the message (amendment 
   the message. At the turn's next batch of tool calls the `PostToolBatch` hook (below) hands it to
   the model as that batch's additional context, which the next request carries beside the tool
   results, wrapped in the channel's own `<channel source="rc">` tag and in Claude Code's own words
-  for a message the person types mid-turn, said of one relayed through remote-control, and the
+  for a message the person types mid-turn, said of one relayed through SideCode, and the
   terminal shows `SideCode · remote message: …` under the batch. Every steer waiting at a boundary
   goes in there, oldest first. A prompt the person queues in the terminal is folded in at the same
   boundary, and where the model reads it beside a hook's context is the CLI's choice, not a matter
@@ -1851,7 +1851,7 @@ apps' hint saying what to run.
 ## pi
 
 pi is the only agent this device extends rather than merely drives. `rc-client pi setup` copies one
-file — `remote-control.ts`, shipped inside the wheel — into `~/.pi/agent/extensions/`, which pi
+file — `sidecode.ts`, shipped inside the wheel — into `~/.pi/agent/extensions/`, which pi
 discovers on its own without the person's `settings.json` ever being opened. From then on every pi
 process on the machine loads it, and that extension is what `attach: "extension"` names: it dials a
 socket in the device home, says which session it is in, streams pi's own events out and carries out
@@ -1870,6 +1870,15 @@ copy is installed, and every pi started afterwards loads the new one. Where that
 fails, `attach_ready` is false until `pi setup` runs again, and until then the device passes its own
 copy to the sessions it starts with `pi -e <bundled path>`. A `globalThis` marker inside the file makes the second load of a double-loaded
 process a no-op.
+
+Earlier builds installed the file as `remote-control.ts`, the name pi listed among its extensions.
+A file under that name that carries the marker is ours: it counts as installed but not current, so
+an update still runs `pi setup` — an older updater looks for the old name and finds it — and
+`pi setup` renames it onto `sidecode.ts` before writing the new build over it, so the directory
+never holds both names, or neither. `pi remove` and `rc-client uninstall` take out either name; a
+file under the old name without the marker is somebody else's and is left alone. A copy still
+under the old name beside a current one keeps `attach_ready` false, because pi loads both and the
+older one may be the copy that acts.
 
 ### Sessions this device starts
 

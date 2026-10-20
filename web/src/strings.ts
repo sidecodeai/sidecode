@@ -622,7 +622,7 @@ export const en = {
      * One word for both apps: which of them pressed New session is nobody's
      * business afterwards.
      */
-    origin: { terminal: 'Terminal', remote: 'Remote Control' } as Record<string, string>,
+    origin: { terminal: 'Terminal', remote: 'Remote launch' } as Record<string, string>,
     /** Who settled an approval (`decision.by`), in the words `chat.approvalResolved` reads. */
     decider: { remote: 'remote', terminal: 'terminal', policy: 'policy' } as Record<string, string>,
   },

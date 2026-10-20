@@ -1,5 +1,5 @@
 #!/bin/sh
-# remote-control device installer.
+# SideCode device installer.
 #
 # The gateway serves this file at GET /install.sh with the placeholder on the GATEWAY line
 # replaced by its PUBLIC_ORIGIN, so the usual invocations are:
@@ -262,7 +262,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
         [ "$SHELL_RC" -eq 1 ] || set -- --no-shell-rc
         "$VENV/bin/rc-client" uninstall "$@" || true
     fi
-    log "remote-control service removed. Delete $RC_HOME to remove the data as well."
+    log "SideCode service removed. Delete $RC_HOME to remove the data as well."
     exit 0
 fi
 

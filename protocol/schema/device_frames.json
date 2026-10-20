@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://remote-control.dev/schema/v1/device_frames.json",
-  "title": "remote-control device <-> gateway frames (protocol v1)",
+  "title": "SideCode device <-> gateway frames (protocol v1)",
   "description": "Every JSON text frame on WS /ws/device, in both directions. The socket is authenticated with `Authorization: Bearer <device_token>`. Discriminated by `type`. additionalProperties stays open: unknown fields must be ignored.",
   "$ref": "#/$defs/DeviceFrame",
   "$defs": {

@@ -171,7 +171,7 @@ describe('the words themselves', () => {
 
   it('translates where a session came from, and the legend beside it', () => {
     expect(sessionOriginLabel({ origin: 'terminal' })).toBe('Terminal');
-    expect(sessionOriginLabel({ origin: 'remote' })).toBe('Remote Control');
+    expect(sessionOriginLabel({ origin: 'remote' })).toBe('Remote launch');
     expect(legendEntries().map((e) => e.label)).toEqual([
       'Working',
       'For you',

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://remote-control.dev/schema/v1/app_frames.json",
-  "title": "remote-control app <-> gateway frames (protocol v1)",
+  "title": "SideCode app <-> gateway frames (protocol v1)",
   "description": "Every JSON text frame on WS /ws/app, in both directions. Discriminated by `type`. additionalProperties stays open: unknown fields must be ignored.",
   "$ref": "#/$defs/AppFrame",
   "$defs": {

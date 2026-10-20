@@ -1,5 +1,5 @@
 /**
- * Remote Control for pi.
+ * SideCode for pi.
  *
  * One file, shipped inside the `rc-client` wheel and installed by
  * `rc-client pi setup` into `~/.pi/agent/extensions/`. It dials a Unix socket
@@ -48,7 +48,10 @@ import type {
 	ToolCallEventResult,
 } from "@earendil-works/pi-coding-agent";
 
-/** Only one copy of this file may act in one pi process. */
+/**
+ * Only one copy of this file may act in one pi process. The device also tells
+ * its own copies from anybody else's file by this string, so it never changes.
+ */
 const MARKER = "__rcRemoteControlPi";
 const SOCKET_NAME = "pi-extension.sock";
 const CLIENT_HOME = ".rc-client";

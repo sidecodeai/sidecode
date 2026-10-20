@@ -1,4 +1,4 @@
-"""remote-control gateway."""
+"""SideCode gateway."""
 
 from __future__ import annotations
 
