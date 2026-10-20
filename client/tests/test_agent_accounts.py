@@ -355,7 +355,8 @@ async def test_a_grok_oidc_entry_is_an_account_with_no_windows_and_no_error() ->
         },
     )
 
-    accounts = await grok_account.detect()
+    # Quota is wanted, but no way to ask the leader is handed over (A53).
+    accounts = await grok_account.detect(limits=True)
 
     assert [account.to_dict() for account in accounts] == [
         {"provider": "xai", "method": "account", "email": "me@example.com"}

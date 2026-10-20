@@ -21,7 +21,7 @@ from ...logging_setup import logger
 from ...models import Session, now_ms
 from ...sessions import titles
 from . import catalog as catalogue
-from . import control, leader, runtime
+from . import control, leader, quota, runtime
 from . import sessions as grok_sessions
 from .adapter import GrokRunner
 
@@ -33,6 +33,10 @@ log = logger("rc_client.grok.service")
 # How long to leave a drifted leader alone between restart attempts.
 DRIFT_INTERVAL = 900.0
 KILL_TIMEOUT = 15.0
+# How long the scan waits after a join of the leader failed, doubling up to the
+# last, so a Grok that cannot start one is not started again on every scan.
+RETRY_FIRST = 30.0
+RETRY_LAST = 900.0
 
 
 class GrokLeaderService:
@@ -49,6 +53,9 @@ class GrokLeaderService:
         self._titles: dict[str, str] = {}
         self._binary: str | None = None
         self._drifted_at = 0.0
+        # When the scan may next try to join, and how long it waited last.
+        self._retry_at = 0.0
+        self._retry_wait = 0.0
         self._lock = asyncio.Lock()
 
     # ------------------------------------------------------------- accessors
@@ -60,6 +67,19 @@ class GrokLeaderService:
     def knows(self, session_id: str) -> bool:
         """Whether the leader holds this session, so the mirror leaves it alone."""
         return session_id in self._known
+
+    async def billing(self) -> dict[str, Any]:
+        """The account's quota, where `/usage` reads it too (A53).
+
+        Never joins the leader itself: a `device.agents` reply does not wait on
+        a join, which the scan makes. Until it has, the read says why.
+        """
+        client = self._client
+        if client is not None and client.connected:
+            return await client.request(quota.BILLING, {})
+        if await asyncio.to_thread(leader.config_ready):
+            raise quota.LeaderNotJoined()
+        raise quota.LeaderModeOff()
 
     # ------------------------------------------------------------- lifecycle
 
@@ -82,13 +102,15 @@ class GrokLeaderService:
         self._binary = path
         client = self._client
         if client is None:
+            # Registered before the next await, so a second caller joins
+            # through this client rather than starting one of its own.
             client = leader.LeaderClient(
                 path,
                 on_unknown=self._unknown,
                 on_sessions_changed=self._sessions_changed,
             )
             self._client = client
-        return await client.connect()
+        return await self._connect(client)
 
     async def stop(self) -> None:
         client, self._client = self._client, None
@@ -106,8 +128,7 @@ class GrokLeaderService:
         if known:
             live = {entry.session_id: entry for entry in entries if entry.live}
         async with self._lock:
-            if self._client is not None and not self._client.connected:
-                await self._reconnect()
+            await self._rejoin(live)
             self._registered = set(live)
             await self._adopt(live)
             await self._refresh_control()
@@ -118,7 +139,7 @@ class GrokLeaderService:
         for session_id, registered in live.items():
             if session_id in self._known:
                 continue
-            if not await self.ensure():
+            if not self.ready:
                 return
             client = self._client
             if client is None:  # pragma: no cover - narrowing
@@ -251,11 +272,48 @@ class GrokLeaderService:
 
     # -------------------------------------------------------------- the link
 
-    async def _reconnect(self) -> None:
+    async def _rejoin(self, live: dict[str, grok_sessions.RegisteredSession]) -> None:
+        """Join the leader the configuration asks for, whenever the link is down.
+
+        What the daemon does at start, done again on each scan: after the child
+        died, after leader mode was turned on, after Grok was installed. A join
+        that fails waits longer before each next try, except when a terminal
+        session has just appeared, most likely a TUI that started the leader.
+        While leader mode is off, or its configuration cannot be read, nothing
+        is joined or started; the client stays, so the sessions it held are
+        loaded again through it once leader mode is back.
+        """
+        if self.ready:
+            return
+        if not await asyncio.to_thread(leader.config_ready):
+            return
+        newcomer = bool(set(live) - self._registered - self._known)
+        if time.monotonic() < self._retry_at and not newcomer:
+            return
+        if self._client is None:
+            if not (self._binary or await asyncio.to_thread(runtime.resolve_binary)):
+                return
+            joined = await self.ensure()
+        else:
+            joined = await self._reconnect()
+        if not joined:
+            self._retry_wait = min(RETRY_LAST, self._retry_wait * 2 or RETRY_FIRST)
+            self._retry_at = time.monotonic() + self._retry_wait
+
+    async def _connect(self, client: leader.LeaderClient) -> bool:
+        """Join through `client`. However the link comes up, the scan's wait is over."""
+        if self._binary:
+            client.binary = self._binary
+        joined = await client.connect()
+        if joined:
+            self._retry_at = self._retry_wait = 0.0
+        return joined
+
+    async def _reconnect(self) -> bool:
         """The leader child died: join again and re-load everything we held."""
         client = self._client
-        if client is None or not await client.connect():
-            return
+        if client is None or not await self._connect(client):
+            return False
         for session_id in sorted(self._known):
             entry = self.hub.entries.get(session_id)
             runner = entry.runner if entry is not None else None
@@ -265,6 +323,7 @@ class GrokLeaderService:
                 await runner.resubscribe()
             except RcError as exc:
                 log.warning("could not re-join a grok session", error=exc.message[:200])
+        return True
 
     async def _unknown(self, session_id: str, method: str, params: dict[str, Any]) -> None:
         """A session nothing here holds just spoke.

@@ -35,6 +35,8 @@ TurnEndCallback = Callable[[], Awaitable[None]]
 SessionIdCallback = Callable[[str], Awaitable[None]]
 # Reads `account/rateLimits/read` on the shared Codex daemon (A33).
 RateLimitsReader = Callable[[], Awaitable[dict[str, Any]]]
+# Reads `_x.ai/billing` on the Grok leader this device is connected to (A53).
+BillingReader = Callable[[], Awaitable[dict[str, Any]]]
 
 
 @dataclass(slots=True)
@@ -51,6 +53,9 @@ class DetectContext:
     # How to ask the shared Codex daemon for its account's windows; absent when
     # there is no daemon connection to ask.
     codex_rate_limits: RateLimitsReader | None = None
+    # How to ask the Grok leader for its account's window (A53); absent when
+    # quota is not wanted. It says itself when leader mode is off.
+    grok_billing: BillingReader | None = None
 
 
 @dataclass(slots=True)

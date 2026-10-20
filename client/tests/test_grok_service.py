@@ -729,7 +729,7 @@ async def test_a_question_nobody_answered_expires(home: Path, tmp_path: Path) ->
     await wait_for(lambda: statuses(recorder) == ["pending", "expired"])
     await settled(peer)
     assert peer.reply(7002) is None
-    assert hub.entries[SESSION].session.state == "running"
+    await wait_for(lambda: hub.entries[SESSION].session.state == "running", timeout=5)
     await service.stop()
 
 
@@ -753,7 +753,7 @@ async def test_a_question_asked_again_after_a_rejoin_keeps_its_one_card(
     assert reply["result"]["answers"] == {"Which color should I use?": "Blue"}
     await settled(peer)
     assert peer.reply(7002) is None, "the request it replaced is never answered"
-    assert statuses(recorder) == ["pending", "resolved"]
+    await wait_for(lambda: statuses(recorder) == ["pending", "resolved"], timeout=5)
     await service.stop()
 
 
@@ -1000,8 +1000,7 @@ async def test_a_leader_that_died_is_rejoined_on_the_next_scan(home: Path, tmp_p
     child = agent._process
     assert child is not None
     child.kill()
-    await asyncio.sleep(0.2)
-    assert connected(service) is False
+    await wait_for(lambda: not connected(service), timeout=5)
 
     await service.tick(binary)
     assert connected(service) is True

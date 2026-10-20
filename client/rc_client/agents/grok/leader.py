@@ -137,6 +137,15 @@ class LeaderClient:
     # ------------------------------------------------------------- lifecycle
 
     @property
+    def binary(self) -> str:
+        return self._binary
+
+    @binary.setter
+    def binary(self, path: str) -> None:
+        """The launcher the next connect runs, so an install that moved is followed."""
+        self._binary = path
+
+    @property
     def connected(self) -> bool:
         return self._agent is not None and self._agent.alive
 

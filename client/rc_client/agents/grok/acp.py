@@ -41,12 +41,18 @@ INTERACTIONS = frozenset(
 
 
 class GrokError(RcError):
-    """An error Grok answered a request with, and the JSON-RPC code it gave."""
+    """An error Grok answered a request with, and the JSON-RPC code it gave.
 
-    def __init__(self, message: str, rpc_code: Any) -> None:
+    `detail` is the error's `data` when Grok put words there: an extension
+    method answers `Internal error` and says what went wrong only in `data`.
+    """
+
+    def __init__(self, message: str, rpc_code: Any, data: Any = None) -> None:
         super().__init__("agent_unavailable", message)
         exact = isinstance(rpc_code, int) and not isinstance(rpc_code, bool)
         self.rpc_code: int | None = rpc_code if exact else None
+        detail = data.strip() if isinstance(data, str) else ""
+        self.detail: str | None = detail or None
 
 
 class GrokTransport(Protocol):
@@ -235,7 +241,11 @@ class GrokAgent:
             if "error" in message:
                 error = message["error"] or {}
                 future.set_exception(
-                    GrokError(str(error.get("message") or "grok error"), error.get("code"))
+                    GrokError(
+                        str(error.get("message") or "grok error"),
+                        error.get("code"),
+                        error.get("data"),
+                    )
                 )
             else:
                 result = message.get("result")

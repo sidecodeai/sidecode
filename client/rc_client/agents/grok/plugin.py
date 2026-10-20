@@ -39,7 +39,7 @@ async def detect(context: DetectContext) -> AgentInfo:
     path = runtime.resolve_binary()
     version = await runtime.probe_version(path) if path else None
     models = catalogue.load()
-    accounts = await account.detect() if path else None
+    accounts = await account.detect(context.limits, context.grok_billing) if path else None
     return AgentInfo(
         agent=AGENT,
         available=bool(path),

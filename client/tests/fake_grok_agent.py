@@ -25,6 +25,10 @@ and every prompt echoed back the way a leader echoes one to every client. A test
 pushes anything the leader would send unasked — a permission request, a prompt
 somebody typed at the TUI, `interaction_resolved`, `_x.ai/sessions/changed` — by
 dropping the whole JSON-RPC message into the peer's `inject/` directory.
+
+`_x.ai/billing` answers with the reply `fixtures/grok/billing.json` recorded for
+the case named in the scratch directory's `billing` file (A53); `silent` never
+answers, and without the file it is a method the peer does not know.
 """
 
 from __future__ import annotations
@@ -187,6 +191,8 @@ class FakePeer:
             self.set_option(message_id, message.get("params") or {})
         elif method == "session/prompt":
             self.prompt(message_id, params)
+        elif method == "_x.ai/billing" and (self.directory / "billing").exists():
+            self.billing(message_id)
         else:
             self.send(
                 {
@@ -195,6 +201,14 @@ class FakePeer:
                     "error": {"code": -32601, "message": "Method not found"},
                 }
             )
+
+    def billing(self, message_id: Any) -> None:
+        """What the leader answered to `/usage` for the recorded case a test chose."""
+        case = (self.directory / "billing").read_text(encoding="utf-8").strip()
+        if case == "silent":
+            return
+        recorded: dict[str, Any] = _handshake("billing.json")[case]
+        self.send({"jsonrpc": "2.0", "id": message_id, **recorded})
 
     def advertise_commands(self) -> None:
         """Grok pushes its whole command list unasked once a session is open."""

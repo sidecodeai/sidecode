@@ -583,7 +583,10 @@ async def test_a_turn_s_late_ending_leaves_the_next_turn_alone(tmp_path: Path) -
     await runner.send("Reply with exactly OK")
     await wait_for(lambda: len(recorder.events("turn_completed")) == 1)
     await runner.send("Ask me which color to use")
-    await wait_for(lambda: recorder.events("question"))
+    await wait_for(
+        lambda: recorder.events("question") and runner.channel.session.state == "needs_input",
+        timeout=5,
+    )
     # The first turn's own `turn_completed` follows the question at once.
     await asyncio.sleep(0.3)
     assert [event["status"] for event in recorder.events("question")] == ["pending"]
@@ -607,7 +610,10 @@ async def test_a_failed_turn_s_late_ending_leaves_the_next_turn_alone(tmp_path: 
     await wait_for(lambda: len(recorder.events("turn_completed")) == 1)
     assert recorder.events("error")
     await runner.send("Ask me which color to use")
-    await wait_for(lambda: recorder.events("question"))
+    await wait_for(
+        lambda: recorder.events("question") and runner.channel.session.state == "needs_input",
+        timeout=5,
+    )
     await asyncio.sleep(0.3)
     assert [event["status"] for event in recorder.events("question")] == ["pending"]
     assert len(recorder.events("turn_completed")) == 1

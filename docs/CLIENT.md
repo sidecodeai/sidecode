@@ -362,9 +362,24 @@ second budget:
   command reads it too. `primary` and `secondary` become the windows, seconds turned into
   milliseconds; an account with only a weekly window reports one. No daemon means the one line
   "Codex shared daemon is not running".
-- **Grok Build**: nothing. The leader protocol of 1.0.30 is `session/*` and has no account or usage
-  method, so `limits` stays absent with no `limits_error`, which is the wire's way of saying the
-  vendor exposes no windows.
+- **Grok Build** (A53): `_x.ai/billing` on the leader the device is joined to, the extension
+  method `/usage` reads the account's allowance through. The leader asks xAI under its own
+  session, so the device sends no token and names no endpoint. The reply's
+  `config.currentPeriod`, `USAGE_PERIOD_TYPE_WEEKLY` or `USAGE_PERIOD_TYPE_MONTHLY` with RFC 3339
+  `start` and `end`, becomes one `AgentLimit`: `window_minutes` the period's length, 10080 for a
+  week; `resets_at` its end; `used_percent` the reply's `creditUsagePercent`, which xAI leaves out
+  while none of the period is used, as proto3 JSON leaves out every zero, so a reply without it is
+  0%, which is how Grok's TUI shows such a reply. A reply with no period of those two
+  kinds has no window and no error. A refusal is Grok's own words in `limits_error`, the error's
+  `data` when it has one, with every address cut down to its host, and a leader that does not
+  answer within the five seconds is the one line "the Grok leader did not answer in time". Grok's
+  quota shows only in leader mode (`rc-client grok setup`), and there it always shows: the scan
+  joins the leader the configuration asks for, and until the device holds a live link to it (just
+  started, rejoining, or the link lost before the read) `limits_error` is the one line "not
+  connected to the Grok leader yet; the device keeps trying". The read never joins the leader
+  itself. With leader mode off, or a sandbox profile, nothing is asked and `limits` stays absent
+  with no `limits_error`, because a private agent started for one read would make the requests and
+  the writes every start of Grok makes.
 
 Every read is best effort: a missing, unreadable or malformed file is "signed in nowhere", and a
 dead daemon, a failed request or a timeout is one line of `limits_error` against an account that is
@@ -1674,9 +1689,17 @@ running when they leave (`agent agent leader --no-exit-on-disconnect …`, a chi
 started it, its stderr in `~/.grok/leader.log`). The device's client is `agents/grok/leader.py`:
 one `initialize`, whose `_meta.agentVersion` is the leader's version, and then every notification
 and every `session/request_permission` routed by `params.sessionId` to the runner of that session;
-rows for a session nothing here holds go to the service. When the child dies the service reconnects
-on the next scan, re-`initialize`s, re-`session/load`s every session it held and republishes each
-one's control.
+rows for a session nothing here holds go to the service. Whenever the device holds no live link to
+the leader the configuration asks for (the child died, leader mode was turned on, Grok was
+installed), the next scan joins it as the daemon does at start, with the launcher the scan resolves
+then, re-`initialize`s, re-`session/load`s every session it held and republishes each one's
+control. A join that fails waits 30 seconds before the next try, twice as long after each further
+failure, up to 15 minutes, unless a terminal session has just appeared in the registry, most
+likely a TUI that started the leader, which is tried at once; a join made any other way ends the
+wait. While leader mode is off, or its configuration cannot be read, a dead link is not rejoined
+and no leader is started; once it is back, the sessions held are loaded again. The same connection
+answers a `device.agents` reply's quota read, `_x.ai/billing` (Accounts and quota, A53), which never
+joins the leader itself.
 
 Who is in a session is Grok's own registry, `~/.grok/active_sessions.json` — `[{session_id, pid, cwd,
 opened_at}]`, written by every TUI while it runs and by nothing else — because the leader announces

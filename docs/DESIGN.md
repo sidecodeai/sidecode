@@ -1106,9 +1106,9 @@ so once, and the person can see and end every such resume where the session is.*
   after the limit reset") and when it could not ("mac-studio-office: not resumed"); a cancel the
   person made themselves is not announced. The time is never in the push — the gateway does not
   know the phone's time zone — and is read in the app.
-- **Grok Build and pi** report no limit the device can read. Their turns end as they always did,
-  and no resume is offered for them until they do; the device reads every agent's limit signal in
-  one place so one that gains a signal joins without a change to the wire.
+- **Grok Build and pi** report no limit stop the device can read. Their turns end as they always
+  did, and no resume is offered for them until they do; the device reads every agent's limit signal
+  in one place so one that gains a signal joins without a change to the wire.
 
 ### Polishing what you dictated
 

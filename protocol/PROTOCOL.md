@@ -825,7 +825,7 @@ session. pi holds one per provider it is signed in to; the other three hold at m
 | `tier` | string | no | A finer tier when the vendor exposes one, in words the device vouches for: `Max 5x` from Claude's rate-limit tier id `default_claude_max_5x`. Omitted when it only repeats `plan` |
 | `email` | string | no | The account's email when the agent records it locally |
 | `endpoint` | string | no | For `api_key`: the host the key is sent to when it is not the vendor's own (`ANTHROPIC_BASE_URL`, a Codex `model_providers` entry). Host only, never a path or a secret |
-| `limits` | `AgentLimit[]` | no | The rate-limit windows the device read for an `account`. Present only in a `device.agents` reply; empty when the vendor reported none. Absent, with no `limits_error`, when the vendor exposes no windows the device can read (Grok Build) |
+| `limits` | `AgentLimit[]` | no | The rate-limit windows the device read for an `account`. Present only in a `device.agents` reply; empty when the vendor reported none. Absent, with no `limits_error`, when the device has no way to read them: a pi sign-in other than Anthropic's, or Grok Build with leader mode off (A53) |
 | `limits_error` | string | no | Why `limits` is missing after the device tried — the token expired, the shared daemon is down, the network failed — in the device's words, one line |
 | `limits_checked_at` | timestamp | no | When the device read `limits` |
 
@@ -846,9 +846,10 @@ timeout — and the device keeps that reply out of what it republishes. An app t
 shows the stored accounts at once and asks `device.agents` for the meters; a device that is offline
 has accounts and no meters. `fixtures/objects/agent.claude-attach.json` (an Anthropic account with a
 tier and two windows, one confined to a model), `agent.codex-daemon.json` (an OpenAI account on plan
-`pro` with the shared daemon's two windows), `agent.grok.json` (an xAI account with no plan and no
-windows) and `agent.pi.json` (an Anthropic account beside an OpenAI key) are the worked examples,
-each as a `device.agents` reply would carry it.
+`pro` with the shared daemon's two windows), `agent.grok.json` (an xAI account with no plan, on a
+device with Grok's leader mode off and so with no windows) and `agent.pi.json` (an Anthropic
+account beside an OpenAI key) are the worked examples, each as a `device.agents` reply would carry
+it.
 
 Capabilities gate the UI. `steer` decides whether a message sent during a running turn is steered or
 queued; `takeover` decides whether a terminal-controlled session offers "Take over"; `history`
@@ -3550,9 +3551,9 @@ turn whatever the account prefers (`turn_completed` with `limit`, 5.9), and when
   resume cancels it; so does turning `resume_after_limit` off, which cancels every pending resume on
   every device of the account, each with `resume {status: "cancelled"}`. Turning it on schedules
   nothing for stops that already happened.
-- **Grok Build and pi** report no limit the device can read; their turns never carry `limit` and no
-  resume is scheduled for them. The device keeps one place where an agent's limit signal is read,
-  so an agent that gains one joins without a change to the wire.
+- **Grok Build and pi** report no limit stop the device can read; their turns never carry `limit`
+  and no resume is scheduled for them. The device keeps one place where an agent's limit signal is
+  read, so an agent that gains one joins without a change to the wire.
 
 The gateway stores the preference per account (3.2), sends it to each device after `hello_ack` and
 on every change, and pushes (3.7) `limit_reached` on `resume {status: "scheduled"}`, `resumed` on
@@ -4713,3 +4714,17 @@ a session a terminal shares, and nothing to a prompt it cannot answer, such as a
 such a session, and an approval there has no deadline of the device's own. An option's `preview` and
 the terminal's plan-mode interview choices are not carried. Nothing changes on the wire. See 4.4,
 5.8 and 9.
+
+**2026-10-20 A53 — Grok Build's quota reaches the device page.** A33 found no window Grok Build
+exposed, but the TUI's `/usage` reads the account's allowance through an extension method of Grok's
+own agent, `_x.ai/billing`, which the agent answers by asking xAI under the session it is signed in
+with. A device joined to the leader (A28) now asks the leader the same for a `device.agents` reply,
+and the current usage period it names, a week or a month, becomes one `AgentLimit`:
+`window_minutes` the period's length, `resets_at` its end, and `used_percent` the share xAI
+reports, which it leaves out while none of the period is used, so a reply without it is 0%. A reply
+with no such period has no window and no error; a refusal, or a leader that does not answer in
+time, is one line of `limits_error`. The device sends no token of its own and starts no agent for
+the read, so Grok's quota is read only in leader mode (`rc-client grok setup`), and there it always
+shows: while the device is still joining the leader, `limits_error` says so in one line. With leader
+mode off, `limits` stays absent with no `limits_error`, as before. Nothing changes on the wire. See
+4.2 and 7.2.
