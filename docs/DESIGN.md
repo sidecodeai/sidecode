@@ -644,12 +644,13 @@ queue. One thing always marks it: the header reads `terminal · attached`, the t
 repeats what the header says; the status line is reserved for information the header lacks (a
 running turn's steer/queue notice, "Controlled by the terminal", "Device offline").
 
-Everything else about it depends on what the attachment can carry, and the device says so in three
+Everything else about it depends on what the attachment can carry, and the device says so in four
 booleans on the agent. Nothing in either app asks which agent it is looking at.
 
 | Boolean | What it turns on | Claude channel | Codex daemon | pi extension | Grok leader |
 | --- | --- | --- | --- | --- | --- |
 | `shared_interrupt` | Stop, and "Interrupt & send" | on (A42) | on | on | on |
+| `shared_steer` | "Send" and "will steer the turn" while a turn runs, where `auto` steers it | on (A51) | not needed: lists `steer` | not needed: lists `steer` | off |
 | `shared_settings` | The model card and the permission-mode picker | model and effort (A40) | on | on | on |
 | `shared_attachments` | The attachment button, and pasted files | on (A49) | on | on | on (A49) |
 
@@ -660,27 +661,44 @@ which the terminal chose and the reader needs to know. A shared Codex session sh
 all live. The rule keeps the composer to two rows (the field, then one row of controls) on
 the phone.
 
-Steering follows the ordinary rule rather than a shared-session rule. Codex advertises `steer`, so a
-message typed into a running shared Codex turn joins that turn: the status line reads "Codex is
-working · your message will steer the turn" and the button stays "Send". Claude does not, so its
-shared sessions keep "will be queued" and a "Queue" button. The delivery chips below are therefore a
-Claude phenomenon in practice — a Codex message rarely waits.
+Steering follows the ordinary rule, and a shared session adds one way in (A51). Codex advertises
+`steer`, so a message typed into a running Codex turn joins that turn wherever the session was
+started: the status line reads "Codex is working · your message will steer the turn" and the button
+stays "Send". Claude does not advertise `steer`, but a shared Claude session steers the same way when
+its device reports `shared_steer`: the message reaches the running turn at its next step, and the
+composer and the status line read exactly as they do for Codex. A Claude session the device started,
+or a shared one on a device that does not report `shared_steer`, keeps "will be queued" and a
+"Queue" button. The delivery chips below therefore belong in practice to the sessions that queue — a
+steered message rarely waits.
 
 A steered message is drawn where the agent reads it, not where it was sent. Codex takes a steer at
 its next step, after the sentence it was already writing, and the terminal shows the prompt there;
-the app shows the same order. Until the device reports the message taken, the bubble stays at the
-bottom of the transcript as the optimistic row from sending, below whatever the turn is still
-producing. A bubble that jumped up into the middle of an answer would put the reply before the
-question.
+the app shows the same order. A shared Claude session takes it at the turn's next batch of tool
+calls, or as the next turn when none is left, and under that batch the terminal prints
+`SideCode · from your phone: <message>` — a line only the terminal shows, always in English (A51).
+Until the device reports the message taken, the bubble stays at the bottom of the transcript as the
+optimistic row from sending, below whatever the turn is still producing. A bubble that jumped up
+into the middle of an answer would put the reply before the question.
 
-A message sent into an attached session while its turn is running is a queued message and looks
-like one: the bubble from sending is taken over by the queue — "Up next · 1", the same list any
-queued message goes into — and the bubble reappears only when the CLI reads it, after the output of
-the turn it waited for, which is where the terminal draws it too (A19). A bubble pinned at the
-moment of sending, in the middle of an answer that was still arriving, put the message before what
-it was replying to. The one chip that remains under a bubble is "will be re-sent", for a message
-the CLI read as mid-turn data; it disappears when the message lands, and the bubble is replaced in
-place, never duplicated.
+A message the device holds is a queued message and looks like one. On an attached session the
+device holds what arrives while the turn is running whenever it does not steer it: a message sent
+with `mode: "queue"` or `"interrupt"`, an `auto` message on a device that does not report
+`shared_steer`, and an `auto` message to a CLI that does not run the device's turn hooks — one
+started under somebody's own `--settings`, say. The device replies `queued` and the app draws what
+the reply says: the bubble from sending is taken over by the queue — "Up next · 1", the same list
+any queued message goes into — and the bubble reappears only when the CLI reads it, after the
+output of the turn it waited for, which is where the terminal draws it too (A19). A bubble pinned
+at the moment of sending, in the middle of an answer that was still arriving, put the message
+before what it was replying to. Where the device reports `shared_steer`, an `auto` message is
+steered instead, as above. A session that reads `running` only because subagents are at work, while
+the CLI's own turn is idle, takes an `auto` message at once: the device replies `sent` although the
+composer said "will steer the turn", and the bubble is drawn as that reply says (A51). The one chip
+that remains under a bubble is "will be re-sent", for a message the CLI read as mid-turn data; it
+disappears when the message lands, and the bubble is replaced in place, never duplicated. The device
+tries such a message again at most three times, as each following turn ends; when the CLI absorbs
+the last try too, the device publishes an `error` carrying the message's `block_id`, and by the
+replacement rule that error row takes the bubble's place — chip and all — with the device's
+sentence asking for the message to be sent again (A51).
 
 A `terminal` session that *could* be attached gets one secondary line under "Controlled by the
 terminal" saying why it is not: install the shim on that machine, start the Codex app-server daemon

@@ -11,7 +11,8 @@
  * as far as the device can type them into the pseudo-terminal it owns —
  * `shared_settings_keys` says which (A40). Grok and the Claude channel take no
  * images in a prompt, so the device writes each file to disk and the prompt
- * names it (A49).
+ * names it (A49). A device that can hand a message to a running Claude turn
+ * reports `shared_steer` as well (A51).
  */
 import { strings } from '../../strings';
 import type { AgentInfo, Session, SharedSettingKey } from '../../protocol/types';
@@ -50,6 +51,19 @@ export function canSetShared(agent: AgentInfo | null, key: SharedSettingKey): bo
  */
 export function canAttachShared(agent: AgentInfo | null): boolean {
   return agent?.shared_attachments === true;
+}
+
+/**
+ * §5 and A51: whether `auto` on a running session steers its turn rather than
+ * queueing behind it. An agent that lists `steer` does so wherever it runs; a
+ * shared session does when the device reports `shared_steer`, because the
+ * device hands the message to the turn at its next batch of tool calls, or
+ * starts the next turn with it when none is left. A session the device started
+ * still queues.
+ */
+export function canSteer(agent: AgentInfo | null, session: Session): boolean {
+  if (!agent) return false;
+  return agent.capabilities.includes('steer') || (isShared(session) && agent.shared_steer === true);
 }
 
 /**

@@ -45,7 +45,7 @@ import {
 } from '../voice/polish';
 import { useVoice } from '../voice/useVoice';
 import { composeAnswer } from './answering';
-import { attachHint, canAttachShared, canInterruptShared, canSetShared } from './attach';
+import { attachHint, canAttachShared, canInterruptShared, canSetShared, canSteer } from './attach';
 import { MAX_ATTACHMENTS, readAttachments, textTooLong } from './attachments';
 import { CommandHint, CommandMenu } from './CommandMenu';
 import { commandQuery, completionFor, filterCommands, matchCommand } from './commands';
@@ -219,7 +219,6 @@ export function Composer({
     session.state === 'needs_approval' ||
     session.state === 'needs_input' ||
     session.state === 'starting';
-  const canSteer = agent?.capabilities.includes('steer') ?? false;
   const canTakeover = agent?.capabilities.includes('takeover') ?? false;
   // A7: the composer is gated on `control`, never on `state` — a mirrored
   // session reports `running` while the terminal drives the turn.
@@ -514,11 +513,12 @@ export function Composer({
   }, [text]);
 
   // PROTOCOL-FROZEN §5: `auto` is "send now if idle; if running, steer or queue".
-  // Forcing `queue` here would make the `steer` capability unreachable. A43: a
-  // queued message being edited is the exception — it goes back into the line,
-  // so it steers nothing and the button says Queue while a turn runs.
+  // Forcing `queue` here would make the `steer` capability unreachable, and
+  // `shared_steer` with it (A51). A43: a queued message being edited is the
+  // exception — it goes back into the line, so it steers nothing and the
+  // button says Queue while a turn runs.
   const primaryMode: SendMode = 'auto';
-  const steers = canSteer && editing === null;
+  const steers = canSteer(agent, session) && editing === null;
   const primaryLabel = answering
     ? strings.composer.answer
     : running

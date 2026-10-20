@@ -1,12 +1,13 @@
 /**
- * Amendments A10, A11, A19, A20, A40 and A42 — `control: "shared"`, a terminal
- * session the device is attached to. Covers the composer state, the Stop and
- * takeover rules, the delivery chip, the three `shared_*` agent booleans, a
+ * Amendments A10, A11, A19, A20, A40, A42 and A51 — `control: "shared"`, a
+ * terminal session the device is attached to. Covers the composer state, the
+ * Stop and takeover rules, the delivery chip, the `shared_*` agent booleans, a
  * held message that is a queue entry rather than a block, a question answered
- * from here, and the fixtures the contract describes.
+ * from here, a message that steers the terminal's turn, and the fixtures the
+ * contract describes.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { ChatHeader } from '../src/features/chat/ChatHeader';
@@ -21,6 +22,7 @@ import {
   canAttachShared,
   canInterruptShared,
   canSetShared,
+  canSteer,
 } from '../src/features/chat/attach';
 import { addOptimistic, applyEvent, emptyTimeline, selectView } from '../src/stores/timeline';
 import { foldChat, foldSession, type ChatSession } from '../src/stores/chat';
@@ -36,6 +38,7 @@ import {
   codexNoDaemon,
   grokAgent,
   grokNoLeader,
+  piAgent,
   sessions,
 } from '../mock/fixtures';
 import { fixtureOrEmpty, fixturesAvailable } from './fixtures';
@@ -71,6 +74,14 @@ const codexApproval = fixtureOrEmpty<ApprovalEvent>('events/approval.codex-share
 const codexElsewhere = fixtureOrEmpty<ApprovalEvent>('events/approval.codex-elsewhere.json');
 const pendingQuestion = fixtureOrEmpty<QuestionEvent>('events/question.pending.json');
 const terminalQuestion = fixtureOrEmpty<QuestionEvent>('events/question.resolved.terminal.json');
+
+/**
+ * A51: the Claude channel as a device that says nothing about steering reports
+ * it — every device before the amendment — and as one that hands a message to
+ * the running turn. Both are spelled out, whatever the fixture carries.
+ */
+const { shared_steer: _unsaid, ...attachNoSteer } = attachAgent;
+const attachSteer: AgentInfo = { ...attachAgent, shared_steer: true };
 
 const composerProps = (session: Session, agent: AgentInfo | null) => ({
   session,
@@ -307,7 +318,7 @@ describe.runIf(fixturesAvailable())('A10 status line and list labels', () => {
     render(
       <StatusLine
         session={sharedRunning}
-        agent={attachAgent}
+        agent={attachNoSteer}
         deviceOnline
         onTakeover={vi.fn()}
       />,
@@ -316,6 +327,34 @@ describe.runIf(fixturesAvailable())('A10 status line and list labels', () => {
       screen.getByText('Claude Code is working · your message will be queued'),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Take over' })).not.toBeInTheDocument();
+  });
+
+  it('says the message will steer once the device reports shared_steer (A51)', () => {
+    render(
+      <StatusLine
+        session={sharedRunning}
+        agent={attachSteer}
+        deviceOnline
+        onTakeover={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText('Claude Code is working · your message will steer the turn'),
+    ).toBeInTheDocument();
+  });
+
+  it('still says queued on a session the device started, whatever the flag says (A51)', () => {
+    render(
+      <StatusLine
+        session={{ ...sharedRunning, control: 'remote', origin: 'remote' }}
+        agent={attachSteer}
+        deviceOnline
+        onTakeover={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText('Claude Code is working · your message will be queued'),
+    ).toBeInTheDocument();
   });
 
   it('labels a shared session by where it came from, like any other row', () => {
@@ -540,11 +579,37 @@ describe.runIf(fixturesAvailable())('A11 composer on a shared Codex session', ()
   });
 
   it('still says queued for an agent that cannot steer', () => {
-    render(<Composer {...composerProps(sharedRunning, attachAgent)} />);
+    render(<Composer {...composerProps(sharedRunning, attachNoSteer)} />);
     expect(screen.getByLabelText('Message the agent…')).toHaveAttribute(
       'placeholder',
       'Message will be queued…',
     );
+    expect(screen.getByRole('button', { name: 'Queue' })).toBeInTheDocument();
+  });
+
+  it('steers a shared Claude turn with Send once the device reports shared_steer (A51)', async () => {
+    const props = composerProps(sharedRunning, attachSteer);
+    render(<Composer {...props} />);
+    const input = screen.getByLabelText('Message the agent…');
+    expect(input).toHaveAttribute('placeholder', 'Message will steer the turn…');
+    const user = userEvent.setup();
+    await user.click(input);
+    await user.keyboard('also cover the reconnect');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    // The wire mode is the same `auto` as ever: the device decides it steers.
+    await waitFor(() =>
+      expect(props.onSend).toHaveBeenCalledWith('also cover the reconnect', [], 'auto'),
+    );
+  });
+
+  it('keeps a session the device started queueing, whatever the flag says (A51)', () => {
+    const session: Session = { ...sharedRunning, control: 'remote', origin: 'remote' };
+    render(<Composer {...composerProps(session, attachSteer)} />);
+    expect(screen.getByLabelText('Message the agent…')).toHaveAttribute(
+      'placeholder',
+      'Message will be queued…',
+    );
+    expect(screen.getByRole('button', { name: 'Queue' })).toBeInTheDocument();
   });
 
   it('hints for the daemon on a terminal Codex session the device cannot attach', () => {
@@ -1091,5 +1156,30 @@ describe.runIf(fixturesAvailable())('A42 Stop on an attached Claude terminal', (
     expect(refusalText(refused, strings.errors.stopFailed)).not.toBe(
       strings.errors.conflictTerminal,
     );
+  });
+});
+
+describe.runIf(fixturesAvailable())('A51 steering the turn of an attached Claude terminal', () => {
+  const remoteRunning: Session = { ...sharedRunning, control: 'remote', origin: 'remote' };
+
+  it('steers a shared session only when the device reports shared_steer', () => {
+    expect(canSteer(attachSteer, sharedRunning)).toBe(true);
+    expect(canSteer(attachNoSteer, sharedRunning)).toBe(false);
+    expect(canSteer({ ...attachAgent, shared_steer: false }, sharedRunning)).toBe(false);
+    expect(canSteer(null, sharedRunning)).toBe(false);
+  });
+
+  it('leaves a session the device started queueing behind the turn', () => {
+    expect(canSteer(attachSteer, remoteRunning)).toBe(false);
+    expect(canSteer(attachSteer, terminalSession({ state: 'running' }))).toBe(false);
+  });
+
+  it('changes nothing for Codex and pi, which steer by their capability', () => {
+    for (const agent of [daemonAgent, codexAgent, piAgent]) {
+      expect(agent.capabilities).toContain('steer');
+      expect(canSteer(agent, codexShared)).toBe(true);
+      expect(canSteer(agent, { ...codexShared, control: 'remote' })).toBe(true);
+      expect(canSteer({ ...agent, shared_steer: false }, codexShared)).toBe(true);
+    }
   });
 });

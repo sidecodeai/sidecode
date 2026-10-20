@@ -1,5 +1,6 @@
 import { agentLabel, strings } from '../../strings';
 import type { AgentInfo, Session } from '../../protocol/types';
+import { canSteer } from './attach';
 
 interface Props {
   session: Session;
@@ -23,7 +24,7 @@ export function StatusLine({
   onTakeover,
 }: Props) {
   const name = agentLabel(session.agent);
-  const steers = (agent?.capabilities.includes('steer') ?? false) && !editingQueued;
+  const steers = canSteer(agent, session) && !editingQueued;
   const canTakeover = agent?.capabilities.includes('takeover') ?? false;
 
   if (!deviceOnline) return <Line tone="muted" text={strings.status.offline} />;

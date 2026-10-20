@@ -802,11 +802,14 @@ agent-specific logic:
 | Codex, through the app-server daemon | `daemon` | true | true | true |
 
 Sending uses the protocol's own modes. On a running shared session `auto` steers when the agent
-lists `steer` and is held otherwise, `queue` is always held, and `interrupt` ends the terminal turn
-and starts a new one, so "Interrupt & send" needs the same `shared_interrupt` as Stop. The composer
-then says "Message will steer the turn…" with a "Send" button when the agent can steer, and
-"Message will be queued…" with a "Queue" button when it cannot, matching the status line either
-way.
+lists `steer` or reports `shared_steer` (A51: the device hands the message to a running Claude
+turn at its next batch of tool calls) and is held otherwise, `queue` is always held, and
+`interrupt` ends the terminal turn and starts a new one, so "Interrupt & send" needs the same
+`shared_interrupt` as Stop. The composer then says "Message will steer the turn…" with a "Send"
+button when the session can steer, and "Message will be queued…" with a "Queue" button when it
+cannot, matching the status line either way. `canSteer` in `attach.ts` is the one rule both read;
+`shared_steer` counts only on a `shared` session, so a Claude session the device started still
+queues.
 
 Control changes arrive as a `meta` event carrying `control`, with a `status` event only when the
 session state moves as well, so the app never infers the owner from a status change. The transitions

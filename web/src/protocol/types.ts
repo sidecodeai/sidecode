@@ -149,6 +149,13 @@ export interface AgentInfo {
   /** A10: whether `session.stop` works on `shared` sessions. Defaults to false. */
   shared_interrupt?: boolean;
   /**
+   * A51: whether `session.send` with `auto` steers a running `shared` session
+   * rather than queueing behind it: the device hands the message to the turn,
+   * which reads it at its next step. A session the device started still
+   * queues. Defaults to false.
+   */
+  shared_steer?: boolean;
+  /**
    * A11: whether `session.set` for `model`, `permission_mode` and `effort`
    * works on `shared` sessions. Defaults to false.
    */

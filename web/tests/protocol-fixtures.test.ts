@@ -149,8 +149,13 @@ function assertAgent(agent: AgentInfo): void {
     expect(typeof choice.id).toBe('string');
     expect(typeof choice.label).toBe('string');
   }
-  // A10/A11: the three attachment booleans are optional and never anything else.
-  for (const key of ['shared_interrupt', 'shared_settings', 'shared_attachments'] as const) {
+  // A10/A11/A51: the attachment booleans are optional and never anything else.
+  for (const key of [
+    'shared_interrupt',
+    'shared_steer',
+    'shared_settings',
+    'shared_attachments',
+  ] as const) {
     const value = agent[key];
     expect(value === undefined || typeof value === 'boolean').toBe(true);
   }
