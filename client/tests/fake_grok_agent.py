@@ -7,6 +7,17 @@ answers comes from `tests/fixtures/grok/`, recorded from the real agent.
 `RC_FAKE_GROK_DIR` names a scratch directory: `mode` picks the scenario and
 every message the peer receives is appended to `requests.jsonl`.
 
+Modes beginning `question` ask the person something mid-turn the way Grok does
+(A52): `_x.ai/ask_user_question` after the recorded rows that announce it, and the
+tool's result built from whatever the client replies; `question-timeout` gives
+up by itself, as Grok's own deadline does, without waiting for a reply.
+
+`late-end` answers its first prompt before that turn's own `turn_completed`, and
+sends the held row only once the second prompt has asked its question: the late
+ending of a turn that is over, which must not touch the next one. `late-fail`
+does the same with a first prompt that fails half-way, so the device ends that
+turn itself; `leader-stuck` never settles a cancelled prompt.
+
 Modes beginning `leader` stand in for the machine's leader (A28): several
 sessions on one peer, `_x.ai/session/info` answering `{}` for a session nobody
 loaded, a `session/load` that replays with `isReplay` and its own `eventId`s,
@@ -29,6 +40,23 @@ from typing import Any
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "grok"
 SESSION_ID = "01a09b4f-1b25-7e92-b96b-356d292ff2d0"
 INJECT_INTERVAL = 0.02
+QUESTION_ID = 9002
+# The prompt ids the recorded turns carry. Every prompt the peer answers gets one
+# of its own in their place, as every prompt Grok runs does.
+RECORDED_PROMPTS = (
+    "a7fdbcb6-2e2b-4bec-83e2-fbee92ee91e6",
+    "69a928fd-27bf-42c1-9e55-01f9d43016ec",
+    "467e217d-f6ea-43d0-baf7-4b1d57b3426d",
+)
+# The tool's own words, as Grok 1.0.62 wrote them (`fixtures/grok/question-endings.json`).
+ANSWERED = "User has answered your questions: "
+CONTINUE = ". You can now continue with the user's answers in mind."
+DECLINED = (
+    "User declined to answer the questions. Continue with the task using your best "
+    "judgment, or ask different questions."
+)
+# How long `question-timeout` waits before giving up on the question by itself.
+QUESTION_DEADLINE = 0.3
 # The modes whose prompt fails, with the JSON-RPC error each answers it with.
 FAILURES = {
     "refuse": (-32602, "Invalid prompt"),
@@ -60,6 +88,13 @@ class FakePeer:
         self.prompt_session = SESSION_ID
         self.lock = threading.Lock()
         self.settings: dict[str, Any] = _settings(self.directory)
+        # The question this turn has open, if any, and what it asked.
+        self.question: dict[str, Any] | None = None
+        self.turns = 0
+        self.turn_id = ""
+        # `late-end`: the first turn's own `turn_completed`, sent only once the
+        # next turn has asked its question.
+        self.held: dict[str, Any] | None = None
 
     @property
     def leader(self) -> bool:
@@ -114,9 +149,13 @@ class FakePeer:
         method = str(message.get("method") or "")
         message_id = message.get("id")
         if method == "session/cancel":
-            self.cancel()
+            if self.mode != "leader-stuck":
+                self.cancel()
             return
         if not method:
+            if message_id == QUESTION_ID and self.question is not None:
+                self.answered(message)
+                return
             # The client answered a permission request, so the turn can finish.
             self.finish_prompt()
             return
@@ -224,6 +263,8 @@ class FakePeer:
 
     def prompt(self, message_id: Any, params: dict[str, Any]) -> None:
         self.prompt_id = message_id
+        self.turns += 1
+        self.turn_id = f"prompt-{self.turns}"
         if params.get("sessionId"):
             self.prompt_session = str(params["sessionId"])
         if self.leader:
@@ -232,21 +273,38 @@ class FakePeer:
         if self.mode == "approval":
             self.ask_permission()
             return
+        if self.mode.startswith("question"):
+            self.ask_question()
+            return
+        if self.mode in {"late-end", "late-fail"}:
+            if self.turns == 1 and self.mode == "late-end":
+                self.answer_first()
+            elif self.turns == 1:
+                self.fail_holding_end(message_id)
+            else:
+                self.ask_question()
+                if self.held is not None:
+                    self.send(self.held)
+            return
+        if self.mode == "stray-reply":
+            # Grok answers requests of its own on the same stream (1.0.62, in a
+            # fresh home's first turn); no client ever sent this one.
+            self.result("skills-reload", {"result": {"reloaded": 1}})
         if self.mode in FAILURES:
             # Refused as it stood, failed once the turn had begun to stream, or
             # failed inside Grok before it said anything.
             if self.mode == "fail-midway":
                 for row in _notifications("turn.jsonl")[:4]:
-                    self.send(_for_session(row, self.prompt_session))
+                    self.send(self.this_turn(row))
             code, message = FAILURES[self.mode]
             self.send(
                 {"jsonrpc": "2.0", "id": message_id, "error": {"code": code, "message": message}}
             )
             self.prompt_id = None
             return
-        if self.mode in {"cancel", "leader-cancel"}:
+        if self.mode in {"cancel", "leader-cancel", "leader-stuck"}:
             for row in _notifications("turn.jsonl")[:4]:
-                self.send(_for_session(row, self.prompt_session))
+                self.send(self.this_turn(row))
             return
         self.finish_prompt()
 
@@ -272,9 +330,44 @@ class FakePeer:
         # A slash command runs inside Grok itself: one message, no tools, no usage.
         source = "command.jsonl" if self.mode == "command" else "turn.jsonl"
         for row in _notifications(source):
-            self.send(_for_session(row, self.prompt_session))
-        self.result(self.prompt_id, {"stopReason": "end_turn"})
+            self.send(self.this_turn(row))
+        self.result(self.prompt_id, {"stopReason": "end_turn", "_meta": {"promptId": self.turn_id}})
         self.prompt_id = None
+
+    def answer_first(self) -> None:
+        """The prompt's answer ahead of its own `turn_completed`, which is held back."""
+        for row in _notifications("turn.jsonl"):
+            row = self.this_turn(row)
+            update = (row.get("params") or {}).get("update") or {}
+            if update.get("sessionUpdate") == "turn_completed":
+                self.held = row
+                continue
+            self.send(row)
+        self.result(self.prompt_id, {"stopReason": "end_turn", "_meta": {"promptId": self.turn_id}})
+        self.prompt_id = None
+
+    def fail_holding_end(self, message_id: Any) -> None:
+        """Fail half-way, as `fail-midway` does, holding the turn's own `turn_completed` back."""
+        rows = [self.this_turn(row) for row in _notifications("turn.jsonl")]
+        for row in rows[:4]:
+            self.send(row)
+        self.held = next(
+            row
+            for row in rows
+            if ((row.get("params") or {}).get("update") or {}).get("sessionUpdate")
+            == "turn_completed"
+        )
+        code, message = FAILURES["fail-midway"]
+        self.send({"jsonrpc": "2.0", "id": message_id, "error": {"code": code, "message": message}})
+        self.prompt_id = None
+
+    def this_turn(self, row: dict[str, Any]) -> dict[str, Any]:
+        """A recorded row of the turn under way: its session, and its own prompt id."""
+        text = json.dumps(_for_session(row, self.prompt_session))
+        for recorded in RECORDED_PROMPTS:
+            text = text.replace(recorded, self.turn_id)
+        moved: dict[str, Any] = json.loads(text)
+        return moved
 
     def ask_permission(self) -> None:
         self.send(
@@ -303,6 +396,73 @@ class FakePeer:
             }
         )
 
+    def ask_question(self) -> None:
+        """The recorded rows up to and including `_x.ai/ask_user_question` (A52)."""
+        for row in _notifications("question.jsonl"):
+            row = self.this_turn(row)
+            if row.get("method") == "_x.ai/ask_user_question":
+                self.question = dict(row.get("params") or {})
+            self.send(row)
+        if self.mode == "question-timeout":
+            threading.Timer(QUESTION_DEADLINE, self.give_up).start()
+
+    def give_up(self) -> None:
+        """Grok's own deadline: nobody answered, so nobody is waited for any more."""
+        if self.question is None:
+            return
+        self.end_question({"type": "AskUserQuestion", "UserAnswered": {"message": DECLINED}})
+        self.finish_prompt()
+
+    def answered(self, message: dict[str, Any]) -> None:
+        """The client replied to the question: the tool's result says what it got."""
+        result = message.get("result")
+        if "error" in message:
+            reason = str((message.get("error") or {}).get("message") or "")
+            text = f"Failed to reach the client for user question: {reason}"
+            self.end_question({"error": "tool_execution_failed", "message": text}, "failed")
+            self.finish_prompt()
+            return
+        if not isinstance(result, dict) or result.get("outcome") != "accepted":
+            # Declined: the model carries on, and only a cancel ends this turn.
+            self.end_question({"type": "AskUserQuestion", "UserAnswered": {"message": DECLINED}})
+            return
+        pairs = ", ".join(
+            f'"{question}"="{", ".join(answer) if isinstance(answer, list) else answer}"'
+            for question, answer in (result.get("answers") or {}).items()
+        )
+        message_text = f"{ANSWERED}{pairs}{CONTINUE}"
+        self.end_question({"type": "AskUserQuestion", "UserAnswered": {"message": message_text}})
+        self.finish_prompt()
+
+    def end_question(self, raw: dict[str, Any], status: str = "completed") -> None:
+        """`interaction_resolved`, then the tool's result, as Grok sends them."""
+        question = self.question
+        if question is None:
+            return
+        self.question = None
+        call = str(question.get("toolCallId") or "")
+        self.notify(
+            "_x.ai/session_notification",
+            {
+                "sessionId": self.prompt_session,
+                "update": {"sessionUpdate": "interaction_resolved", "tool_call_id": call},
+            },
+        )
+        text = str(raw.get("message") or (raw.get("UserAnswered") or {}).get("message") or "")
+        self.notify(
+            "session/update",
+            {
+                "sessionId": self.prompt_session,
+                "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": call,
+                    "status": status,
+                    "content": [{"type": "content", "content": {"type": "text", "text": text}}],
+                    "rawOutput": raw,
+                },
+            },
+        )
+
     def cancel(self) -> None:
         self.cancelled = True
         self.notify(
@@ -319,7 +479,9 @@ class FakePeer:
             },
         )
         if self.prompt_id is not None:
-            self.result(self.prompt_id, {"stopReason": "cancelled"})
+            self.result(
+                self.prompt_id, {"stopReason": "cancelled", "_meta": {"promptId": self.turn_id}}
+            )
             self.prompt_id = None
 
 

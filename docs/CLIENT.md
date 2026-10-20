@@ -1573,7 +1573,9 @@ session created here is rekeyed to it as soon as `session/new` answers.
 
 A turn is `session/prompt`, which only replies when the turn is over, so it runs as a task and the
 turn ends on whichever arrives first — the `turn_completed` notification or the prompt's own answer.
-`session/cancel` interrupts. Live changes to the model and the effort are
+Grok names the prompt in both — `prompt_id` in the notification, `_meta.promptId` in the answer — so
+the second of the two is known for what it is and touches nothing when it arrives after the next
+turn began. `session/cancel` interrupts. Live changes to the model and the effort are
 `session/set_config_option`, whose value is a plain string and whose reply is the complete option
 list, which the device republishes as `meta`.
 
@@ -1592,6 +1594,7 @@ Updates arrive under three method names — `session/update`, `_x.ai/session/upd
 | `turn_completed` | `turn_completed`, with the turn's tokens and the real cost: `costUsdTicks` is USD at 1e10 ticks to the dollar. Grok reports one turn at a time, so the device accumulates the session total |
 | `model_changed`, `current_mode_update`, `config_option_update` | `meta` (amendment A17) |
 | `available_commands_update` | the session's slash command list (see below); state, not an event |
+| `pending_interaction`, `interaction_resolved` | nothing; the device's own record of a prompt opening and of another client settling an approval (see "What Grok asks a person") |
 | `hook_execution`, `hook_run_started`, everything else | nothing |
 
 A tool's `rawOutput` also carries the raw bytes of a command's output as an integer array; only
@@ -1713,17 +1716,68 @@ A permission prompt is a `session/request_permission` sent to every client, the 
 included; the runner offers the leader's own options except `enable-always-approve` — Grok's "yes,
 and don't ask again for anything", which is a permission policy and so `session.set`'s business —
 and whichever side answers first wins. `pending_interaction {tool_call_id, kind: "permission"}` and
-`interaction_resolved {tool_call_id}` are broadcast around every prompt whoever answers, so a
-request the terminal answered ends here as `decision: {option_id: "elsewhere", by: "terminal"}` and
-the leader is told `cancelled`. Sessions the device creates on the leader are what a later
-`grok --resume <id>` joins live, which is the reason device-driven sessions take the leader too
-whenever the flag is on.
+`interaction_resolved {tool_call_id}` go to every client around every prompt, the one that answered
+included, so a request the terminal answered ends here as
+`decision: {option_id: "elsewhere", by: "terminal"}` and the leader is told `cancelled`, a late
+reply it ignores. What the device never sends while another client can answer is in "What Grok asks
+a person" below. Sessions the device creates on the leader are what a later `grok --resume <id>`
+joins live, which is the reason device-driven sessions take the leader too whenever the flag is on.
 
 After `grok update` the leader keeps serving the build it started with; `_meta.agentVersion` against
 `agent --version` is the drift. When they differ, no terminal is registered and no turn the device
 drives is running, the service runs `agent leader kill` once per fifteen minutes and reconnects,
 which starts a fresh leader; each attached session gets one notice. With a terminal registered the
 drift is left alone, because a restart would take that terminal's session down with it.
+
+### What Grok asks a person (A52)
+
+Grok asks through agent-to-client requests that stay open until somebody answers
+(`agents/grok/dialogs.py`): `session/request_permission` before a tool runs, and
+`_x.ai/ask_user_question {sessionId, toolCallId, questions, mode}` when the model calls its
+`ask_user_question` tool, each question `{question, options: [{label, description, preview?}],
+multiSelect}`. A question becomes an ordinary `question` block (`agents/questions.py`, which Claude
+Code's `AskUserQuestion` shares): positional ids, `multi` from `multiSelect`, `allow_text` always,
+at most four questions of eight options, and no `preview`, which the block has no field for. A
+question past the fourth is not shown and gets no answer; Grok's result then lists the answered
+ones only. The session reports `needs_input` while it is open. An app's answer goes back as
+`{"outcome": "accepted", "answers": {question: label}}`, keyed by each question exactly as Grok
+worded it (the block's prompt is trimmed and capped for display): a single choice as its label,
+though apps send every choice as a list of option ids, the labels of a multi-select as a list, and
+free text as typed. The block resolves `by: "remote"`. Grok gives up on a question by itself after
+`[toolset.ask_user_question] timeout_secs` (1800 by default; `timeout_enabled = false` waits for
+ever), so the device sets no deadline of its own. `session.stop` replies
+`{"outcome": "cancelled"}`, which the tool reports as "User declined to answer the questions".
+
+What follows was verified against Grok 1.0.62: a private child, a scratch leader with two ACP
+clients, and the real TUI on a scratch leader with this repository's gateway and daemon.
+
+- On the leader every client of the session is asked at once — the TUI and the device alike, whoever
+  sent the prompt — and the first reply settles the prompt for all of them, whether it is an answer,
+  a refusal or a JSON-RPC error. Every client then hears `interaction_resolved {tool_call_id}`, the
+  one that answered too, and nothing else: the others' requests are never cancelled, and a reply
+  sent after it is ignored. A client that joins with `session/load` while a question is open is
+  asked again, so a device that reconnects keeps the one card it had.
+- So the device never settles a prompt by itself while somebody else can answer; only an app's
+  answer, or Stop, does. It sends nothing for a session it does not route (`leader.py`), and nothing
+  when it lets go of a session a terminal shares, whether its daemon stops or the session is
+  deleted. An approval on such a session has no deadline of the device's own, as no question has;
+  only an approval nobody else can answer is refused after five minutes. A prompt it cannot answer
+  at all — a plan approval (`_x.ai/exit_plan_mode`), an MCP elicitation (`_x.ai/mcp/elicit`) — is
+  left unanswered on a shared session and refused on one only the device is in, where silence would
+  stall the turn. Before A52 the device refused every question with an error, which failed the tool
+  at once, the TUI's copy of it included.
+- An approval somebody else answered ends with `interaction_resolved`. A question never does,
+  because the permission check before it resolves under the same tool call id: it ends with its
+  tool's own result, with its turn, or when the device lets go of the session. The result is the one
+  record of what was chosen: `User has answered your questions: "<question>"="<answer>", … You can
+  now continue with the user's answers in mind.` A result that begins that way resolves the block
+  `by: "terminal"`, carrying `answers` only for questions and labels that match exactly: free text,
+  or an answer worded any other way, leaves its question out, and `answers` too when nothing
+  matched. Any other result expires the block — "User declined to answer…", Grok's own deadline, a
+  failed tool — and the end of the turn expires whatever is still open, unanswered. An ending that
+  arrives after that changes nothing, the session's state included.
+- The terminal's plan-mode interview choices (`skip_interview`, `chat_about_this`) are not offered
+  in an app: an app answers, or the question waits for the terminal or for Grok's deadline.
 
 ### Terminal sessions outside the leader
 
@@ -1751,22 +1805,23 @@ apps' hint saying what to run.
 
 ### What is not covered
 
-- **Approvals have not been seen live.** The handler answers `session/request_permission` with the
-  options the agent sent, styled from ACP's `allow_once` / `reject_once` kinds, and replies
-  `{"outcome": {"outcome": "selected", "optionId": …}}`. The authorized runs never triggered one, so
-  the shape comes from the protocol, not from a recording.
 - **`session/cancel` is sent as a notification.** As a *request* it answers "Method not found" on
   grok 1.0.25, which is what ACP says: cancellation has no reply. The notification form is untested.
-- **Questions.** Grok asks the user through its own `ask_user_question` tool rather than an ACP
-  request, so no `question` block is raised for one; it appears as a tool call.
+- **Plan approvals and MCP elicitations** (`_x.ai/exit_plan_mode`, `_x.ai/mcp/elicit`) are not
+  raised in an app (A52): on a session a terminal shares the terminal answers them, and elsewhere
+  they are refused.
 - **Attachments travel as paths.** This build answers `promptCapabilities.image: false`, so a prompt
   carries no file: the device writes each one to disk and the prompt names it, for Grok to open with
   `read_file` (A49; see "Attachments" below), on a private child and on the leader alike.
-- **Approvals on the leader were seen once.** One TUI-driven `rm` sent `session/request_permission`
-  to the joined device client and drew the TUI's dialog; the device's answer resolved both. Later
-  probes had Grok's default mode allow `rm` and writes outside the workspace by itself, so no second
-  run was obtained; whether the TUI draws a dialog for a turn the device started, and whether
-  `session/set_mode` from the device moves the TUI's mode, are unverified.
+- **Approvals.** The handler answers `session/request_permission` with the options the agent sent,
+  styled from ACP's `allow_once` / `reject_once` kinds, and replies
+  `{"outcome": {"outcome": "selected", "optionId": …}}`. On the leader that was seen live: one
+  TUI-driven `rm` drew the TUI's dialog and the device's block, and the device's answer resolved
+  both; on 1.0.62 a write in `default` mode asked both again, the TUI's answer resolved the device's
+  block as `elsewhere`, and a dialog still open when the device's daemon stopped was the TUI's to
+  answer, which it did (A52). On a private child no run has drawn one yet, since Grok's default mode
+  allowed everything the probes did. Whether the TUI draws a dialog for a turn the device started,
+  and whether `session/set_mode` from the device moves the TUI's mode, are unverified.
 - **The drift restart** ran only against fakes; a real leader older than the binary was not
   produced. `agent leader kill` finds only `$GROK_HOME/leader.sock` and `leader-*.sock` there.
 

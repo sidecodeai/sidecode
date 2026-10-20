@@ -58,12 +58,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 from .. import attachments
-from ..agents.claude.questions import (
-    answers_for_tool,
-    answers_from_tool,
-    normalise_questions,
-)
+from ..agents.claude.questions import answers_for_tool, answers_from_tool
 from ..agents.claude.tools import reads_session_file, tool_kind, tool_title
+from ..agents.questions import normalise_questions
 from ..errors import RcError
 from ..logging_setup import logger
 from ..models import now_ms

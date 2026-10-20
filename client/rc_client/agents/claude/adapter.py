@@ -32,9 +32,10 @@ from ...models import UNSET, Command, SpeedSetting, now_ms
 from ...sessions.channel import SessionChannel
 from ...sessions.limits import LimitStop, claude_transcript_limit
 from ..base import Emit
+from ..questions import answers_by_prompt, normalise_questions
 from . import subagents, transcripts
 from .commands import COMMANDS, COMPACT
-from .questions import QUESTION_TOOL, answers_by_prompt, normalise_questions
+from .questions import QUESTION_TOOL
 from .tools import reads_session_file
 from .translate import ClaudeTranslator
 

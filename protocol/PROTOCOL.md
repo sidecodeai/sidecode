@@ -1051,8 +1051,14 @@ already applied — from the mirror or an earlier attachment — so history is n
 lost. Permission prompts fan out to every client; the device offers the leader's own options except
 the one that switches the session into always-approve mode, which is a permission policy and so a
 `session.set` matter, and an approval another client answered ends as
-`decision: {option_id: "elsewhere", by: "terminal"}` exactly as a Codex one does. Apps need no Grok
-logic: `control` and the five attachment fields of 4.2 say everything.
+`decision: {option_id: "elsewhere", by: "terminal"}` exactly as a Codex one does. Grok's questions
+fan out the same way and are raised as `question` blocks (A52): an app answers one through
+`session.answer`, one another client answered first resolves `by: "terminal"`, and one nobody
+answered expires. The first reply of any client settles a prompt for all of them, an error included,
+so a device never settles one another client may answer by itself: only an app's answer, or Stop,
+does. It sends nothing for a session it does not route and nothing when it lets go of a session a
+terminal shares. Apps need no Grok logic: `control` and the five attachment fields of 4.2 say
+everything.
 
 `fixtures/app/session.updated.json`
 
@@ -1753,6 +1759,14 @@ first reply that arrives: a `session.answer` from an app, or the dialog in the t
 side then sees the block `resolved` with `by` saying who answered, and the CLI's dialog is
 withdrawn when the app was first. A question the device could not raise this way — an older shim
 without the hook — stays what it was before: a running `tool_call` the terminal answers alone.
+
+Grok Build asks with a request of its own, `_x.ai/ask_user_question`, and the device raises the
+block from it on a session it drives and on one a TUI shares through the leader alike (A52). A
+question past the fourth is not shown and goes unanswered. When another client answered first,
+`answers` is present only where Grok's own summary names the question and option labels exactly; a
+resolved block without `answers` means the answer named nothing the device could match, whether free
+text or a question or label worded otherwise than the device read it. A Grok option's `preview` has
+no field here and is left out.
 
 `fixtures/events/question.resolved.terminal.json` is the block after the person at the terminal
 answered.
@@ -3858,6 +3872,13 @@ one app connection that asked. The gateway relays bytes and never reads them.
       hook reports on an attached Claude session, answers the hook from the first `session.answer`,
       and resolves the block with `by: "terminal"` when the transcript shows the terminal answered
       first (A20).
+- [ ] Raises a `question` block with `needs_input` for every `_x.ai/ask_user_question` Grok Build
+      sends, on a private child and on the leader, and hands Grok the first `session.answer`;
+      resolves the block `by: "terminal"` from the tool's own result when another client answered
+      first, and expires it with its turn. On the leader it never settles a prompt another client
+      may answer by itself — only an app's answer or Stop does: it sends nothing for a session it
+      does not route, nothing when it lets go of a session a terminal shares, and puts no deadline
+      of its own on such a prompt (A52).
 - [ ] Offers exactly `allow` and `deny` on an approval relayed through a Claude channel, offers the
       options the Codex daemon lists for that request, resolves either with `decision.by: "terminal"`
       when the terminal answered first, and expires it when the CLI exits or the attachment drops.
@@ -4675,3 +4696,20 @@ counts as a turn, and the former's words are published as A30 says. A CLI starte
 hooks, under somebody's own `--settings`, keeps the earlier behaviour apart from subagents and the
 re-sends.
 `fixtures/objects/agent.claude-attach.json` shows the new field. See 4.2, 5.2, 5.14, 6.3, 8 and 9.
+
+**2026-10-20 A52 — Grok Build's questions reach the apps.** Grok asks through its own ACP request
+`_x.ai/ask_user_question` rather than a tool the device could only watch, and the device refused
+that request with an error, which failed the tool at once — in a TUI's session on the leader too,
+where the first reply of any client settles a prompt for all of them. The device now raises each
+question as an ordinary `question` block with `needs_input`, on a session it drives and on one a
+TUI shares, and hands Grok the first `session.answer`, keyed by each question as Grok worded it and
+with a single choice as its label, though an app sends every choice as a list. A question past the
+fourth is not shown and goes unanswered. One another client answered first resolves
+`by: "terminal"`, with `answers` only where Grok's own summary names the question and option labels
+exactly; one declined, or out of Grok's own time, expires, and so does whatever is still open when
+its turn ends. A device never settles a prompt another client may answer by itself; only an app's
+answer, or Stop, does. It sends nothing for a session it does not route, nothing when it lets go of
+a session a terminal shares, and nothing to a prompt it cannot answer, such as a plan approval, on
+such a session, and an approval there has no deadline of the device's own. An option's `preview` and
+the terminal's plan-mode interview choices are not carried. Nothing changes on the wire. See 4.4,
+5.8 and 9.

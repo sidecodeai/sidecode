@@ -9,7 +9,9 @@ reads the person's own configuration and says whether the next `grok` will join.
 A `session/load` on a session a TUI has open joins that session rather than
 opening a second copy. Every client then sees every update, a prompt from any of
 them runs in the one conversation, and `session/cancel` and
-`session/set_config_option` act for all. `session/close` is the exception: it
+`session/set_config_option` act for all. Whatever Grok asks a person — an
+approval, a question — goes to every client at once, and the first reply,
+whatever it says, settles it for all of them (A52). `session/close` is the exception: it
 unloads the session for everyone, so it is sent in one case only — the person
 closing a session no terminal is in, where ending it is the whole point (A39).
 Letting go of a session without closing it is `detach`.
@@ -30,7 +32,7 @@ from ...child_env import sanitized_child_env
 from ...errors import RcError
 from ...logging_setup import logger
 from . import runtime
-from .acp import GrokAgent
+from .acp import INTERACTIONS, GrokAgent, ServerRequestHandler
 
 log = logger("rc_client.grok.leader")
 
@@ -42,7 +44,6 @@ NO_SANDBOX = "off"
 INFO_TIMEOUT = 15.0
 
 NotificationHandler = Callable[[str, dict[str, Any]], Awaitable[None]]
-ServerRequestHandler = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 UnknownHandler = Callable[[str, str, dict[str, Any]], Awaitable[None]]
 SessionsChangedHandler = Callable[[dict[str, Any]], Awaitable[None]]
 
@@ -276,11 +277,14 @@ class LeaderClient:
         if self._on_unknown is not None:
             await self._on_unknown(session_id, method, params)
 
-    async def _request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    async def _request(self, method: str, params: dict[str, Any]) -> dict[str, Any] | None:
         session_id = str(params.get("sessionId") or "")
         route = self._routes.get(session_id)
         if route is None:
-            # Nobody here is in that session, so the terminal answers its own
-            # dialog: refusing is what hands the prompt back to it.
+            if method in INTERACTIONS:
+                # Nobody here is in that session. Any reply, a refusal or an
+                # error included, would settle the prompt for the client that
+                # is, so the device stays silent and leaves it to them (A52).
+                return None
             raise RcError("conflict", "no attached session for this grok session")
         return await route.on_request(method, params)

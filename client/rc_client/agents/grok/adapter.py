@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import uuid
+from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -22,7 +23,6 @@ from ...attachments import (
     Attachment,
     describe,
     drop,
-    is_session_file,
     store,
     wire_attachments,
     without_paths,
@@ -37,6 +37,7 @@ from . import cursor
 from .acp import GrokAgent, GrokError, GrokTransport
 from .catalog import GrokCatalog
 from .commands import advertised, recall, remember
+from .dialogs import DialogDesk
 from .echoes import EchoLog
 from .leader import LeaderClient, SessionRoute
 from .translate import (
@@ -50,40 +51,19 @@ from .translate import (
 
 log = logger("rc_client.grok")
 
-APPROVAL_TIMEOUT = 300.0
 DRAIN_TIMEOUT = 15.0
 # How long a close waits for the cancelled turn before unloading the session
 # anyway (A39). The person is closing it, so the session matters more than the
 # last words of the turn.
 CLOSE_DRAIN_TIMEOUT = 5.0
 LOAD_TIMEOUT = 120.0
-PERMISSION_REQUEST = "session/request_permission"
-# The option that turns the whole session into always-approve mode. It is a
-# permission policy, so it belongs to `session.set` and never to an approval
-# button an app draws on the person's behalf (A27, A28).
-ALWAYS_APPROVE = "enable-always-approve"
-# What an approval that somebody else answered resolves as (A28, as for Codex).
-ELSEWHERE = "elsewhere"
 # The JSON-RPC errors that say a request was refused as it stood: it was never
 # taken up, so a prompt answered with one was never read either.
 REFUSED_REQUEST = (-32600, -32601, -32602)
-# The one option an attachment read is answered with: this call, nothing more.
-ALLOW_ONCE = "allow-once"
 # What follows a bubble whose message Grok was never sent (A49).
 UNREAD = "the agent was stopped before it read your message"
-# What Grok's own `read_file` may carry in `rawInput`: where the file is, how
-# much of it to read, and the variant it names itself by. A key outside these
-# is something this device does not understand, and is asked about.
-READ_PATH_KEYS = ("target_file", "file_path", "path")
-READ_OTHER_KEYS = ("variant", "pages", "format", "offset", "limit")
-
-# ACP option kinds, and how firmly each reads in an app.
-_OPTION_STYLES = {
-    "allow_once": "primary",
-    "allow_always": "secondary",
-    "reject_once": "danger",
-    "reject_always": "secondary",
-}
+# How many finished turns are remembered by prompt id: only the last can still end late.
+FINISHED_KEPT = 16
 
 TurnEndCallback = Callable[[], Awaitable[None]]
 SessionIdCallback = Callable[[str], Awaitable[None]]
@@ -134,10 +114,8 @@ class GrokRunner:
         self._turn_started_at = 0
         self._interrupting = False
         self._closed = False
-        self._pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
-        # The approval each of the leader's tool calls opened, so an answer from
-        # another client can close ours.
-        self._tool_calls: dict[str, str] = {}
+        # The approvals and questions Grok has open, and who else may answer them.
+        self._dialogs = DialogDesk(channel, shared=lambda: self.attached and self.terminal_holds)
         self._commands: list[Command] = []
         # The highest `eventId` counter applied, and the one this session started
         # from: everything at or below it is history the apps already have.
@@ -145,6 +123,12 @@ class GrokRunner:
         self._resume_from = 0
         # The prompt most recently sent, which hears whatever Grok says next.
         self._prompt: _Prompt | None = None
+        # The turns already over, by Grok's prompt id. A turn ends twice — by its
+        # `turn_completed` and by its prompt's answer — and the later of the two
+        # may arrive once the next turn has begun.
+        self._finished: deque[str] = deque(maxlen=FINISHED_KEPT)
+        # The prompt id of the turn under way, as its own rows name it.
+        self._turn_prompt: str | None = None
 
     # ------------------------------------------------------------- lifecycle
 
@@ -170,6 +154,7 @@ class GrokRunner:
 
     async def start(self) -> None:
         self._closed = False
+        self._dialogs.open()
         if self._leader is not None:
             await self._join_leader()
         else:
@@ -291,12 +276,11 @@ class GrokRunner:
             await self.channel.set_meta(**fields)
 
     async def close(self) -> None:
+        # Letting go of a session a terminal shares leaves its open prompts to
+        # the terminal: any reply now would settle them for everyone (A52).
+        keep = self.attached and self.terminal_holds
         self._closed = True
-        for future in self._pending.values():
-            if not future.done():
-                future.cancel()
-        self._pending.clear()
-        self._tool_calls.clear()
+        await self._dialogs.let_go(keep_for_others=keep)
         if self._turn is not None:
             self._turn.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -339,6 +323,7 @@ class GrokRunner:
         self._advance(params)
         if self._replayed(params):
             return
+        self._note_prompt(method, params)
         if self._prompt is not None:
             self._prompt.heard = True
         if await self._interaction(method, params):
@@ -357,7 +342,7 @@ class GrokRunner:
                 continue
             await self._apply(emit)
         if completion is not None:
-            await self._finish_turn(completion)
+            await self._finish_turn(completion, _completed_prompt(method, params))
 
     def _advance(self, params: dict[str, Any]) -> None:
         """Remember the highest counter seen, so a later reader resumes from it."""
@@ -366,6 +351,19 @@ class GrokRunner:
             return
         self._cursor = index
         cursor.write(self.channel.registry, self._session_id, index)
+
+    def _note_prompt(self, method: str, params: dict[str, Any]) -> None:
+        """Remember which prompt the turn under way belongs to, from its own rows."""
+        meta = params.get("_meta")
+        prompt_id = meta.get("promptId") if isinstance(meta, dict) else None
+        if method == "_x.ai/queue/changed":
+            prompt_id = params.get("runningPromptId")
+        elif not prompt_id:
+            found = session_update(method, params)
+            if found is not None and found[0] != "turn_completed":
+                prompt_id = found[1].get("prompt_id")
+        if isinstance(prompt_id, str) and prompt_id and prompt_id not in self._finished:
+            self._turn_prompt = prompt_id
 
     def _replayed(self, params: dict[str, Any]) -> bool:
         """Whether this row is history the apps already have (A28).
@@ -401,27 +399,25 @@ class GrokRunner:
             await self.channel.begin_turn("terminal")
 
     async def _interaction(self, method: str, params: dict[str, Any]) -> bool:
-        """Grok's own signals that an approval opened or closed, for any client."""
+        """Grok's own signals that a prompt opened or closed, for any client.
+
+        A question's tool result is watched on its way past as well: when
+        somebody else answered, it is the one record of what they chose.
+        """
         found = session_update(method, params)
         if found is None:
             return False
         kind, update = found
         if kind == "pending_interaction":
-            # The request itself arrives as `session/request_permission`.
+            # The request itself follows: `session/request_permission` or
+            # `_x.ai/ask_user_question`.
             return True
-        if kind != "interaction_resolved":
-            return False
-        await self._resolved_elsewhere(str(update.get("tool_call_id") or ""))
-        return True
-
-    async def _resolved_elsewhere(self, tool_call_id: str) -> None:
-        """Somebody else answered an approval this device is still showing."""
-        request_id = self._tool_calls.get(tool_call_id)
-        if not request_id:
-            return
-        future = self._pending.get(request_id)
-        if future is not None and not future.done():
-            future.set_result({ELSEWHERE: True})
+        if kind == "interaction_resolved":
+            await self._dialogs.resolved_elsewhere(str(update.get("tool_call_id") or ""))
+            return True
+        if kind == "tool_call_update":
+            await self._dialogs.tool_result(update)
+        return False
 
     async def _apply(self, emit: Emit) -> None:
         if emit.kind == SETTINGS:
@@ -447,7 +443,14 @@ class GrokRunner:
             return
         await self.channel.emit(emit.kind, **emit.fields)
 
-    async def _finish_turn(self, completion: dict[str, Any]) -> None:
+    async def _finish_turn(self, completion: dict[str, Any], prompt_id: str | None = None) -> None:
+        if prompt_id:
+            if prompt_id in self._finished:
+                # The other ending of a turn already over: it must neither end the
+                # turn that has begun since nor expire what that turn asks.
+                return
+            self._finished.append(prompt_id)
+        await self._dialogs.turn_over()
         if self.channel.session.turn is None:
             # The prompt's own answer and its `turn_completed` notification both
             # end the turn, and either may arrive first.
@@ -541,6 +544,7 @@ class GrokRunner:
             # The leader will echo this prompt back to every client, this one
             # included; the bubble below is the one the apps keep.
             self._echoes.remember(prompt)
+        self._turn_prompt = None
         await self.channel.emit(
             "user_message",
             block_id=block_id or f"user:{uuid.uuid4()}",
@@ -577,10 +581,14 @@ class GrokRunner:
             return
         # The `turn_completed` notification normally ends the turn; this closes
         # one the agent answered without sending it.
+        prompt_id = _answered_prompt(result)
+        if prompt_id in self._finished:
+            return
         for emit in self._translator.close_streams():
             await self._apply(emit)
         await self._finish_turn(
-            {"stop_reason": stop_reason(str(result.get("stopReason") or "")), "duration_ms": 0}
+            {"stop_reason": stop_reason(str(result.get("stopReason") or "")), "duration_ms": 0},
+            prompt_id,
         )
 
     async def _fail_turn(self, message: str) -> None:
@@ -591,7 +599,7 @@ class GrokRunner:
             await self._apply(emit)
         # Paths off before the cut, so no half of one survives it (A49).
         await self.channel.error(without_paths(message)[:2000])
-        await self._finish_turn({"stop_reason": "error", "duration_ms": 0})
+        await self._end_here({"stop_reason": "error", "duration_ms": 0})
 
     async def interrupt(self) -> bool:
         transport = self._transport
@@ -602,7 +610,7 @@ class GrokRunner:
             return await self._interrupt_terminal(transport)
         self._interrupting = True
         await self.channel.set_state("running", "interrupting")
-        self._cancel_pending()
+        self._dialogs.stop_all()
         # ACP cancellation is a notification: the prompt request answers with
         # its own stop reason once the agent has unwound the turn.
         await transport.notify("session/cancel", {"sessionId": self._session_id})
@@ -618,15 +626,9 @@ class GrokRunner:
             return False
         self._interrupting = True
         await self.channel.set_state("running", "interrupting")
-        self._cancel_pending()
+        self._dialogs.stop_all()
         await transport.notify("session/cancel", {"sessionId": self._session_id})
         return True
-
-    def _cancel_pending(self) -> None:
-        for request_id, future in list(self._pending.items()):
-            if not future.done():
-                future.set_result({"cancelled": True})
-            self._pending.pop(request_id, None)
 
     async def _did_not_settle(self) -> None:
         """The agent kept going after a cancel. A private child is restarted.
@@ -638,7 +640,7 @@ class GrokRunner:
         log.warning("grok did not settle after cancel")
         await self.channel.notice("warn", "the agent did not stop in time")
         if self.attached:
-            await self._finish_turn({"stop_reason": "interrupted", "duration_ms": 0})
+            await self._end_here({"stop_reason": "interrupted", "duration_ms": 0})
             return
         await self.channel.notice("warn", "reconnecting to the agent")
         await self._restart()
@@ -648,7 +650,21 @@ class GrokRunner:
         await self.close()
         self._resume = session_id
         await self.start()
-        await self._finish_turn({"stop_reason": "interrupted", "duration_ms": 0})
+        await self._end_here({"stop_reason": "interrupted", "duration_ms": 0})
+
+    async def _end_here(self, completion: dict[str, Any]) -> None:
+        """End a turn Grok has not ended, which its own ending may still follow.
+
+        That ending names the prompt, and so does every row of the turn: the id
+        is remembered as finished, so the ending finds nothing to end when it
+        comes. A turn Grok never said anything about has no id to remember, and
+        Grok names it nowhere else; if such a turn's ending arrives late after
+        all, it is taken for the turn under way then, as before (A52).
+        """
+        prompt_id = self._turn_prompt
+        if prompt_id and prompt_id not in self._finished:
+            self._finished.append(prompt_id)
+        await self._finish_turn(completion)
 
     # -------------------------------------------------------- slash commands
 
@@ -728,113 +744,30 @@ class GrokRunner:
 
     # ------------------------------------------------------- prompts to user
 
-    async def _on_request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
-        if method == PERMISSION_REQUEST:
-            return await self._handle_permission(params)
-        raise RcError("unsupported", f"unhandled grok request {method}")
-
-    async def _handle_permission(self, params: dict[str, Any]) -> dict[str, Any]:
-        call = params.get("toolCall")
-        call = call if isinstance(call, dict) else {}
-        allow = _allow_once(params.get("options"))
-        if allow and self._reads_session_file(call):
-            # A49: an attachment the prompt named, which is the session's own.
-            return {"outcome": {"outcome": "selected", "optionId": allow}}
-        request_id = str(uuid.uuid4())
-        options = _approval_options(params.get("options"))
-        tool_call_id = str(call.get("toolCallId") or "")
-        if tool_call_id:
-            self._tool_calls[tool_call_id] = request_id
-        base: dict[str, Any] = {
-            "block_id": f"approval:{request_id}",
-            "request_id": request_id,
-            "tool": str(call.get("title") or call.get("kind") or "Tool"),
-            "tool_kind": "other",
-            "title": _permission_title(call),
-            "options": options,
-        }
-        raw_input = call.get("rawInput")
-        if isinstance(raw_input, dict):
-            base["input"] = raw_input
-        await self.channel.emit("approval", status="pending", **base)
-        await self.channel.set_state("needs_approval")
-        try:
-            decision = await self._wait_for(request_id)
-        finally:
-            self._tool_calls.pop(tool_call_id, None)
-        if decision is not None and decision.get(ELSEWHERE):
-            # Another client of the leader answered; the turn is already moving.
-            await self.channel.emit(
-                "approval",
-                status="resolved",
-                decision={"option_id": ELSEWHERE, "by": "terminal"},
-                **base,
-            )
-            await self.channel.set_state("running")
-            return {"outcome": {"outcome": "cancelled"}}
-        allowed = {option["id"] for option in options}
-        option_id = str(decision.get("option_id") or "") if decision else ""
-        if option_id not in allowed:
-            # An id we never advertised must never be read as consent.
-            if option_id:
-                log.warning("unknown grok approval option; cancelling")
-            decision = None
-        await self.channel.emit(
-            "approval",
-            status="resolved" if decision else "expired",
-            **({"decision": {"option_id": option_id, "by": "remote"}} if decision else {}),
-            **base,
-        )
-        await self.channel.set_state("running")
-        if decision is None:
-            return {"outcome": {"outcome": "cancelled"}}
-        return {"outcome": {"outcome": "selected", "optionId": option_id}}
-
-    def _reads_session_file(self, call: dict[str, Any]) -> bool:
-        """Whether the call is Grok's own `read_file` of this session's files alone (A49).
-
-        Every path the call names, in `rawInput` and in `locations`, has to be
-        one of them; another tool, an unknown key or one path elsewhere means
-        the request is asked about as any other.
-        """
-        raw = call.get("rawInput")
-        named = _tool_input(call)
-        if not _is_read_file(call) or not isinstance(raw, dict) or named is None:
-            return False
-        known = {*READ_PATH_KEYS, *READ_OTHER_KEYS}
-        if not set(raw) <= known or not set(named) <= known:
-            return False
-        locations = call.get("locations") or []
-        paths = [given[key] for given in (raw, named) for key in READ_PATH_KEYS if key in given]
-        paths += [place.get("path") if isinstance(place, dict) else None for place in locations]
-        session_id = self.channel.session.session_id
-        return bool(paths) and all(is_session_file(session_id, path) for path in paths)
-
-    async def _wait_for(self, request_id: str) -> dict[str, Any] | None:
-        future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
-        self._pending[request_id] = future
-        try:
-            answer = await asyncio.wait_for(future, timeout=APPROVAL_TIMEOUT)
-        except TimeoutError:
-            return None
-        except asyncio.CancelledError:
-            if future.cancelled():
-                return None
-            raise
-        finally:
-            self._pending.pop(request_id, None)
-        return None if answer.get("cancelled") else answer
+    async def _on_request(self, method: str, params: dict[str, Any]) -> dict[str, Any] | None:
+        """An approval or a question Grok asks; `None` leaves it to another client."""
+        return await self._dialogs.request(method, params)
 
     async def approve(self, request_id: str, option_id: str, message: str | None) -> bool:
-        future = self._pending.get(request_id)
-        if future is None or future.done():
-            return False
-        future.set_result({"option_id": option_id, "message": message})
-        return True
+        return await self._dialogs.approve(request_id, option_id, message)
 
     async def answer(self, request_id: str, answers: dict[str, Any]) -> bool:
-        """Grok asks its questions through a tool, not through ACP; nothing waits here."""
-        return False
+        """An app's answer to a question `_x.ai/ask_user_question` asked (A52)."""
+        return await self._dialogs.answer(request_id, answers)
+
+
+def _completed_prompt(method: str, params: dict[str, Any]) -> str | None:
+    """The prompt a `turn_completed` ends, as Grok names it."""
+    found = session_update(method, params)
+    prompt_id = found[1].get("prompt_id") if found is not None else None
+    return prompt_id if isinstance(prompt_id, str) and prompt_id else None
+
+
+def _answered_prompt(result: dict[str, Any]) -> str | None:
+    """The prompt a `session/prompt` answer ends, as Grok names it in `_meta`."""
+    meta = result.get("_meta")
+    prompt_id = meta.get("promptId") if isinstance(meta, dict) else None
+    return prompt_id if isinstance(prompt_id, str) and prompt_id else None
 
 
 @dataclass(slots=True)
@@ -848,83 +781,3 @@ class _Prompt:
         """Whether the prompt's error says Grok never took it up."""
         code = error.rpc_code if isinstance(error, GrokError) else None
         return not self.heard and code in REFUSED_REQUEST
-
-
-def _approval_options(options: Any) -> list[dict[str, str]]:
-    """The options the agent offered, styled so an app always has both poles.
-
-    The one that switches the session into always-approve mode is left out: it
-    is a permission policy for `session.set`, not a button to press on somebody
-    else's behalf, and its ACP kind calls it an ordinary single allow (A28).
-    """
-    styled: list[dict[str, str]] = []
-    for option in options or []:
-        if not isinstance(option, dict):
-            continue
-        option_id = str(option.get("optionId") or option.get("id") or "")
-        if not option_id or option_id == ALWAYS_APPROVE:
-            continue
-        kind = str(option.get("kind") or "")
-        styled.append(
-            {
-                "id": option_id,
-                "label": str(option.get("name") or option_id),
-                "style": _OPTION_STYLES.get(kind, "secondary"),
-            }
-        )
-    if not styled:
-        return [
-            {"id": "allow", "label": "Allow", "style": "primary"},
-            {"id": "reject", "label": "Deny", "style": "danger"},
-        ]
-    styles = {option["style"] for option in styled}
-    if "primary" not in styles:
-        styled[0]["style"] = "primary"
-    if "danger" not in styles:
-        styled[-1]["style"] = "danger"
-    return styled
-
-
-def _is_read_file(call: dict[str, Any]) -> bool:
-    """Grok's own `read_file`, by the name `_meta` gives it or else by its variant."""
-    if call.get("kind") not in (None, "read"):
-        return False
-    meta = call.get("_meta")
-    tool = meta.get("x.ai/tool") if isinstance(meta, dict) else None
-    raw = call.get("rawInput")
-    variant = raw.get("variant") if isinstance(raw, dict) else None
-    if tool is None:
-        return variant == "ReadFile"
-    builtin = isinstance(tool, dict) and tool.get("namespace") == "grok_build"
-    return builtin and tool.get("name") == "read_file" and variant in (None, "ReadFile")
-
-
-def _tool_input(call: dict[str, Any]) -> dict[str, Any] | None:
-    """The input `_meta["x.ai/tool"]` repeats, empty when absent and `None` when unreadable."""
-    meta = call.get("_meta")
-    tool = meta.get("x.ai/tool") if isinstance(meta, dict) else None
-    named = tool.get("input", {}) if isinstance(tool, dict) else {}
-    return named if isinstance(named, dict) else None
-
-
-def _allow_once(options: Any) -> str | None:
-    """Grok's `allow-once`, if offered; never another option of the same kind.
-
-    `enable-always-approve` calls itself `allow_once` too, so the kind is not
-    enough to tell the two apart.
-    """
-    for option in options or []:
-        if isinstance(option, dict) and (option.get("optionId") or option.get("id")) == ALLOW_ONCE:
-            return ALLOW_ONCE
-    return None
-
-
-def _permission_title(call: dict[str, Any]) -> str:
-    raw = call.get("rawInput")
-    if isinstance(raw, dict):
-        for key in ("command", "file_path", "path", "query"):
-            value = raw.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip().splitlines()[0][:200]
-    title = str(call.get("title") or "")
-    return title.splitlines()[0][:200] if title else "run a tool"

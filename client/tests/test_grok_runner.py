@@ -81,6 +81,13 @@ class Peer:
                 found = dict(message.get("params") or {})
         return found
 
+    def reply(self, message_id: Any) -> dict[str, Any] | None:
+        """The client's reply to a request the peer sent, or `None` when it sent none."""
+        for message in self.requests():
+            if message.get("id") == message_id and message.get("method") is None:
+                return message
+        return None
+
 
 def shim(tmp_path: Path, mode: str) -> tuple[str, Peer]:
     """An executable that answers `<binary> agent --no-leader … stdio` like Grok."""
@@ -201,6 +208,25 @@ async def test_an_option_the_agent_never_offered_is_not_consent(tmp_path: Path) 
     await wait_for(lambda: len(recorder.events("approval")) > 1)
     await runner.close()
     assert recorder.events("approval")[-1]["status"] == "expired"
+
+
+async def test_an_approval_only_the_device_can_answer_is_refused_in_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Off the leader nobody else is asked, so the device's own deadline still applies."""
+    from rc_client.agents.grok import dialogs as grok_dialogs
+
+    monkeypatch.setattr(grok_dialogs, "APPROVAL_TIMEOUT", 0.2)
+    runner, recorder, peer = build(tmp_path, "approval")
+    await runner.start()
+    await runner.send("Reply with exactly OK")
+    await wait_for(
+        lambda: [event["status"] for event in recorder.events("approval")][-1:] == ["expired"]
+    )
+    await wait_for(lambda: peer.reply(9001) is not None)
+    reply = peer.reply(9001)
+    assert reply is not None and reply["result"] == {"outcome": {"outcome": "cancelled"}}
+    await runner.close()
 
 
 async def test_an_interrupt_cancels_the_turn(tmp_path: Path) -> None:
@@ -384,7 +410,7 @@ def read_request(path: str) -> dict[str, Any]:
 async def decision(runner: GrokRunner, recorder: Recorder, request: dict[str, Any]) -> str:
     """`allowed` when the device answered by itself, `asked` when it raised an approval."""
     raised = len(recorder.events("approval"))
-    task = asyncio.create_task(runner._handle_permission(request))
+    task = asyncio.create_task(runner._on_request("session/request_permission", request))
     await wait_for(lambda: task.done() or len(recorder.events("approval")) > raised)
     if task.done():
         assert task.result() == {"outcome": {"outcome": "selected", "optionId": "allow-once"}}
@@ -458,6 +484,161 @@ async def test_grok_asks_about_anything_short_of_reading_the_session_s_own_file(
     cases = {**variants(own.path), "another session's file": read_request(other.path)}
     for name, request in cases.items():
         assert await decision(runner, recorder, request) == "asked", name
+
+
+# ---------------------------------------------------------------- questions
+
+QUESTION_ID = 9002
+COLOR = {
+    "id": "q0",
+    "prompt": "Which color should I use?",
+    "options": [
+        {"id": "o0", "label": "Red", "description": "warm"},
+        {"id": "o1", "label": "Blue", "description": "cool"},
+    ],
+    "multi": False,
+    "allow_text": True,
+}
+
+
+async def ask(runner: GrokRunner, recorder: Recorder) -> dict[str, Any]:
+    """Start a turn in which Grok asks its question, and return the pending block."""
+    await runner.start()
+    await runner.send("Ask me which color to use")
+    await wait_for(lambda: recorder.events("question"))
+    return recorder.events("question")[-1]
+
+
+async def test_a_question_reaches_the_apps_and_their_answer_goes_back(tmp_path: Path) -> None:
+    runner, recorder, peer = build(tmp_path, "question")
+    pending = await ask(runner, recorder)
+    assert pending["status"] == "pending"
+    assert pending["questions"] == [COLOR]
+    assert recorder.states()[-1] == "needs_input"
+
+    # Apps send a choice as a list of option ids, a single choice included.
+    assert await runner.answer(pending["request_id"], {"q0": ["o1"]}) is True
+    await wait_for(lambda: recorder.events("turn_completed"))
+    reply = peer.reply(QUESTION_ID)
+    assert reply is not None
+    assert reply["result"] == {
+        "outcome": "accepted",
+        "answers": {"Which color should I use?": "Blue"},
+    }
+    [_, resolved] = recorder.events("question")
+    assert resolved["status"] == "resolved"
+    assert resolved["by"] == "remote"
+    assert resolved["answers"] == {"q0": ["o1"]}
+    assert "running" in recorder.states()[recorder.states().index("needs_input") :]
+    assert await runner.answer(pending["request_id"], {"q0": ["o0"]}) is False, "answered once"
+    await runner.close()
+
+
+async def test_stopping_the_turn_declines_its_question(tmp_path: Path) -> None:
+    runner, recorder, peer = build(tmp_path, "question")
+    await ask(runner, recorder)
+
+    assert await runner.interrupt() is True
+    await wait_for(lambda: recorder.events("turn_completed"))
+    await wait_for(lambda: peer.reply(QUESTION_ID) is not None)
+    # The refusal's own result comes last; closing before it lands would cut it off mid-read.
+    await wait_for(
+        lambda: any(
+            event["tool"] == "ask_user_question" and event["status"] == "succeeded"
+            for event in recorder.events("tool_call")
+        )
+    )
+    reply = peer.reply(QUESTION_ID)
+    assert reply is not None and reply["result"] == {"outcome": "cancelled"}
+    assert recorder.events("question")[-1]["status"] == "expired"
+    assert "session/cancel" in peer.methods()
+    await runner.close()
+
+
+async def test_a_question_grok_gives_up_on_expires_with_no_reply(tmp_path: Path) -> None:
+    """Grok's own deadline settles the question; the device only follows."""
+    runner, recorder, peer = build(tmp_path, "question-timeout")
+    await ask(runner, recorder)
+
+    await wait_for(lambda: recorder.events("turn_completed"))
+    assert [event["status"] for event in recorder.events("question")] == ["pending", "expired"]
+    assert peer.reply(QUESTION_ID) is None
+    await runner.close()
+
+
+async def test_a_prompt_nobody_else_can_answer_is_refused(tmp_path: Path) -> None:
+    """Off the leader the device is the only client, so silence would hang the turn."""
+    from rc_client.errors import RcError
+
+    runner, _, _ = build(tmp_path, "turn")
+    with pytest.raises(RcError):
+        await runner._on_request("_x.ai/exit_plan_mode", {"sessionId": SESSION})
+
+
+async def test_a_turn_s_late_ending_leaves_the_next_turn_alone(tmp_path: Path) -> None:
+    """A turn ends twice, by its prompt's answer and by `turn_completed`; the later one
+    can land after the next turn asked a question, and must not end it or its question."""
+    runner, recorder, _ = build(tmp_path, "late-end")
+    await runner.start()
+    await runner.send("Reply with exactly OK")
+    await wait_for(lambda: len(recorder.events("turn_completed")) == 1)
+    await runner.send("Ask me which color to use")
+    await wait_for(lambda: recorder.events("question"))
+    # The first turn's own `turn_completed` follows the question at once.
+    await asyncio.sleep(0.3)
+    assert [event["status"] for event in recorder.events("question")] == ["pending"]
+    assert len(recorder.events("turn_completed")) == 1
+    assert runner.channel.session.turn is not None
+    assert runner.channel.session.state == "needs_input"
+
+    pending = recorder.events("question")[-1]
+    assert await runner.answer(pending["request_id"], {"q0": ["o1"]}) is True
+    await wait_for(lambda: len(recorder.events("turn_completed")) == 2)
+    assert recorder.events("question")[-1]["status"] == "resolved"
+    await runner.close()
+
+
+async def test_a_failed_turn_s_late_ending_leaves_the_next_turn_alone(tmp_path: Path) -> None:
+    """The device ends a failed turn itself; Grok's own ending of it, after the next turn
+    asked, is known by the prompt id the failed turn's rows carried."""
+    runner, recorder, _ = build(tmp_path, "late-fail")
+    await runner.start()
+    await runner.send("Reply with exactly OK")
+    await wait_for(lambda: len(recorder.events("turn_completed")) == 1)
+    assert recorder.events("error")
+    await runner.send("Ask me which color to use")
+    await wait_for(lambda: recorder.events("question"))
+    await asyncio.sleep(0.3)
+    assert [event["status"] for event in recorder.events("question")] == ["pending"]
+    assert len(recorder.events("turn_completed")) == 1
+    assert runner.channel.session.state == "needs_input"
+
+    pending = recorder.events("question")[-1]
+    assert await runner.answer(pending["request_id"], {"q0": ["o1"]}) is True
+    await wait_for(lambda: len(recorder.events("turn_completed")) == 2)
+    await runner.close()
+
+
+async def test_every_question_event_validates(tmp_path: Path) -> None:
+    validator = event_validator()
+    if validator is None:
+        return
+    runner, recorder, _ = build(tmp_path, "question")
+    pending = await ask(runner, recorder)
+    await runner.answer(pending["request_id"], {"q0": ["o0"]})
+    await wait_for(lambda: recorder.events("turn_completed"))
+    await runner.close()
+    for event in recorder.events("question"):
+        validator.validate(event)
+
+
+async def test_a_reply_to_grok_s_own_request_does_not_stop_the_reader(tmp_path: Path) -> None:
+    runner, recorder, _ = build(tmp_path, "stray-reply")
+    await runner.start()
+    await runner.send("Reply with exactly OK")
+    await wait_for(lambda: recorder.events("turn_completed"))
+    assert recorder.events("assistant_text")
+    await runner.close()
 
 
 async def test_resuming_replays_nothing_into_the_timeline(tmp_path: Path) -> None:

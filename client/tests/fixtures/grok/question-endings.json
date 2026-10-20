@@ -1,0 +1,262 @@
+{
+  "answered": {
+    "request": {
+      "sessionId": "01a09b4f-1b25-7e92-b96b-356d292ff2d0",
+      "toolCallId": "call-fc45441f-1692-4d2b-b8c9-8ef58e676624-1",
+      "questions": [
+        {
+          "question": "Which color should I use?",
+          "options": [
+            {
+              "label": "Red",
+              "description": "warm"
+            },
+            {
+              "label": "Blue",
+              "description": "cool"
+            }
+          ],
+          "multiSelect": null
+        }
+      ],
+      "mode": "default"
+    },
+    "result": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "call-fc45441f-1692-4d2b-b8c9-8ef58e676624-1",
+      "status": "completed",
+      "content": [
+        {
+          "type": "content",
+          "content": {
+            "type": "text",
+            "text": "User has answered your questions: \"Which color should I use?\"=\"Blue\". You can now continue with the user's answers in mind."
+          }
+        }
+      ],
+      "rawOutput": {
+        "type": "AskUserQuestion",
+        "UserAnswered": {
+          "message": "User has answered your questions: \"Which color should I use?\"=\"Blue\". You can now continue with the user's answers in mind."
+        }
+      }
+    }
+  },
+  "failed": {
+    "request": {
+      "sessionId": "01a09b4f-1b25-7e92-b96b-356d292ff2d0",
+      "toolCallId": "call-3d857d19-0cfe-41b5-b66d-97dd2046e3c8-0",
+      "questions": [
+        {
+          "question": "Which color should I use?",
+          "options": [
+            {
+              "label": "Red",
+              "description": "warm"
+            },
+            {
+              "label": "Blue",
+              "description": "cool"
+            }
+          ],
+          "multiSelect": null
+        }
+      ],
+      "mode": "default"
+    },
+    "result": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "call-3d857d19-0cfe-41b5-b66d-97dd2046e3c8-0",
+      "status": "failed",
+      "content": [
+        {
+          "type": "content",
+          "content": {
+            "type": "text",
+            "text": "Tool `ask_user_question` failed: Failed to reach the client for user question: unhandled grok request _x.ai/ask_user_question"
+          }
+        }
+      ],
+      "rawOutput": {
+        "error": "tool_execution_failed",
+        "message": "Failed to reach the client for user question: unhandled grok request _x.ai/ask_user_question"
+      }
+    }
+  },
+  "free_text": {
+    "request": {
+      "sessionId": "01a09b4f-1b25-7e92-b96b-356d292ff2d0",
+      "toolCallId": "call-eaad4c83-cef2-443a-afe0-68ecae187a04-2",
+      "questions": [
+        {
+          "question": "Which color should I use?",
+          "options": [
+            {
+              "label": "Red",
+              "description": "warm"
+            },
+            {
+              "label": "Blue",
+              "description": "cool"
+            }
+          ],
+          "multiSelect": null
+        }
+      ],
+      "mode": "default"
+    },
+    "result": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "call-eaad4c83-cef2-443a-afe0-68ecae187a04-2",
+      "status": "completed",
+      "content": [
+        {
+          "type": "content",
+          "content": {
+            "type": "text",
+            "text": "User has answered your questions: \"Which color should I use?\"=\"Green\". You can now continue with the user's answers in mind."
+          }
+        }
+      ],
+      "rawOutput": {
+        "type": "AskUserQuestion",
+        "UserAnswered": {
+          "message": "User has answered your questions: \"Which color should I use?\"=\"Green\". You can now continue with the user's answers in mind."
+        }
+      }
+    }
+  },
+  "declined": {
+    "request": {
+      "sessionId": "01a09b4f-1b25-7e92-b96b-356d292ff2d0",
+      "toolCallId": "call-58e9bae7-04a1-42a0-a42c-4c86ba51dd04-3",
+      "questions": [
+        {
+          "question": "Which color should I use?",
+          "options": [
+            {
+              "label": "Red",
+              "description": "warm"
+            },
+            {
+              "label": "Blue",
+              "description": "cool"
+            }
+          ],
+          "multiSelect": null
+        }
+      ],
+      "mode": "default"
+    },
+    "result": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "call-58e9bae7-04a1-42a0-a42c-4c86ba51dd04-3",
+      "status": "completed",
+      "content": [
+        {
+          "type": "content",
+          "content": {
+            "type": "text",
+            "text": "User declined to answer the questions. Continue with the task using your best judgment, or ask different questions."
+          }
+        }
+      ],
+      "rawOutput": {
+        "type": "AskUserQuestion",
+        "UserAnswered": {
+          "message": "User declined to answer the questions. Continue with the task using your best judgment, or ask different questions."
+        }
+      }
+    }
+  },
+  "multi_select": {
+    "request": {
+      "sessionId": "01a09b4f-1b25-7e92-b96b-356d292ff2d0",
+      "toolCallId": "call-15f815fe-2500-4b8b-9175-92b23a64b8a0-0",
+      "questions": [
+        {
+          "question": "Which toppings?",
+          "options": [
+            {
+              "label": "Cheese",
+              "description": "Melted cheese"
+            },
+            {
+              "label": "Ham",
+              "description": "Sliced ham"
+            },
+            {
+              "label": "Olives",
+              "description": "Black olives"
+            }
+          ],
+          "multiSelect": true
+        }
+      ],
+      "mode": "default"
+    },
+    "result": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "call-15f815fe-2500-4b8b-9175-92b23a64b8a0-0",
+      "status": "completed",
+      "content": [
+        {
+          "type": "content",
+          "content": {
+            "type": "text",
+            "text": "User has answered your questions: \"Which toppings?\"=\"Cheese, Ham\". You can now continue with the user's answers in mind."
+          }
+        }
+      ],
+      "rawOutput": {
+        "type": "AskUserQuestion",
+        "UserAnswered": {
+          "message": "User has answered your questions: \"Which toppings?\"=\"Cheese, Ham\". You can now continue with the user's answers in mind."
+        }
+      }
+    }
+  },
+  "timed_out": {
+    "request": {
+      "sessionId": "01a09b4f-1b25-7e92-b96b-356d292ff2d0",
+      "toolCallId": "call-28f669c3-5af1-46a8-9d22-db256d611e99-1",
+      "questions": [
+        {
+          "question": "Which size?",
+          "options": [
+            {
+              "label": "Small",
+              "description": "Small size"
+            },
+            {
+              "label": "Large",
+              "description": "Large size"
+            }
+          ],
+          "multiSelect": null
+        }
+      ],
+      "mode": "default"
+    },
+    "result": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "call-28f669c3-5af1-46a8-9d22-db256d611e99-1",
+      "status": "completed",
+      "content": [
+        {
+          "type": "content",
+          "content": {
+            "type": "text",
+            "text": "User declined to answer the questions. Continue with the task using your best judgment, or ask different questions."
+          }
+        }
+      ],
+      "rawOutput": {
+        "type": "AskUserQuestion",
+        "UserAnswered": {
+          "message": "User declined to answer the questions. Continue with the task using your best judgment, or ask different questions."
+        }
+      }
+    }
+  }
+}

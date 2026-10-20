@@ -477,7 +477,7 @@ def test_holder_records_expose_what_terminate_re_checks() -> None:
 
 
 def test_question_and_option_ids_are_positional_so_duplicates_cannot_collide() -> None:
-    from rc_client.agents.claude.questions import answers_by_prompt, normalise_questions
+    from rc_client.agents.questions import answers_by_prompt, normalise_questions
 
     questions = normalise_questions(
         {

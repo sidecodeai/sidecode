@@ -1,9 +1,9 @@
 """Newline-delimited JSON-RPC 2.0 against `agent agent stdio`.
 
 Grok speaks the Agent Client Protocol on stdin and stdout. One reader task owns
-stdout; agent-to-client *requests* (permission prompts) are dispatched into
-detached tasks, because answering one waits for a person and must never block
-the stream that is still delivering the turn.
+stdout; agent-to-client *requests* (permission prompts, questions) are
+dispatched into detached tasks, because answering one waits for a person and
+must never block the stream that is still delivering the turn.
 """
 
 from __future__ import annotations
@@ -25,9 +25,19 @@ STARTUP_TIMEOUT = 30.0
 MAX_LINE_BYTES = 32 * 1024 * 1024
 
 NotificationHandler = Callable[[str, dict[str, Any]], Awaitable[None]]
-ServerRequestHandler = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
+# A handler that answers `None` leaves the request unanswered.
+ServerRequestHandler = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any] | None]]
 
 PROTOCOL_VERSION = 1
+
+PERMISSION_REQUEST = "session/request_permission"
+QUESTION_REQUEST = "_x.ai/ask_user_question"
+# Every agent-to-client request that asks a person something. On the leader each
+# one goes to every client of the session at once, and the first reply settles
+# it for all of them — a refusal or a JSON-RPC error just as much as an answer.
+INTERACTIONS = frozenset(
+    {PERMISSION_REQUEST, QUESTION_REQUEST, "_x.ai/exit_plan_mode", "_x.ai/mcp/elicit"}
+)
 
 
 class GrokError(RcError):
@@ -213,7 +223,13 @@ class GrokAgent:
         message_id = message.get("id")
         method = message.get("method")
         if message_id is not None and method is None:
-            future = self._pending.pop(int(message_id), None)
+            try:
+                key = int(message_id)
+            except (TypeError, ValueError):
+                # A reply to a request this client never sent: Grok answers its
+                # own, `skills-reload` among them, on the same stream.
+                return
+            future = self._pending.pop(key, None)
             if future is None or future.done():
                 return
             if "error" in message:
@@ -251,7 +267,7 @@ class GrokAgent:
             if not self._closed:
                 await self.respond_error(request_id, -32000, str(exc)[:200])
             return
-        if not self._closed:
+        if result is not None and not self._closed:
             await self.respond(request_id, result)
 
 

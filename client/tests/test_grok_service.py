@@ -8,6 +8,7 @@ framing, the replay and the fan-out of approvals are exercised end to end.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import os
 import urllib.parse
@@ -20,7 +21,9 @@ import pytest
 from rc_client import attachments
 from rc_client.agents.claude import transcripts as claude_transcripts
 from rc_client.agents.codex import rollouts as codex_rollouts
+from rc_client.agents.grok import adapter as grok_adapter
 from rc_client.agents.grok import cursor as grok_cursor
+from rc_client.agents.grok import dialogs as grok_dialogs
 from rc_client.agents.grok import runtime as grok_runtime
 from rc_client.agents.grok.adapter import GrokRunner
 from rc_client.agents.grok.service import GrokLeaderService
@@ -549,6 +552,395 @@ async def test_an_approval_answered_elsewhere_ends_as_elsewhere(home: Path, tmp_
     assert resolved["decision"] == {"option_id": "elsewhere", "by": "terminal"}
     answers = [message for message in peer.requests() if message.get("method") is None]
     assert answers[-1]["result"] == {"outcome": {"outcome": "cancelled"}}
+    await service.stop()
+
+
+async def test_a_shared_approval_waits_for_the_terminal_with_no_deadline_of_its_own(
+    home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Any reply would settle the TUI's dialog too, so on a shared session nothing times it out."""
+    monkeypatch.setattr(grok_dialogs, "APPROVAL_TIMEOUT", 0.2)
+    register(home)
+    binary, peer = leader_peer(tmp_path)
+    hub, recorder, service = build(tmp_path)
+    grok_cursor.write(hub.registry, SESSION, 999)
+    await service.tick(binary)
+
+    inject(peer, "10-permission.json", permission_request())
+    await wait_for(lambda: recorder.events("approval"))
+    await asyncio.sleep(0.6)
+    assert [event["status"] for event in recorder.events("approval")] == ["pending"]
+    inject(
+        peer,
+        "20-resolved.json",
+        notification(SESSION, {"sessionUpdate": "interaction_resolved", "tool_call_id": TOOL_CALL}),
+    )
+    await wait_for(lambda: len(recorder.events("approval")) > 1)
+    assert recorder.events("approval")[-1]["decision"] == {
+        "option_id": "elsewhere",
+        "by": "terminal",
+    }
+    await service.stop()
+
+
+# ----------------------------------------------------------------- questions
+
+QUESTION_ROWS = Path(__file__).resolve().parent / "fixtures" / "grok" / "question.jsonl"
+ENDINGS = Path(__file__).resolve().parent / "fixtures" / "grok" / "question-endings.json"
+QUESTION_CALL = "call-fc45441f-1692-4d2b-b8c9-8ef58e676624-1"
+
+
+def ask_in_terminal(peer: Peer, step: str, request_id: int = 7002) -> None:
+    """Grok asking a question on the leader, as recorded: the request comes last."""
+    rows = [json.loads(line) for line in QUESTION_ROWS.read_text(encoding="utf-8").splitlines()]
+    rows[-1] = {**rows[-1], "id": request_id}
+    for index, row in enumerate(rows):
+        inject(peer, f"{step}-{index}.json", row)
+
+
+def ask_again(peer: Peer, step: str, request_id: int) -> None:
+    """The leader asking an open question again, as it does whoever joins: the request alone."""
+    rows = [json.loads(line) for line in QUESTION_ROWS.read_text(encoding="utf-8").splitlines()]
+    inject(peer, f"{step}.json", {**rows[-1], "id": request_id})
+
+
+def settle_elsewhere(peer: Peer, step: str, ending: str) -> None:
+    """Another client settled the question: `interaction_resolved`, then the tool's result."""
+    update = dict(json.loads(ENDINGS.read_text(encoding="utf-8"))[ending]["result"])
+    update["toolCallId"] = QUESTION_CALL
+    resolved = {"sessionUpdate": "interaction_resolved", "tool_call_id": QUESTION_CALL}
+    inject(peer, f"{step}-0.json", notification(SESSION, resolved))
+    inject(
+        peer,
+        f"{step}-1.json",
+        {
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {"sessionId": SESSION, "update": update},
+        },
+    )
+
+
+PROBES = itertools.count(7900)
+
+
+async def settled(peer: Peer) -> None:
+    """Every message injected so far has been handled: the device refused one sent after them.
+
+    A request for a session nothing here holds, and not a prompt, is answered at
+    once with an error; replies leave in the order the requests came.
+    """
+    probe_id = next(PROBES)
+    probe = {
+        "jsonrpc": "2.0",
+        "id": probe_id,
+        "method": "fs/read_text_file",
+        "params": {"sessionId": "other"},
+    }
+    inject(peer, f"99-probe-{probe_id}.json", probe)
+    await wait_for(lambda: peer.reply(probe_id) is not None)
+    await asyncio.sleep(0.05)
+
+
+async def shared_session(
+    home: Path, tmp_path: Path
+) -> tuple[SessionHub, Recorder, GrokLeaderService, Peer]:
+    register(home)
+    binary, peer = leader_peer(tmp_path)
+    hub, recorder, service = build(tmp_path)
+    grok_cursor.write(hub.registry, SESSION, 999)
+    await service.tick(binary)
+    assert hub.entries[SESSION].session.control == "shared"
+    return hub, recorder, service, peer
+
+
+def statuses(recorder: Recorder) -> list[str]:
+    return [str(event["status"]) for event in recorder.events("question")]
+
+
+async def test_a_terminal_session_s_question_is_answered_from_an_app(
+    home: Path, tmp_path: Path
+) -> None:
+    hub, recorder, service, peer = await shared_session(home, tmp_path)
+    ask_in_terminal(peer, "10")
+    await wait_for(lambda: statuses(recorder) == ["pending"])
+    pending = recorder.events("question")[0]
+    assert hub.entries[SESSION].session.state == "needs_input"
+
+    answers = {"q0": ["o0"]}
+    params = {"session_id": SESSION, "request_id": pending["request_id"], "answers": answers}
+    assert await hub.answer(params) == {}
+    await wait_for(lambda: peer.reply(7002) is not None)
+    reply = peer.reply(7002)
+    assert reply is not None
+    assert reply["result"] == {
+        "outcome": "accepted",
+        "answers": {"Which color should I use?": "Red"},
+    }
+    resolved = recorder.events("question")[-1]
+    assert (resolved["status"], resolved["by"], resolved["answers"]) == (
+        "resolved",
+        "remote",
+        answers,
+    )
+    assert hub.entries[SESSION].session.state == "running"
+    await service.stop()
+
+
+async def test_a_question_the_terminal_answered_shows_its_answer_and_gets_no_reply(
+    home: Path, tmp_path: Path
+) -> None:
+    """The regression: a reply of the device's own would have settled it for the TUI."""
+    _, recorder, service, peer = await shared_session(home, tmp_path)
+    ask_in_terminal(peer, "10")
+    await wait_for(lambda: statuses(recorder) == ["pending"])
+    settle_elsewhere(peer, "20", "answered")
+
+    await wait_for(lambda: statuses(recorder) == ["pending", "resolved"])
+    resolved = recorder.events("question")[-1]
+    assert resolved["by"] == "terminal"
+    assert resolved["answers"] == {"q0": ["o1"]}
+    await settled(peer)
+    assert peer.reply(7002) is None
+    await service.stop()
+
+
+async def test_free_text_typed_at_the_terminal_leaves_the_answers_out(
+    home: Path, tmp_path: Path
+) -> None:
+    _, recorder, service, peer = await shared_session(home, tmp_path)
+    ask_in_terminal(peer, "10")
+    await wait_for(lambda: statuses(recorder) == ["pending"])
+    settle_elsewhere(peer, "20", "free_text")
+
+    await wait_for(lambda: statuses(recorder) == ["pending", "resolved"])
+    resolved = recorder.events("question")[-1]
+    assert resolved["by"] == "terminal"
+    assert "answers" not in resolved
+    await service.stop()
+
+
+async def test_a_question_nobody_answered_expires(home: Path, tmp_path: Path) -> None:
+    hub, recorder, service, peer = await shared_session(home, tmp_path)
+    ask_in_terminal(peer, "10")
+    await wait_for(lambda: statuses(recorder) == ["pending"])
+    settle_elsewhere(peer, "20", "timed_out")
+
+    await wait_for(lambda: statuses(recorder) == ["pending", "expired"])
+    await settled(peer)
+    assert peer.reply(7002) is None
+    assert hub.entries[SESSION].session.state == "running"
+    await service.stop()
+
+
+async def test_a_question_asked_again_after_a_rejoin_keeps_its_one_card(
+    home: Path, tmp_path: Path
+) -> None:
+    """The leader asks again whoever joins while a question is open (A52)."""
+    hub, recorder, service, peer = await shared_session(home, tmp_path)
+    ask_in_terminal(peer, "10", request_id=7002)
+    await wait_for(lambda: statuses(recorder) == ["pending"])
+    ask_again(peer, "20", request_id=7003)
+    await settled(peer)
+    assert statuses(recorder) == ["pending"]
+
+    pending = recorder.events("question")[0]
+    params = {"session_id": SESSION, "request_id": pending["request_id"], "answers": {"q0": ["o1"]}}
+    assert await hub.answer(params) == {}
+    await wait_for(lambda: peer.reply(7003) is not None)
+    reply = peer.reply(7003)
+    assert reply is not None
+    assert reply["result"]["answers"] == {"Which color should I use?": "Blue"}
+    await settled(peer)
+    assert peer.reply(7002) is None, "the request it replaced is never answered"
+    assert statuses(recorder) == ["pending", "resolved"]
+    await service.stop()
+
+
+async def test_a_question_asked_again_then_answered_elsewhere_ends_once(
+    home: Path, tmp_path: Path
+) -> None:
+    _, recorder, service, peer = await shared_session(home, tmp_path)
+    ask_in_terminal(peer, "10", request_id=7002)
+    await wait_for(lambda: statuses(recorder) == ["pending"])
+    ask_again(peer, "20", request_id=7003)
+    settle_elsewhere(peer, "30", "answered")
+
+    await wait_for(lambda: statuses(recorder) == ["pending", "resolved"])
+    assert recorder.events("question")[-1]["by"] == "terminal"
+    await settled(peer)
+    assert peer.reply(7002) is None
+    assert peer.reply(7003) is None
+    assert statuses(recorder) == ["pending", "resolved"]
+    await service.stop()
+
+
+async def test_the_permission_check_before_a_question_does_not_end_it(
+    home: Path, tmp_path: Path
+) -> None:
+    """The check and the question share one tool call id; only the question's own ending counts."""
+    hub, recorder, service, peer = await shared_session(home, tmp_path)
+    ask_in_terminal(peer, "10")
+    await wait_for(lambda: statuses(recorder) == ["pending"])
+    check = {"sessionUpdate": "interaction_resolved", "tool_call_id": QUESTION_CALL}
+    inject(peer, "20-check.json", notification(SESSION, check))
+    await settled(peer)
+    assert statuses(recorder) == ["pending"]
+
+    pending = recorder.events("question")[0]
+    params = {"session_id": SESSION, "request_id": pending["request_id"], "answers": {"q0": ["o0"]}}
+    assert await hub.answer(params) == {}
+    await wait_for(lambda: peer.reply(7002) is not None)
+    await service.stop()
+
+
+async def test_the_end_of_the_turn_ends_what_it_asked(home: Path, tmp_path: Path) -> None:
+    """A question or an approval still open when the turn ends expires, unanswered."""
+    hub, recorder, service, peer = await shared_session(home, tmp_path)
+    ask_in_terminal(peer, "10")
+    inject(peer, "20-permission.json", permission_request())
+    await wait_for(lambda: statuses(recorder) == ["pending"] and recorder.events("approval"))
+
+    over = {"sessionUpdate": "turn_completed", "stop_reason": "cancelled", "elapsed_ms": 900}
+    inject(peer, "30-over.json", notification(SESSION, over))
+    await wait_for(lambda: statuses(recorder) == ["pending", "expired"])
+    await wait_for(lambda: recorder.events("approval")[-1]["status"] == "expired")
+    # A result that arrives after the turn is over changes nothing, the state least of all.
+    settle_elsewhere(peer, "40", "answered")
+    await settled(peer)
+    assert statuses(recorder) == ["pending", "expired"]
+    assert peer.reply(7002) is None
+    assert peer.reply(7001) is None
+    assert hub.entries[SESSION].session.state == "idle"
+    await service.stop()
+
+
+async def test_a_turn_ending_again_later_leaves_the_next_turn_alone(
+    home: Path, tmp_path: Path
+) -> None:
+    """The same `turn_completed` again after the next turn asked: its prompt id says it is old."""
+    hub, recorder, service, peer = await shared_session(home, tmp_path)
+    over = {"sessionUpdate": "turn_completed", "prompt_id": "p-old", "stop_reason": "end_turn"}
+    inject(peer, "10-over.json", notification(SESSION, over))
+    await settled(peer)
+    ask_in_terminal(peer, "20")
+    await wait_for(lambda: statuses(recorder) == ["pending"])
+    inject(peer, "30-over-again.json", notification(SESSION, over))
+    await settled(peer)
+    await asyncio.sleep(0.2)
+    assert statuses(recorder) == ["pending"]
+    assert hub.entries[SESSION].session.state == "needs_input"
+    await service.stop()
+
+
+async def test_a_turn_the_device_gave_up_on_ends_once(
+    home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cancel the leader never settles: the device ends its turn itself, and the leader's own
+    ending of that turn, arriving after the next turn asked, ends nothing."""
+    monkeypatch.setattr(grok_adapter, "DRAIN_TIMEOUT", 0.3)
+    register(home)
+    binary, peer = leader_peer(tmp_path, mode="leader-stuck")
+    hub, recorder, service = build(tmp_path)
+    grok_cursor.write(hub.registry, SESSION, 999)
+    await service.tick(binary)
+    runner = hub.entries[SESSION].runner
+    assert isinstance(runner, GrokRunner)
+    await runner.send("keep going")
+    await wait_for(lambda: recorder.events("thinking"))
+    assert await runner.interrupt() is True
+    assert recorder.events("turn_completed")[-1]["stop_reason"] == "interrupted"
+
+    ask_in_terminal(peer, "10")
+    await wait_for(lambda: statuses(recorder) == ["pending"])
+    over = {"sessionUpdate": "turn_completed", "prompt_id": "prompt-1", "stop_reason": "cancelled"}
+    inject(peer, "20-over.json", notification(SESSION, over))
+    await settled(peer)
+    await asyncio.sleep(0.2)
+    assert statuses(recorder) == ["pending"]
+    assert hub.entries[SESSION].session.state == "needs_input"
+    await service.stop()
+
+
+async def test_prompts_for_a_session_nobody_here_holds_get_no_reply(
+    home: Path, tmp_path: Path
+) -> None:
+    """Any reply would settle the prompt for the terminal that is in that session."""
+    binary, peer = leader_peer(tmp_path, loaded=[])
+    _, recorder, service = build(tmp_path)
+    assert await service.ensure(binary) is True
+
+    ask_in_terminal(peer, "10", request_id=7002)
+    inject(peer, "20-permission.json", permission_request())
+    await settled(peer)
+    assert peer.reply(7002) is None
+    assert peer.reply(7001) is None
+    assert recorder.events("question") == []
+    assert recorder.events("approval") == []
+    await service.stop()
+
+
+async def test_a_prompt_the_device_cannot_answer_is_left_to_the_terminal(
+    home: Path, tmp_path: Path
+) -> None:
+    _, _, service, peer = await shared_session(home, tmp_path)
+    plan = {
+        "jsonrpc": "2.0",
+        "id": 7004,
+        "method": "_x.ai/exit_plan_mode",
+        "params": {"sessionId": SESSION, "toolCallId": "call-plan", "planContent": "1. Do it"},
+    }
+    inject(peer, "10-plan.json", plan)
+    await settled(peer)
+    assert peer.reply(7004) is None
+    await service.stop()
+
+
+async def test_letting_go_of_a_shared_session_leaves_its_prompts_to_the_terminal(
+    home: Path, tmp_path: Path
+) -> None:
+    hub, recorder, service, peer = await shared_session(home, tmp_path)
+    ask_in_terminal(peer, "10")
+    inject(peer, "20-permission.json", permission_request())
+    await wait_for(lambda: statuses(recorder) == ["pending"] and recorder.events("approval"))
+
+    runner = hub.entries[SESSION].runner
+    assert isinstance(runner, GrokRunner)
+    await runner.close()
+    await wait_for(lambda: statuses(recorder) == ["pending", "expired"])
+    await wait_for(lambda: recorder.events("approval")[-1]["status"] == "expired")
+    await settled(peer)
+    assert peer.reply(7002) is None
+    assert peer.reply(7001) is None
+    await service.stop()
+
+
+async def test_closing_a_session_only_the_device_is_in_still_refuses_its_prompts(
+    home: Path, tmp_path: Path
+) -> None:
+    binary, peer = leader_peer(tmp_path, loaded=[], newSessionId=SESSION)
+    hub, recorder, service = build(tmp_path)
+    session = Session(
+        session_id="temp-1", device_id="d1", agent="grok", cwd=str(tmp_path), origin="remote"
+    )
+    entry = hub.register_mirrored(session)
+    entry.channel.start()
+    assert await service.ensure(binary) is True
+    runner = service.runner_for(entry, resume=None)
+    await runner.start()
+    entry.runner = runner
+    await service.publish_control(entry)
+    assert entry.session.control != "shared"
+
+    ask_in_terminal(peer, "10")
+    inject(peer, "20-permission.json", permission_request())
+    await wait_for(lambda: statuses(recorder) == ["pending"] and recorder.events("approval"))
+    await runner.close()
+    await wait_for(lambda: peer.reply(7002) is not None and peer.reply(7001) is not None)
+    question_reply, approval_reply = peer.reply(7002), peer.reply(7001)
+    assert question_reply is not None and question_reply["result"] == {"outcome": "cancelled"}
+    assert approval_reply is not None
+    assert approval_reply["result"] == {"outcome": {"outcome": "cancelled"}}
     await service.stop()
 
 
