@@ -75,6 +75,7 @@
     "effort"
   ],
   "shared_attachments": true,
+  "shared_steer": true,
   "accounts": [
     {
       "provider": "anthropic",

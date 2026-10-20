@@ -28,9 +28,10 @@ import sys
 import termios
 import time
 import tty
+from pathlib import Path
 from typing import Any
 
-from . import wire
+from . import versions, wire
 from .screen import Keyboard, Screen
 
 READ_BYTES = 64 * 1024
@@ -86,8 +87,9 @@ def _copy_window(source: int, target: int) -> None:
 class DaemonLink:
     """The daemon end of the proxy: one frame per line, never blocking for long."""
 
-    def __init__(self, pid: int) -> None:
+    def __init__(self, pid: int, tool_batch: bool = False) -> None:
         self._pid = pid
+        self._tool_batch = tool_batch
         self._socket: socket.socket | None = None
         self._buffer = b""
         self._next_attempt = 0.0
@@ -120,7 +122,7 @@ class DaemonLink:
             return
         self._socket = sock
         self._buffer = b""
-        if self.send(wire.pty_register(self._pid)):
+        if self.send(wire.pty_register(self._pid, self._tool_batch)):
             self._backoff = RECONNECT_FIRST
 
     def send(self, frame: dict[str, Any]) -> bool:
@@ -185,8 +187,9 @@ def _socket_path() -> str | None:
 class PtyProxy:
     """One CLI in a pseudo-terminal, relayed to the real one."""
 
-    def __init__(self, command: list[str]) -> None:
+    def __init__(self, command: list[str], tool_batch: bool = False) -> None:
         self.command = command
+        self.tool_batch = tool_batch
         self.child = 0
         self.master = -1
         self.screen = Screen()
@@ -261,7 +264,7 @@ class PtyProxy:
     # ------------------------------------------------------------------ loop
 
     def run(self) -> int:
-        link = DaemonLink(self.child)
+        link = DaemonLink(self.child, self.tool_batch)
         while True:
             link.dial()
             sources = [self.master, self._wake_read]
@@ -363,18 +366,53 @@ class PtyProxy:
 
 
 def _command(argv: list[str]) -> list[str]:
-    """Everything after `--` is the CLI to run; there is no other argument."""
+    """Everything after `--` is the CLI to run."""
     if "--" in argv:
         return argv[argv.index("--") + 1 :]
     return argv
 
 
+def _shim_settings(argv: list[str]) -> str | None:
+    """The shim's own settings file, which it names before `--` (A51)."""
+    options = argv[: argv.index("--")] if "--" in argv else []
+    if "--shim-settings" not in options:
+        return None
+    at = options.index("--shim-settings")
+    return options[at + 1] if at + 1 < len(options) else None
+
+
+def settings_for(command: list[str], shim_settings: str | None) -> tuple[list[str], bool]:
+    """The command with the shim's settings file this CLI can load, and whether
+    that file carries the `PostToolBatch` hook (A51).
+
+    Only the shim's own file is touched, the last `--settings` it appended,
+    known by its whole path: a file of the person's own is never swapped,
+    whatever its name. A CLI too old for the hook, or one whose version cannot
+    be read, gets the file without it, or no hooks at all when that is missing.
+    """
+    if shim_settings is None or "--settings" not in command:
+        return command, False
+    at = len(command) - 1 - command[::-1].index("--settings")
+    if at + 1 >= len(command) or command[at + 1] != shim_settings:
+        return command, False
+    settings = Path(shim_settings)
+    remembered = settings.with_name(versions.VERSIONS_NAME)
+    if versions.runs_tool_batch_hooks(versions.binary_version(command[0], remembered)):
+        return command, True
+    lean = settings.with_name(versions.NO_BATCH_SETTINGS_NAME)
+    if lean.is_file():
+        return [*command[: at + 1], str(lean), *command[at + 2 :]], False
+    return [*command[:at], *command[at + 2 :]], False
+
+
 def main(argv: list[str] | None = None) -> int:
-    command = _command(list(sys.argv[1:] if argv is None else argv))
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    command = _command(arguments)
     if not command:
         print("rc-client pty: nothing to run", file=sys.stderr, flush=True)
         return 2
-    proxy = PtyProxy(command)
+    command, tool_batch = settings_for(command, _shim_settings(arguments))
+    proxy = PtyProxy(command, tool_batch)
     proxy.spawn()
     proxy.raw_mode()
     proxy.catch_signals()

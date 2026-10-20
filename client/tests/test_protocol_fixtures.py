@@ -24,6 +24,7 @@ OPTIONAL_AGENT_FIELDS = {
     "shared_settings",
     "shared_settings_keys",
     "shared_attachments",
+    "shared_steer",
     "speeds",
 }
 OPTIONAL_SESSION_FIELDS = {"speed", "resume"}
@@ -90,6 +91,7 @@ def agent_info_from(payload: dict[str, Any]) -> AgentInfo:
         shared_settings=bool(payload.get("shared_settings")),
         shared_settings_keys=payload.get("shared_settings_keys"),
         shared_attachments=bool(payload.get("shared_attachments")),
+        shared_steer=bool(payload.get("shared_steer")),
         accounts=[agent_account_from(item) for item in accounts] if accounts is not None else None,
     )
 
@@ -275,12 +277,17 @@ def test_the_shared_session_fixtures_match_what_an_attached_session_reports() ->
 def test_the_attachable_agent_fixture_matches_what_this_device_advertises() -> None:
     from rc_client.sessions.shared import APPROVAL_OPTIONS
 
-    info = agent_info_from(load_fixture("objects/agent.claude-attach.json"))
+    payload = load_fixture("objects/agent.claude-attach.json")
+    info = agent_info_from(payload)
     assert info.attach == "channel"
     assert info.attach_ready is True
     # A42: the device stops the turn by typing Escape into the terminal.
     assert info.shared_interrupt is True
     assert [option["id"] for option in APPROVAL_OPTIONS] == ["allow", "deny"]
+    # A51: a running shared session steers; a session the SDK drives does not.
+    assert info.shared_steer is True
+    assert "steer" not in info.capabilities
+    assert_round_trip(info.to_dict(), payload, OPTIONAL_AGENT_FIELDS)
 
 
 @pytest.mark.parametrize("delivery", ["delivered", "absorbed"])

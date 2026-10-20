@@ -93,7 +93,11 @@ async def tick(
     running: bool,
     trigger: str = "terminal",
     end: TurnEnd | None = None,
+    working: bool = False,
 ) -> None:
-    """A transcript read of an attached session, and the drain it asked for."""
-    await hub.shared.tick(entry, running, trigger, end)
+    """A transcript read of an attached session, and the drain it asked for.
+
+    `running` is the CLI's own turn and `working` its subagents too (A51).
+    """
+    await hub.shared.tick(entry, running, trigger, end, working=working)
     await drained(entry)

@@ -8,6 +8,7 @@ import pty
 import stat
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -45,10 +46,14 @@ def test_a_piped_invocation_always_passes_through(stdin_tty: bool, stdout_tty: b
     assert shim.should_attach([], stdin_tty=stdin_tty, stdout_tty=stdout_tty) is False
 
 
-def _fake_claude(directory: Path) -> Path:
+def _fake_claude(directory: Path, version: str | None = None) -> Path:
+    """A `claude` that prints its arguments, and answers `--version` when given one."""
     directory.mkdir(parents=True, exist_ok=True)
     target = directory / "claude"
-    target.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n', encoding="utf-8")
+    answer = (
+        f'[ "$1" = "--version" ] && echo "{version} (Claude Code)" && exit 0\n' if version else ""
+    )
+    target.write_text(f'#!/bin/sh\n{answer}printf "%s\\n" "$@"\n', encoding="utf-8")
     target.chmod(0o755)
     return target
 
@@ -72,6 +77,7 @@ def test_install_writes_a_shim_that_is_recognisable_and_removable(
     removal = shim.remove()
     assert (removal.shim, removal.settings) == (True, True)
     assert not paths.settings_path().exists()
+    assert not paths.no_batch_settings_path().exists()
     assert shim.remove() == shim.ShimRemoval(shim=False, settings=False)
 
 
@@ -136,16 +142,28 @@ def _run_shim_on_a_tty(args: list[str]) -> list[str]:
     return [line for line in text.split("\n") if line]
 
 
-def _installed_shim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    real = _fake_claude(tmp_path / "real")
+def _installed_shim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version: str | None = None
+) -> None:
+    real = _fake_claude(tmp_path / "real", version)
     monkeypatch.setenv("PATH", f"{paths.bin_dir()}{os.pathsep}{real.parent}")
     shim.install()
 
 
-def test_an_interactive_run_gets_the_channel_flags_and_the_settings_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("version", "settings"),
+    [
+        ("2.1.303", paths.settings_path),
+        ("2.1.290", paths.no_batch_settings_path),
+        (None, paths.no_batch_settings_path),
+    ],
+    ids=["recent", "too-old", "unreadable"],
+)
+def test_an_interactive_run_gets_the_channel_flags_and_the_settings_file_it_can_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version: str | None, settings: Any
 ) -> None:
-    _installed_shim(tmp_path, monkeypatch)
+    """A51: a CLI too old for the batch hook, or that cannot say, gets the file without it."""
+    _installed_shim(tmp_path, monkeypatch, version)
     assert _run_shim_on_a_tty(["--model", "opus"]) == [
         "--model",
         "opus",
@@ -154,7 +172,7 @@ def test_an_interactive_run_gets_the_channel_flags_and_the_settings_file(
         "--mcp-config",
         str(paths.mcp_config_path()),
         "--settings",
-        str(paths.settings_path()),
+        str(settings()),
     ]
 
 

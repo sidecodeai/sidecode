@@ -360,11 +360,15 @@ async def test_the_task_notification_of_a_finished_subagent_opens_no_second_turn
     assert len(mirrored.events("turn_completed")) == 1
 
 
-async def test_a_held_message_waits_for_the_subagents_as_it_waits_for_a_turn(
+async def test_a_held_message_waits_for_the_turn_and_never_for_the_subagents(
     mirrored: MirrorHarness,
 ) -> None:
-    """A19 unchanged: the queue drains when the session stops working, not before."""
-    await mirrored.attach()
+    """A51: the CLI takes a message between its subagents' steps, so nothing waits on them.
+
+    The session still shows as working while they are, because working means
+    all of it; only what decides injecting changed.
+    """
+    entry = await mirrored.attach()
     mirrored.write([user_row("go", "u1")])
     mirrored.subagent("agent-1", [assistant("tool_use")])
     await mirrored.mirror.tail_once()
@@ -373,13 +377,33 @@ async def test_a_held_message_waits_for_the_subagents_as_it_waits_for_a_turn(
 
     mirrored.write([assistant("end_turn")])
     await mirrored.mirror.tail_once()
-    await drained(mirrored.hub.entry("sess-1"))
-    assert mirrored.hub.entry("sess-1").queue != []
+    await drained(entry)
+    assert entry.queue == []
+    assert [text for _, text in mirrored.attachment.injected] == ["later"]
+    assert entry.session.state == "running", "the subagent is still at work"
 
-    write_agent(mirrored.subagents, "agent-1", [assistant("end_turn")])
+    # Idle in its own turn, with the subagent still working: a message goes in at once.
+    message_id, said = mirrored.attachment.injected[-1]
+    mirrored.write([channel_echo(message_id, said), assistant("end_turn")])
     await mirrored.mirror.tail_once()
-    await drained(mirrored.hub.entry("sess-1"))
-    assert mirrored.hub.entry("sess-1").queue == []
+    result = await mirrored.hub.send({"id": "req-2", "session_id": "sess-1", "text": "now"})
+    assert result == {"accepted": "sent"}
+    assert entry.session.state == "running"
+
+
+def channel_echo(message_id: str, text: str) -> dict[str, Any]:
+    """The row the CLI files for a message the channel delivered."""
+    return {
+        "type": "user",
+        "uuid": f"echo-{message_id}",
+        "isMeta": True,
+        "origin": {"kind": "channel", "server": "rc"},
+        "message": {
+            "role": "user",
+            "content": f'<channel source="rc" origin="app" message_id="{message_id}">\n'
+            f"{text}\n</channel>",
+        },
+    }
 
 
 async def test_a_read_only_mirror_is_running_while_its_subagents_are(

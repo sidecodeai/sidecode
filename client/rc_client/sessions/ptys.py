@@ -46,10 +46,15 @@ class TerminalState:
 
 
 class PtyLink:
-    """One live pseudo-terminal proxy: the keystrokes go here."""
+    """One live pseudo-terminal proxy: the keystrokes go here.
 
-    def __init__(self, pid: int, writer: asyncio.StreamWriter) -> None:
+    `tool_batch` is whether the CLI in it was started with the `PostToolBatch`
+    hook, which steering a running turn rests on (A51).
+    """
+
+    def __init__(self, pid: int, writer: asyncio.StreamWriter, tool_batch: bool = False) -> None:
         self.pid = pid
+        self.tool_batch = tool_batch
         self._writer: asyncio.StreamWriter | None = writer
         self._pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._ids = count(1)

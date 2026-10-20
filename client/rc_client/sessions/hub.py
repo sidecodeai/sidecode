@@ -8,7 +8,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from .. import attachments
 from ..agents.base import AttachmentSteering, SessionRunner
@@ -33,7 +33,7 @@ from ..models import (
 )
 from ..registry import Registry
 from . import offsets, titles
-from .attach import Attachment, HookQuestion, SessionStart
+from .attach import Attachment, HookQuestion, SessionStart, TurnHook
 from .channel import SessionChannel
 from .limits import LimitStop
 from .ptys import PtyLinks
@@ -67,6 +67,15 @@ def _as_int(value: Any, field: str) -> int | None:
         raise RcError("bad_request", f"{field} must be an integer") from exc
 
 
+class Steerable(Protocol):
+    """What a running turn is steered through: a runner, or an attachment (A14, A51)."""
+
+    @property
+    def supports_steer(self) -> bool: ...
+
+    async def steer(self, text: str, block_id: str | None = None) -> bool: ...
+
+
 @dataclass(slots=True)
 class SessionEntry:
     session: Session
@@ -77,6 +86,10 @@ class SessionEntry:
     holder_identity: tuple[int, str] | None = None
     transcript: str | None = None
     shared: SharedState | None = None
+    # The messages an attachment injected, by their channel id, until the
+    # transcript says what became of them; a bridge registering again keeps
+    # them (A51).
+    sent: dict[str, dict[str, Any]] = field(default_factory=dict)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     # The one task handing the queue its next message, and whether it was
     # asked again while it ran (A43).
@@ -195,10 +208,13 @@ class SessionHub:
         self._closed = True
         for entry in list(self.entries.values()):
             await self._cancel_drain(entry)
-            # The queue lives in memory, so its messages end with the daemon.
+            # The queue lives in memory, so its messages end with the daemon,
+            # and so do the ones steered into a running turn (A51).
             for item in entry.queue:
                 await release(item)
             if entry.shared is not None:
+                for item in entry.shared.steers:
+                    await release(item)
                 entry.shared.attachment.detach()
                 entry.shared = None
             if entry.runner is not None:
@@ -388,8 +404,8 @@ class SessionHub:
 
         async with entry.lock:
             if entry.shared is not None:
-                result = await self.shared.send(
-                    entry, request_id, text, attachments, source, queue_ts
+                result = await self._send_shared(
+                    entry, mode, request_id, text, attachments, source, queue_ts
                 )
                 if request_id:
                     self.registry.remember_request(session_id, request_id, result)
@@ -453,9 +469,34 @@ class SessionHub:
             await titles.from_prompt(entry.channel, text, attachments)
         await runner.send(text, attachments, source=source, block_id=request_id or None)
 
+    async def _send_shared(
+        self,
+        entry: SessionEntry,
+        mode: str,
+        request_id: str,
+        text: str,
+        attachments: list[dict[str, Any]],
+        source: str,
+        queue_ts: int | None,
+    ) -> dict[str, Any]:
+        """A message for a session a terminal CLI shares with the device (A10, A51).
+
+        `auto` steers a turn the CLI is running, when the CLI runs the device's
+        turn hooks; every other message, a steer the session cannot take, and
+        the resume prompt of A35, which is the device's and never steers, goes
+        in now if the CLI is idle and waits its turn otherwise (A19).
+        """
+        steering = self.shared.steering(entry, source)
+        steers = mode == "auto" and source != "resume"
+        if steers and await self._steer(steering, text, attachments, request_id):
+            return {"accepted": "steered"}
+        return await self.shared.send(
+            entry, request_id, text, attachments, source, queue_ts, mode=mode
+        )
+
     @staticmethod
     async def _steer(
-        runner: SessionRunner, text: str, attachments: list[dict[str, Any]], request_id: str
+        target: Steerable, text: str, attachments: list[dict[str, Any]], request_id: str
     ) -> bool:
         """Steer the running turn with the whole message, files included (A14).
 
@@ -463,13 +504,13 @@ class SessionHub:
         steer a message that has any: it is queued instead, so its files reach
         the agent with its words when the turn ends rather than never.
         """
-        if not runner.supports_steer:
+        if not target.supports_steer:
             return False
         block_id = request_id or None
         if not attachments:
-            return await runner.steer(text, block_id)
-        if isinstance(runner, AttachmentSteering):
-            return await runner.steer_with_attachments(text, attachments, block_id)
+            return await target.steer(text, block_id)
+        if isinstance(target, AttachmentSteering):
+            return await target.steer_with_attachments(text, attachments, block_id)
         return False
 
     def _check_shared_attachments(self, entry: SessionEntry) -> None:
@@ -1038,6 +1079,13 @@ class SessionHub:
             return
         async with entry.lock:
             await self.shared.question_closed(entry, question)
+
+    async def attach_turn(self, hook: TurnHook) -> dict[str, str]:
+        """A turn hook of an attached CLI (A51); a session nothing is attached to gets nothing."""
+        entry = self.entries.get(hook.session_id)
+        if entry is None or entry.shared is None:
+            return {}
+        return await self.shared.turn_hook(entry, hook)
 
     async def attach_closed(self, attachment: Attachment) -> None:
         """The bridge went away: back to the terminal if the CLI is still alive."""

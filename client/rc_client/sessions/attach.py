@@ -1,13 +1,15 @@
 """The daemon end of the channel: a Unix socket the `rc-client channel` bridges dial.
 
-A connection is one of four things: an attached CLI session, held open for as
+A connection is one of five things: an attached CLI session, held open for as
 long as that session lives; a single `session_start` frame from the hook Claude
 Code runs when a terminal enters a session; a `question` frame from the hook
 it runs beside an `AskUserQuestion` dialog, which stays open until the question
-is answered somewhere (amendment A20); or the pseudo-terminal proxy the shim
-starts the CLI inside, which the device types into (A40). The socket lives
-inside the device home with owner-only permissions, because anything that can
-write to it can inject prompts into a live agent and approve its tool calls.
+is answered somewhere (amendment A20); the pseudo-terminal proxy the shim
+starts the CLI inside, which the device types into (A40); or a `turn` frame
+from the hooks that say where a turn stands, each answered with one reply
+(A51). The socket lives inside the device home with owner-only permissions,
+because anything that can write to it can inject prompts into a live agent and
+approve its tool calls.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ import contextlib
 import os
 import re
 import stat
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -29,6 +32,11 @@ log = logger("rc_client.attach")
 
 REGISTER_TIMEOUT = 10.0
 _SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
+# How many confirmations of injections nobody has asked about yet are kept: the
+# bridge confirms every write, and only a `Stop` hook waits on them (A51).
+MAX_UNCLAIMED_ACKS = 64
+# A turn hook's deadline further off than this is not one of ours (A51).
+MAX_HOOK_WAIT = 10.0
 
 
 @dataclass(slots=True, frozen=True)
@@ -77,6 +85,23 @@ class HookQuestion:
             writer.close()
 
 
+@dataclass(slots=True, frozen=True)
+class TurnHook:
+    """Where a turn stands, as one of the CLI's turn hooks reported it (A51).
+
+    `event` is `prompt`, `batch` or `stop`. A prompt says whose it was —
+    `ours` with the injection's `message_id`, `agent`, `command` or `person` —
+    and never what it said. `deadline` is when the hook stops waiting for an
+    answer, in seconds since the epoch; 0 when it did not say.
+    """
+
+    session_id: str
+    event: str
+    prompt_kind: str = ""
+    message_id: str = ""
+    deadline: float = 0.0
+
+
 class AttachSink(Protocol):
     """What the hub has to provide for an attachment to be useful."""
 
@@ -94,16 +119,28 @@ class AttachSink(Protocol):
 
     async def attach_question_closed(self, question: HookQuestion) -> None: ...
 
+    async def attach_turn(self, hook: TurnHook) -> dict[str, str]:
+        """What goes back to a turn hook: `context` and `system_message`, or nothing."""
+        ...
+
 
 @dataclass(slots=True)
 class Attachment:
-    """A live channel bridge for one terminal-started session."""
+    """A live channel bridge for one terminal-started session.
+
+    `acks` is whether the bridge confirms each injection once it has written it
+    to the CLI (A51); a bridge from before that confirms nothing, and nobody
+    waits on it.
+    """
 
     session_id: str
     cwd: str
     pid: int
     claude_version: str | None
     writer: asyncio.StreamWriter | None = field(default=None, repr=False)
+    acks: bool = False
+    _waiting: dict[str, asyncio.Future[None]] = field(default_factory=dict, repr=False)
+    _unclaimed: dict[str, None] = field(default_factory=dict, repr=False)
 
     @property
     def alive(self) -> bool:
@@ -111,6 +148,42 @@ class Attachment:
 
     async def inject(self, message_id: str, text: str) -> bool:
         return await self._send(wire.inject(message_id, text))
+
+    def acknowledged(self, message_id: str) -> None:
+        """The bridge wrote this injection to the CLI."""
+        waiter = self._waiting.pop(message_id, None)
+        if waiter is not None:
+            if not waiter.done():
+                waiter.set_result(None)
+            return
+        self._unclaimed[message_id] = None
+        for stale in list(self._unclaimed)[:-MAX_UNCLAIMED_ACKS]:
+            self._unclaimed.pop(stale, None)
+
+    async def landed(self, message_ids: list[str], timeout: float) -> bool:
+        """Wait until the bridge has written all of these to the CLI, or the time is up.
+
+        True means each is on the CLI's stdin; a bridge that confirms nothing
+        is not waited on, and says False.
+        """
+        if not self.acks or self.writer is None:
+            return False
+        loop = asyncio.get_running_loop()
+        waiters: list[asyncio.Future[None]] = []
+        for message_id in message_ids:
+            if self._unclaimed.pop(message_id, "absent") is None:
+                continue
+            waiters.append(self._waiting.setdefault(message_id, loop.create_future()))
+        if not waiters:
+            return True
+        try:
+            await asyncio.wait_for(asyncio.gather(*waiters), timeout)
+        except TimeoutError:
+            return False
+        finally:
+            for message_id in message_ids:
+                self._waiting.pop(message_id, None)
+        return True
 
     async def relay_permission(self, request_id: str, behavior: str) -> bool:
         return await self._send(wire.permission(request_id, behavior))
@@ -222,6 +295,9 @@ class AttachServer:
         if message.get("type") == wire.PTY:
             await self._pty(message, reader, writer)
             return
+        if message.get("type") == wire.TURN:
+            await self._turn(message, writer)
+            return
         attachment = await self._register(message, writer)
         if attachment is None:
             return
@@ -233,11 +309,30 @@ class AttachServer:
                     continue
                 if message.get("type") == wire.PERMISSION_REQUEST:
                     await self._sink.attach_permission_request(attachment, message)
+                elif message.get("type") == wire.INJECTED:
+                    attachment.acknowledged(str(message.get("message_id") or ""))
                 elif message.get("type") == wire.CLOSED:
                     break
         finally:
             attachment.detach()
             await self._sink.attach_closed(attachment)
+
+    async def _turn(self, message: dict[str, Any], writer: asyncio.StreamWriter) -> None:
+        """Answer one turn hook (A51): the hook is waiting, and a reply is all it reads."""
+        hook = _turn_hook(message)
+        if hook is None:
+            return
+        reply = await self._sink.attach_turn(hook)
+        writer.write(
+            wire.encode(
+                wire.turn_reply(
+                    context=reply.get("context", ""),
+                    system_message=reply.get("system_message", ""),
+                )
+            )
+        )
+        with contextlib.suppress(OSError, RuntimeError):
+            await writer.drain()
 
     async def _question(
         self, message: dict[str, Any], reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -273,7 +368,7 @@ class AttachServer:
             return
         if pid <= 0:
             return
-        link = PtyLink(pid, writer)
+        link = PtyLink(pid, writer, tool_batch=message.get("tool_batch") is True)
         self.ptys.add(link)
         try:
             async for line in reader:
@@ -309,6 +404,7 @@ class AttachServer:
             pid=int(message.get("pid") or 0),
             claude_version=str(raw_version) if raw_version else None,
             writer=writer,
+            acks=message.get("acks") is True,
         )
 
 
@@ -324,6 +420,25 @@ def _hook_question(message: dict[str, Any], writer: asyncio.StreamWriter) -> Hoo
         tool=str(message.get("tool") or ""),
         input=tool_input,
         writer=writer,
+    )
+
+
+def _turn_hook(message: dict[str, Any]) -> TurnHook | None:
+    """Read a `turn` frame, or None when it names no session or no event we know."""
+    session_id = str(message.get("session_id") or "")
+    event = str(message.get("event") or "")
+    if not _SESSION_ID.fullmatch(session_id) or event not in wire.TURN_EVENTS:
+        return None
+    kind = str(message.get("prompt_kind") or "")
+    raw = message.get("deadline")
+    deadline = float(raw) if isinstance(raw, int | float) else 0.0
+    soon = 0 < deadline - time.time() <= MAX_HOOK_WAIT
+    return TurnHook(
+        session_id=session_id,
+        event=event,
+        prompt_kind=kind if kind in wire.PROMPT_KINDS else "",
+        message_id=str(message.get("message_id") or "")[:64],
+        deadline=deadline if soon else 0.0,
     )
 
 

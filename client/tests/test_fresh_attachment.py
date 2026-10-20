@@ -175,6 +175,9 @@ async def test_attaching_wakes_the_reader(tmp_path: Path) -> None:
         def read_soon(self) -> None:
             woken.append(True)
 
+        def settle_soon(self, session_id: str, delay: float) -> None:
+            pass
+
     harness.hub.shared.reader = Reader()
     await harness.attach()
     assert woken == [True]

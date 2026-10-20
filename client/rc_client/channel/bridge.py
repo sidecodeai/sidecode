@@ -8,7 +8,8 @@ The bridge registers with the daemon as soon as Claude Code says `initialize`,
 but Claude Code only listens for channel messages once it has listed this
 server's tools, and drops one that arrives before that without a word. A
 message the daemon injects that early is held here and written, in order, once
-Claude Code listens.
+Claude Code listens. Each injection is confirmed to the daemon once it is
+written, which is what a turn's `Stop` hook waits on (amendment A51).
 """
 
 from __future__ import annotations
@@ -46,9 +47,10 @@ class ChannelBridge:
         self._session_id = session_id
         self._cwd = cwd
         self._registered = False
-        # Injected messages Claude Code is not listening for yet, oldest first;
-        # `None` once it listens and everything goes straight out.
-        self._held: list[dict[str, Any]] | None = []
+        # Injected messages Claude Code is not listening for yet, oldest first,
+        # with the id each is confirmed by; `None` once it listens and
+        # everything goes straight out.
+        self._held: list[tuple[str, dict[str, Any]]] | None = []
         self._listed = asyncio.Event()
 
     # ------------------------------------------------------- Claude -> daemon
@@ -80,8 +82,9 @@ class ChannelBridge:
             await asyncio.wait_for(self._listed.wait(), LISTEN_TIMEOUT)
         await asyncio.sleep(LISTEN_GRACE)
         held, self._held = self._held or [], None
-        for frame in held:
+        for message_id, frame in held:
             write(frame)
+            self._written(message_id)
 
     def _start_registration(self, claude_version: str | None) -> None:
         if self._registered or not self._session_id:
@@ -97,19 +100,24 @@ class ChannelBridge:
     async def on_daemon(self, message: dict[str, Any]) -> None:
         kind = message.get("type")
         if kind == wire.INJECT:
-            frame = rpc.channel_message(
-                str(message.get("message_id") or ""), str(message.get("text") or "")
-            )
+            message_id = str(message.get("message_id") or "")
+            frame = rpc.channel_message(message_id, str(message.get("text") or ""))
             if self._held is None:
                 write(frame)
+                self._written(message_id)
             else:
-                self._held.append(frame)
+                self._held.append((message_id, frame))
         elif kind == wire.PERMISSION:
             write(
                 rpc.permission_verdict(
                     str(message.get("request_id") or ""), str(message.get("behavior") or "deny")
                 )
             )
+
+    def _written(self, message_id: str) -> None:
+        """Claude Code has the injection on its stdin now; the daemon may be waiting on it."""
+        if message_id:
+            self._link.send(wire.injected(message_id))
 
 
 def write(frame: dict[str, Any]) -> None:

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
+import time
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -15,7 +17,14 @@ import pytest
 from rc_client.channel import rpc, wire
 from rc_client.channel.bridge import ChannelBridge
 from rc_client.channel.link import DaemonLink
-from rc_client.sessions.attach import Attachment, AttachServer, HookQuestion, SessionStart
+from rc_client.sessions import attach as attach_module
+from rc_client.sessions.attach import (
+    Attachment,
+    AttachServer,
+    HookQuestion,
+    SessionStart,
+    TurnHook,
+)
 
 
 @pytest.fixture
@@ -139,6 +148,9 @@ class RecordingSink:
         self.saw_question_closed = asyncio.Event()
         # What the daemon would answer the next question hook that arrives.
         self.answer: dict[str, Any] | None = None
+        # A51: the turn hooks heard, and what the daemon answers each of them.
+        self.turns: list[TurnHook] = []
+        self.turn_reply: dict[str, str] = {}
 
     async def attach_registered(self, attachment: Attachment) -> None:
         self.registered.append(attachment)
@@ -165,6 +177,10 @@ class RecordingSink:
     async def attach_question_closed(self, question: HookQuestion) -> None:
         self.finished.append(question)
         self.saw_question_closed.set()
+
+    async def attach_turn(self, hook: TurnHook) -> dict[str, str]:
+        self.turns.append(hook)
+        return dict(self.turn_reply)
 
 
 async def test_a_bridge_and_the_daemon_talk_over_the_unix_socket(short_dir: Path) -> None:
@@ -366,6 +382,147 @@ async def test_an_unusable_question_frame_is_dropped(short_dir: Path) -> None:
     finally:
         await server.stop()
     assert sink.questions == []
+
+
+async def test_a_turn_hook_gets_one_reply_and_the_connection_ends(short_dir: Path) -> None:
+    """A51: a turn hook asks, is answered once, and goes."""
+    socket = short_dir / "channel.sock"
+    sink = RecordingSink()
+    sink.turn_reply = {"context": "the words", "system_message": "the line"}
+    server = AttachServer(socket, sink)
+    await server.start()
+    try:
+        reader, writer = await asyncio.open_unix_connection(str(socket))
+        frame = {"type": wire.TURN, "event": "batch", "session_id": "sess-1"}
+        writer.write(wire.encode(frame))
+        await writer.drain()
+        line = await asyncio.wait_for(reader.readline(), timeout=2)
+        assert wire.decode(line) == {
+            "type": "turn_reply",
+            "context": "the words",
+            "system_message": "the line",
+        }
+        assert await reader.read() == b""
+        writer.close()
+    finally:
+        await server.stop()
+    assert sink.turns == [TurnHook("sess-1", "batch")]
+
+
+def test_a_turn_hooks_deadline_is_kept_only_when_it_is_soon() -> None:
+    """A51: the daemon does not begin what it could not answer before the hook gives up."""
+    frame = {"type": wire.TURN, "event": "batch", "session_id": "s1"}
+    soon = time.time() + 0.8
+    hook = attach_module._turn_hook({**frame, "deadline": soon})
+    assert hook is not None and hook.deadline == soon
+    for odd in (time.time() + 3600, time.time() - 1, "soon", None):
+        hook = attach_module._turn_hook({**frame, "deadline": odd})
+        assert hook is not None and hook.deadline == 0.0
+
+
+async def test_a_terminal_says_whether_its_cli_has_the_batch_hook(short_dir: Path) -> None:
+    """A51: the proxy picked the settings file, and only it knows which."""
+    socket = short_dir / "channel.sock"
+    server = AttachServer(socket, RecordingSink())
+    await server.start()
+    try:
+        writers = []
+        for pid, tool_batch in ((1234, True), (5678, False)):
+            _, writer = await asyncio.open_unix_connection(str(socket))
+            writer.write(wire.encode(wire.pty_register(pid, tool_batch)))
+            await writer.drain()
+            writers.append(writer)
+        for _ in range(100):
+            if server.ptys.pids() == [1234, 5678]:
+                break
+            await asyncio.sleep(0.02)
+        first, second = server.ptys.get(1234), server.ptys.get(5678)
+        assert first is not None and first.tool_batch is True
+        assert second is not None and second.tool_batch is False
+        for writer in writers:
+            writer.close()
+    finally:
+        await server.stop()
+
+
+async def test_a_prompt_hook_names_whose_prompt_and_nothing_else(short_dir: Path) -> None:
+    socket = short_dir / "channel.sock"
+    sink = RecordingSink()
+    server = AttachServer(socket, sink)
+    await server.start()
+    ours = {"prompt_kind": "ours", "message_id": "m-9"}
+    frames: list[dict[str, Any]] = [
+        {"type": wire.TURN, "event": "prompt", "session_id": "s1", **ours},
+        {"type": wire.TURN, "event": "prompt", "session_id": "s1", "prompt_kind": "elsewhere"},
+        {"type": wire.TURN, "event": "later", "session_id": "s1"},
+        {"type": wire.TURN, "event": "stop", "session_id": "not one"},
+    ]
+    try:
+        for frame in frames:
+            reader, writer = await asyncio.open_unix_connection(str(socket))
+            writer.write(wire.encode(frame))
+            await writer.drain()
+            await reader.read()
+            writer.close()
+    finally:
+        await server.stop()
+    assert sink.turns == [
+        TurnHook("s1", "prompt", "ours", "m-9"),
+        TurnHook("s1", "prompt", "", ""),
+    ]
+
+
+async def test_the_bridge_confirms_each_injection_once_it_is_written(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A51: a held injection is confirmed when it is finally written, never before."""
+    link = RecordingLink()
+    bridge = ChannelBridge(link, "sess-1", "/repo")  # type: ignore[arg-type]
+    await bridge.on_daemon(wire.inject("m1", "early"))
+    assert link.sent == []
+    bridge.on_rpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+    await bridge.listen()
+    await bridge.on_daemon(wire.inject("m2", "later"))
+    assert link.sent == [wire.injected("m1"), wire.injected("m2")]
+    written = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [frame["params"]["meta"]["message_id"] for frame in written] == ["m1", "m2"]
+    assert link.registration is None or link.registration.get("acks") is True
+
+
+async def test_a_stop_hook_can_wait_until_the_bridge_has_written(short_dir: Path) -> None:
+    sink = RecordingSink()
+    server = AttachServer(short_dir / "channel.sock", sink)
+    await server.start()
+    link: DaemonLink
+
+    async def on_message(message: dict[str, Any]) -> None:
+        if message.get("type") == wire.INJECT:
+            link.send(wire.injected(str(message["message_id"])))
+
+    link = DaemonLink(short_dir / "channel.sock", on_message)
+    link.register(wire.register("sess-9", "/repo", 4242, "2.1.303"))
+    link.start()
+    try:
+        await asyncio.wait_for(_until(lambda: bool(sink.registered)), timeout=2)
+        attachment = sink.registered[0]
+        assert attachment.acks is True
+        assert await attachment.inject("m1", "hello")
+        assert await attachment.landed(["m1"], 2.0) is True
+        # A confirmation that came before anyone asked still counts.
+        assert await attachment.inject("m2", "again")
+        await asyncio.sleep(0.2)
+        assert await attachment.landed(["m2"], 0.01) is True
+        assert await attachment.landed(["never-sent"], 0.05) is False
+    finally:
+        await link.stop()
+        await server.stop()
+
+
+async def test_a_bridge_from_before_confirms_nothing_and_is_not_waited_on() -> None:
+    attachment = Attachment(session_id="s", cwd="/", pid=1, claude_version=None)
+    started = asyncio.get_running_loop().time()
+    assert await attachment.landed(["m1"], 5.0) is False
+    assert asyncio.get_running_loop().time() - started < 0.5
 
 
 async def test_a_connection_that_never_registers_is_dropped(short_dir: Path) -> None:

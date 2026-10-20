@@ -8,6 +8,13 @@ leaves when it stops, which arrives as `<task-notification>`. A mirror that
 trusts the role shows both as terminal input, so a phone reads a wall of a
 teammate's JSON as its owner's own words.
 
+A message sent through the CLI's own peer messaging comes a third way
+(amendment A51): a row the CLI hides (`isMeta`) under `origin.kind: "peer"`, its
+words in an `<agent-message from="…">` envelope when a subagent or teammate of
+the same session sent it, and in a `<cross-session-message from="…"
+from-name="…">` one when another Claude session did. It is a teammate's message
+all the same, and reads the same way.
+
 This module is the whole decision, and it is pure: it reads a row and the text
 of its message and says what to publish. `<system-reminder>` blocks are the
 CLI's own instructions to the model and are never anybody's words, so they come
@@ -24,6 +31,9 @@ from typing import Any
 
 _REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
 _TEAMMATE = re.compile(r"<teammate-message\b[^>]*>(.*?)</teammate-message>", re.DOTALL)
+_PEER = re.compile(r"<(agent-message|cross-session-message)\b([^>]*)>(.*?)</\1>", re.DOTALL)
+# Who sent a peer message, by the name the envelope gives first.
+_SENDERS = (re.compile(r'\bfrom-name="([^"]*)"'), re.compile(r'\bfrom="([^"]*)"'))
 _TASK = re.compile(r"<task-notification\b[^>]*>(.*?)</task-notification>", re.DOTALL)
 
 # What a teammate's JSON report calls the thing it wants to say, best first.
@@ -50,6 +60,24 @@ def strip_reminders(text: str) -> str:
     return _REMINDER.sub("", text).strip()
 
 
+def envelope(text: str) -> str | None:
+    """What another agent's envelope says, or `None` when the text is in none.
+
+    A notification with nothing to report reduces to an empty string, which is
+    still an envelope: somebody's turn, with no block to show for it.
+    """
+    return _reduced(strip_reminders(text))
+
+
+def _reduced(said: str) -> str | None:
+    """A teammate's, a peer session's or a task's envelope reduced to what it says."""
+    for reduce in (_teammate, _peer, _task):
+        reduced = reduce(said)
+        if reduced is not None:
+            return reduced
+    return None
+
+
 def classify(row: Mapping[str, Any], text: str) -> Injected | None:
     """Reduce one user row to what a reader wants, or to nothing at all.
 
@@ -57,9 +85,7 @@ def classify(row: Mapping[str, Any], text: str) -> Injected | None:
     `<system-reminder>`, or a notification with nothing to report.
     """
     said = strip_reminders(text)
-    reduced = _teammate(said)
-    if reduced is None:
-        reduced = _task(said)
+    reduced = _reduced(said)
     by_agent = reduced is not None or from_agent(row)
     body = said if reduced is None else reduced
     return Injected(text=body, by_agent=by_agent) if body else None
@@ -96,6 +122,17 @@ def _teammate(text: str) -> str | None:
         if said:
             return f"{who}: {said}" if who else said
     return f"{who}: {body}" if who else body
+
+
+def _peer(text: str) -> str | None:
+    """`"<from>: <words>"` out of a peer session's envelope (A51), or `None`."""
+    match = _PEER.search(text)
+    if match is None:
+        return None
+    found = (sender.search(match.group(2)) for sender in _SENDERS)
+    who = next((name.group(1).strip() for name in found if name and name.group(1).strip()), "")
+    body = match.group(3).strip()
+    return f"{who}: {body}" if who and body else body
 
 
 def _report(body: str) -> Mapping[str, Any] | None:

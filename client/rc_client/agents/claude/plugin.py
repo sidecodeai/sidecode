@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ...channel import shim
+from ...channel.versions import runs_tool_batch_hooks
 from ...models import AgentInfo, Choice, Command, Session
 from ..base import SessionRunner
 from ..registry import DetectContext, RunnerSpec
@@ -65,7 +66,9 @@ async def detect(context: DetectContext) -> AgentInfo:
     # on the shim being installed and first on PATH. Stopping a turn is the
     # same keystroke route — Escape — so it rides on the same condition (A42).
     # Attachments need only the channel the shim loads: the words it carries
-    # end with the paths of the files the device wrote (A49).
+    # end with the paths of the files the device wrote (A49). Steering rides on
+    # the turn hooks in the settings file the shim passes, and on a Claude Code
+    # recent enough to run the one for a batch of tool calls (A51).
     attachable = shim.status().ready
     return AgentInfo(
         agent=AGENT,
@@ -85,6 +88,7 @@ async def detect(context: DetectContext) -> AgentInfo:
         shared_settings=attachable,
         shared_settings_keys=list(SHARED_SETTINGS_KEYS) if attachable else None,
         shared_attachments=attachable,
+        shared_steer=attachable and runs_tool_batch_hooks(version),
         accounts=accounts,
     )
 

@@ -257,6 +257,249 @@ def test_an_agent_message_arriving_in_content_blocks_is_read_the_same_way() -> N
     assert emits[0].fields["text"] == TEAMMATE_SAID
 
 
+# ------------------------------------- A51: rows the CLI hides that start a turn
+
+PEER_TEXT = (
+    "Another Claude session sent a message:\n"
+    '<agent-message from="kotlin-update">\n'
+    "Emulator run finished: both flows pass.\n"
+    "</agent-message>\n"
+    "Reply with the SendMessage tool if a reply is needed."
+)
+
+
+def peer_row() -> dict[str, Any]:
+    """Claude Code's shape for a message a teammate of the session sends: hidden, `peer`."""
+    return {
+        "type": "user",
+        "uuid": "row-peer",
+        "isMeta": True,
+        "promptSource": "system",
+        "origin": {
+            "kind": "peer",
+            "from": "kotlin-update",
+            "name": "kotlin-update",
+            "senderTaskId": "akotlin-update-1",
+            "body": "Emulator run finished: both flows pass.",
+        },
+        "message": {"role": "user", "content": PEER_TEXT},
+    }
+
+
+def test_a_hidden_peer_message_starts_a_turn_and_reads_as_an_agent_message() -> None:
+    """A device that missed this turn injected into it, and the CLI absorbed the message."""
+    reader = tailer()
+    emits = reader.translate(peer_row())
+    assert reader.awaiting_reply is True
+    assert reader.turn_trigger == "agent"
+    assert [emit.kind for emit in emits] == ["user_message"]
+    assert emits[0].fields == {
+        "block_id": "row-peer",
+        "text": "kotlin-update: Emulator run finished: both flows pass.",
+        "source": "agent",
+    }
+
+
+def test_another_sessions_cross_session_envelope_reads_the_same_way() -> None:
+    """Another session's envelope names the sender in `from-name`; `from` is a socket."""
+    reader = tailer()
+    row = {
+        **peer_row(),
+        "origin": {"kind": "peer", "from": "uds:/tmp/cc-socks/41.sock", "name": "work2-10"},
+        "message": {
+            "role": "user",
+            "content": (
+                "Another Claude session sent a message:\n"
+                '<cross-session-message from="uds:/tmp/cc-socks/41.sock" from-name="work2-10" '
+                'from-mode="bypass">\n'
+                "Emulator run finished: both flows pass.\n"
+                "</cross-session-message>\n\n"
+                "This came from another Claude session — not typed by your user."
+            ),
+        },
+    }
+    emits = reader.translate(row)
+    assert reader.turn_trigger == "agent"
+    assert emits[0].fields["text"] == "work2-10: Emulator run finished: both flows pass."
+    assert emits[0].fields["source"] == "agent"
+
+
+def test_a_continuation_the_cli_starts_itself_is_a_turn_without_a_block() -> None:
+    reader = tailer()
+    row = {
+        "type": "user",
+        "uuid": "row-continue",
+        "isMeta": True,
+        "promptSource": "system",
+        "origin": {"kind": "auto-continuation"},
+        "message": {"role": "user", "content": "Your usage limit has reset. Continue the task."},
+    }
+    assert reader.translate(row) == []
+    assert (reader.awaiting_reply, reader.turn_trigger) == (True, "agent")
+
+
+def fold(prompt: Any, **extra: Any) -> dict[str, Any]:
+    """A message Claude Code folded into the running turn at a tool boundary."""
+    attachment = {"type": "queued_command", "prompt": prompt, "commandMode": "prompt", **extra}
+    return {"type": "attachment", "uuid": "row-fold", "attachment": attachment}
+
+
+def test_a_prompt_the_person_queued_mid_turn_is_published_where_it_was_folded_in() -> None:
+    reader = tailer()
+    emits = reader.translate(fold(PROMPT_TEXT, origin={"kind": "human"}))
+    assert [emit.kind for emit in emits] == ["user_message"]
+    assert emits[0].fields == {"block_id": "row-fold", "text": PROMPT_SAID, "source": "terminal"}
+    assert reader.awaiting_reply is False, "it joins a turn and starts none"
+
+
+def test_folded_words_of_another_agent_read_as_they_do_when_they_start_a_turn() -> None:
+    peer = fold(PEER_TEXT, isMeta=True, origin={"kind": "peer", "from": "kotlin-update"})
+    notice = fold(TASK_TEXT, commandMode="task-notification", origin={"kind": "task-notification"})
+    for row, said in (
+        (peer, "kotlin-update: Emulator run finished: both flows pass."),
+        (notice, TASK_SAID),
+    ):
+        [emit] = tailer().translate(row)
+        assert (emit.fields["text"], emit.fields["source"]) == (said, "agent")
+
+
+def test_folded_rows_that_would_show_nothing_as_a_turn_show_nothing() -> None:
+    for row in (
+        fold("Your usage limit has reset.", isMeta=True, origin={"kind": "auto-continuation"}),
+        fold(REMINDER_ONLY, origin={"kind": "human"}),
+        fold("ls -la", commandMode="bash", origin={"kind": "human"}),
+        fold('{"event": "ci.finished"}', commandMode="poll-event"),
+    ):
+        assert tailer().translate(row) == []
+
+
+def test_our_own_folded_injection_is_an_absorption_and_never_a_bubble() -> None:
+    row = fold(CHANNEL_TEXT, isMeta=True, origin={"kind": "channel", "server": "rc"})
+    emits = tailer().translate(row)
+    assert [(emit.kind, emit.fields) for emit in emits] == [
+        (transcripts.CHANNEL_ABSORBED, {"message_id": "m1"})
+    ]
+
+
+def command_row(name: str) -> dict[str, Any]:
+    """The row a slash command typed at the terminal leaves."""
+    return {
+        "type": "user",
+        "uuid": f"row-{name}",
+        "origin": {"kind": "human"},
+        "message": {
+            "role": "user",
+            "content": (
+                f"<command-message>{name}</command-message>\n<command-name>/{name}</command-name>"
+            ),
+        },
+    }
+
+
+def test_what_a_command_expands_to_starts_its_turn() -> None:
+    """A skill or a command of the person's is a turn, hidden behind its own row (A51)."""
+    reader = tailer()
+    assert reader.translate(command_row("e2e-skill")) == []
+    assert reader.awaiting_reply is False
+    expansion = {
+        "type": "user",
+        "uuid": "row-expansion",
+        "isMeta": True,
+        "message": {
+            "role": "user",
+            "content": [{"type": "text", "text": "Base directory: x\n\nwork"}],
+        },
+    }
+    assert reader.translate(expansion) == []
+    assert (reader.awaiting_reply, reader.turn_trigger) == (True, "terminal")
+
+
+def test_a_command_that_only_answers_starts_nothing() -> None:
+    reader = tailer()
+    reader.translate(command_row("model"))
+    output = {
+        "type": "user",
+        "uuid": "row-out",
+        "message": {
+            "role": "user",
+            "content": "<local-command-stdout>Set model to haiku</local-command-stdout>",
+        },
+    }
+    reader.translate(output)
+    later = {"type": "user", "isMeta": True, "message": {"content": "[Image: original 10x10]"}}
+    assert reader.translate(later) == []
+    assert reader.awaiting_reply is False
+
+
+def test_somebodys_stop_hook_sends_the_ending_turn_on() -> None:
+    reader = tailer()
+    reader.translate({"type": "user", "uuid": "p", "message": {"role": "user", "content": "go"}})
+    reader.translate(
+        {
+            "type": "assistant",
+            "message": {
+                "id": "m1",
+                "content": [{"type": "text", "text": "done"}],
+                "stop_reason": "end_turn",
+            },
+        }
+    )
+    assert reader.awaiting_reply is False
+    feedback = {
+        "type": "user",
+        "isMeta": True,
+        "message": {"role": "user", "content": "Stop hook feedback:\nrun the tests too"},
+    }
+    assert reader.translate(feedback) == []
+    assert (reader.awaiting_reply, reader.turn_trigger) == (True, "terminal")
+
+
+def test_every_channel_message_a_row_holds_is_confirmed() -> None:
+    reader = tailer()
+    text = "\n".join(
+        f'<channel source="rc" origin="app" message_id="{name}">\n{name}\n</channel>'
+        for name in ("m1", "m2")
+    )
+    row = {
+        "type": "user",
+        "isMeta": True,
+        "origin": {"kind": "channel", "server": "rc"},
+        "message": {"role": "user", "content": text},
+    }
+    emits = reader.translate(row)
+    assert [(emit.kind, emit.fields) for emit in emits] == [
+        (transcripts.CHANNEL_DELIVERED, {"message_id": "m1"}),
+        (transcripts.CHANNEL_DELIVERED, {"message_id": "m2"}),
+    ]
+
+
+def test_a_tool_call_proves_a_turn_the_rows_never_showed_starting() -> None:
+    reader = tailer()
+    row = {
+        "type": "assistant",
+        "message": {
+            "id": "m1",
+            "content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}}
+            ],
+            "stop_reason": "tool_use",
+        },
+    }
+    reader.translate(row)
+    assert reader.awaiting_reply is True
+
+
+def test_hidden_rows_that_belong_to_a_prompt_start_nothing() -> None:
+    reader = tailer()
+    for row in (
+        {"type": "user", "isMeta": True, "message": {"content": "[Image: original 2560x1600]"}},
+        {"type": "user", "isMeta": True, "message": {"content": "<local-command-caveat>x"}},
+        {"type": "user", "isMeta": True, "message": {"content": REMINDER_ONLY}},
+    ):
+        assert reader.translate(row) == []
+    assert reader.awaiting_reply is False
+
+
 # ------------------------------------------------------------------ the SDK
 
 

@@ -14,13 +14,14 @@ from pathlib import Path
 from typing import Any
 
 from ...attachments import split_prompt
+from ...channel.versions import version_numbers
 from ...diffs import from_tool_input
 from ...models import now_ms
 from ...sessions.limits import LimitStop, claude_row_limit
 from ...tailing import FileTail
 from ..base import COMPACTION_NOTICE, Emit
 from . import markers
-from .injected import classify, strip_reminders
+from .injected import classify, envelope, from_agent, strip_reminders
 from .questions import QUESTION_TOOL
 from .runtime import PROJECTS_DIR
 from .tools import todos_from_input, tool_kind, tool_title
@@ -40,6 +41,35 @@ CHANNEL_SERVER = "rc"
 _MESSAGE_ID_RE = re.compile(r'message_id="([^"]{1,64})"')
 CHANNEL_DELIVERED = "channel_delivered"
 CHANNEL_ABSORBED = "channel_absorbed"
+
+# Amendment A51: the CLI logs its own command queue in the transcript, so an
+# injection it has queued but not started is seen there; and a message a turn
+# hook handed the model at a tool boundary comes back as that hook's additional
+# context, still tagged with its id. What the CLI folds into a running turn at
+# a tool boundary — the person's prompt queued in the terminal, another agent's
+# message, a task's notification — comes as a `queued_command` attachment; of
+# its modes, only these two are words.
+CHANNEL_QUEUED = "channel_queued"
+CHANNEL_DROPPED = "channel_dropped"
+CHANNEL_PULLED = "channel_pulled"
+QUEUE_MOVED = "queue_moved"
+STEER_DELIVERED = "steer_delivered"
+QUEUE_OPERATION_ROW = "queue-operation"
+HOOK_CONTEXT = "hook_additional_context"
+QUEUED_COMMAND = "queued_command"
+_FOLDED_WORDS = frozenset({"prompt", "task-notification"})
+# How the CLI's queue lets a message go without running it: removed, which
+# absorbing it is one kind of, or pulled back into the input box to be edited.
+_PULLED_OPERATIONS = frozenset({"popAll", "popOne"})
+ABSORBED_MID_TURN = "absorbed_mid_turn"
+# What the CLI writes when somebody's `Stop` hook sends a finished turn on, and
+# the tag every row of a typed slash command carries, whatever comes first.
+STOP_FEEDBACK = "Stop hook feedback:"
+_COMMAND_ROW = re.compile(r"<command-name>[^<]+</command-name>")
+# The first Claude Code seen to put what it folds in ahead of a hook's context
+# at one boundary; 2.1.291 puts it after, which is the order its rows come in.
+FOLDS_FIRST_VERSION = (2, 1, 294)
+_CHANNEL_TAG_ID = re.compile(r'<channel source="rc"[^>]{0,200}?message_id="([^"]{1,64})"')
 
 # Amendment A40: what the CLI printed back after a typed command. It is never
 # published — it carries terminal escapes no app can show — but it is the only
@@ -311,6 +341,29 @@ def _text_of(content: Any) -> str:
     return ""
 
 
+def _at_boundary(row: dict[str, Any]) -> bool:
+    """A row a tool boundary writes around what it hands the model (A51).
+
+    Its hooks' rows, what it folded into the turn, and the queue moving; the
+    next row of any other kind is the model's next step.
+    """
+    if row.get("type") == QUEUE_OPERATION_ROW:
+        return True
+    attachment = row.get("attachment") if row.get("type") == "attachment" else None
+    kind = attachment.get("type") if isinstance(attachment, dict) else None
+    return isinstance(kind, str) and (kind == QUEUED_COMMAND or kind.startswith("hook_"))
+
+
+def _folds_first(row: dict[str, Any]) -> bool:
+    """Whether the model reads what a boundary folded in before the hook's context (A51).
+
+    Each row names the CLI that wrote it; one that does not is taken to be
+    recent.
+    """
+    numbers = version_numbers(str(row.get("version") or ""))
+    return numbers is None or numbers >= FOLDS_FIRST_VERSION
+
+
 def _is_meta(row: dict[str, Any], text: str) -> bool:
     if row.get("isMeta"):
         return True
@@ -343,6 +396,13 @@ class TranscriptTailer:
     # A35). Set beside `stop_reason = "error"`, and cleared by the next turn.
     limit: LimitStop | None = None
     tail: FileTail = field(init=False)
+    # Steered messages a tool boundary's hook handed the model (A51), confirmed
+    # once that boundary's rows are read, after what it folded into the turn
+    # when the model reads that first.
+    steered: list[str] = field(default_factory=list, init=False)
+    # A slash command was just typed: the hidden row that follows it, if any,
+    # is what the command expands to, and the turn it starts (A51).
+    expanding: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         self.tail = FileTail(path=self.path)
@@ -369,6 +429,9 @@ class TranscriptTailer:
     def translate(self, row: dict[str, Any]) -> list[Emit]:
         settings = read_settings(row)
         emits: list[Emit] = [Emit(SESSION_SETTINGS, dict(settings))] if settings else []
+        if self.steered and not _at_boundary(row):
+            emits.append(Emit(STEER_DELIVERED, {"message_ids": self.steered}))
+            self.steered = []
         return emits + self._content(row)
 
     def _content(self, row: dict[str, Any]) -> list[Emit]:
@@ -386,7 +449,33 @@ class TranscriptTailer:
             return self._attachment(row)
         if row_type == "system":
             return self._system(row)
+        if row_type == QUEUE_OPERATION_ROW:
+            return self._queue_operation(row)
         return []
+
+    @staticmethod
+    def _queue_operation(row: dict[str, Any]) -> list[Emit]:
+        """An injection the CLI has queued and not yet started, or let go (A51).
+
+        Its queue does not move while a dialog or a panel is open, so the
+        message may wait there; the row of its own turn, of its being absorbed,
+        or of its leaving the queue without running says what became of it.
+        One row may name several messages — `popAll` takes the whole queue
+        back at once — and it speaks for each of them, wherever it names them.
+        """
+        moved = [Emit(QUEUE_MOVED, {})]
+        operation = row.get("operation")
+        if operation == "enqueue":
+            kind = CHANNEL_QUEUED
+        elif operation == "remove" and row.get("reason") != ABSORBED_MID_TURN:
+            kind = CHANNEL_DROPPED
+        elif operation in _PULLED_OPERATIONS:
+            kind = CHANNEL_PULLED
+        else:
+            return moved
+        content = str(row.get("content") or "")
+        named = [found.group(1) for found in _CHANNEL_TAG_ID.finditer(content)]
+        return [*(Emit(kind, {"message_id": message_id}) for message_id in named), *moved]
 
     def _system(self, row: dict[str, Any]) -> list[Emit]:
         """The one system row worth publishing: where the context was compacted.
@@ -399,27 +488,60 @@ class TranscriptTailer:
         return [Emit("notice", {"level": "info", "text": COMPACTION_NOTICE})]
 
     def _channel_echo(self, row: dict[str, Any]) -> list[Emit]:
-        """An injected message reappearing as a user row: a turn just started."""
+        """Injected messages reappearing as a user row: a turn just started.
+
+        The CLI may file several of them in one row, each in its own tag, and
+        every one is confirmed.
+        """
         if not _channel_origin(row):
             return []
         message = row.get("message") or {}
-        message_id = channel_message_id(_text_of(message.get("content")))
-        if message_id is None:
+        text = _text_of(message.get("content"))
+        if channel_message_id(text) is None:
             return []
         self._begin_turn("remote")
-        return [Emit(CHANNEL_DELIVERED, {"message_id": message_id})]
+        ids = [found.group(1) for found in _CHANNEL_TAG_ID.finditer(text)]
+        return [Emit(CHANNEL_DELIVERED, {"message_id": message_id}) for message_id in ids]
 
     def _attachment(self, row: dict[str, Any]) -> list[Emit]:
-        """A `queued_command` attachment means the CLI absorbed our injection."""
+        """What a tool boundary hands the model: a hook's context, or what it folded in."""
         attachment = row.get("attachment")
-        if not isinstance(attachment, dict) or attachment.get("type") != "queued_command":
+        if not isinstance(attachment, dict):
             return []
-        if not _channel_origin(attachment):
+        if attachment.get("type") == HOOK_CONTEXT:
+            handed = _handed_over(attachment)
+            if _folds_first(row):
+                self.steered.extend(handed)
+                return []
+            return [Emit(STEER_DELIVERED, {"message_ids": handed})] if handed else []
+        if attachment.get("type") != QUEUED_COMMAND:
             return []
-        message_id = channel_message_id(str(attachment.get("prompt") or ""))
-        if message_id is None:
+        return self._folded(row, attachment)
+
+    def _folded(self, row: dict[str, Any], attachment: dict[str, Any]) -> list[Emit]:
+        """A message the CLI folded into the running turn at a tool boundary (A51).
+
+        Our own injection folded this way was absorbed, and is no bubble. Any
+        other is published as A30 publishes the same words when they start a
+        turn — the person's as `terminal`, another agent's envelope as
+        `agent`, nothing for what such a row would not show — but it starts
+        nothing: the turn it joined is already running.
+        """
+        prompt = attachment.get("prompt")
+        if _channel_origin(attachment):
+            message_id = channel_message_id(str(prompt or ""))
+            return [Emit(CHANNEL_ABSORBED, {"message_id": message_id})] if message_id else []
+        if attachment.get("commandMode", "prompt") not in _FOLDED_WORDS:
             return []
-        return [Emit(CHANNEL_ABSORBED, {"message_id": message_id})]
+        text = _text_of(prompt)
+        if _is_meta(attachment, text):
+            hidden = attachment.get("isMeta") and from_agent(attachment)
+            reported = envelope(text) if hidden else None
+            return self._publish(row, reported, "agent") if reported else []
+        message = classify(attachment, text)
+        if message is None:
+            return []
+        return self._publish(row, message.text, "agent" if message.by_agent else "terminal")
 
     def _user(self, row: dict[str, Any]) -> list[Emit]:
         message = row.get("message") or {}
@@ -447,8 +569,11 @@ class TranscriptTailer:
         to a command. A row left empty once the CLI's own reminders come off is
         not a message either.
         """
+        expanding, self.expanding = self.expanding, False
+        if not row.get("isMeta") and _COMMAND_ROW.search(text):
+            self.expanding = True
         if _is_meta(row, text):
-            return []
+            return self._hidden_turn(row, text, expanding)
         said = strip_reminders(text)
         if not said:
             return []
@@ -473,6 +598,34 @@ class TranscriptTailer:
         if command is not None:
             return self._command(row, command)
         return self._words(row, said)
+
+    def _hidden_turn(self, row: dict[str, Any], text: str, expanding: bool) -> list[Emit]:
+        """A row the CLI hides that starts a turn all the same, or sends one on (A51).
+
+        Claude Code files a teammate's report as `isMeta` under `origin.kind:
+        "peer"`, and goes on by itself under `auto-continuation`; the model's
+        turn starts there as it does for any prompt, and a device that missed
+        it injected into the running turn. A teammate's or a task's envelope is
+        published as A30 says; anything else starts the turn without a block.
+        So does what a slash command expands to — a skill, a command of the
+        person's — right after the command's row, and the feedback of
+        somebody's `Stop` hook sends the turn that was ending on.
+        """
+        if not row.get("isMeta"):
+            return []
+        said = strip_reminders(text)
+        if expanding and said and not said.startswith(_SKIP_PREFIXES):
+            if not markers.is_compaction_summary(row):
+                self._begin_turn("terminal")
+            return []
+        if said.startswith(STOP_FEEDBACK):
+            self._begin_turn(self.turn_trigger)
+            return []
+        if not from_agent(row):
+            return []
+        reported = envelope(text)
+        self._begin_turn("agent")
+        return self._publish(row, reported, "agent") if reported else []
 
     def _command(self, row: dict[str, Any], command: str) -> list[Emit]:
         """A slash command typed at the terminal: the person's, but not a turn.
@@ -526,6 +679,7 @@ class TranscriptTailer:
         all — ends it. Reading the blocks instead once drained a phone's held
         messages into a turn that was still running.
         """
+        self.expanding = False
         limited = self._limit_row(row)
         if limited is not None:
             return limited
@@ -556,6 +710,9 @@ class TranscriptTailer:
                 emits.extend(self._tool_use(block))
         if not has_tool and message.get("stop_reason") != "tool_use":
             self.awaiting_reply = False
+        elif not self.awaiting_reply:
+            # A turn the rows never showed starting is under way all the same.
+            self._begin_turn(self.turn_trigger)
         return emits
 
     def _limit_row(self, row: dict[str, Any]) -> list[Emit] | None:
@@ -635,6 +792,18 @@ class TranscriptTailer:
         if name == QUESTION_TOOL:
             emits.append(Emit(QUESTION_ANSWERED, {"answers": _question_answers(row)}))
         return emits
+
+
+def _handed_over(attachment: dict[str, Any]) -> list[str]:
+    """The ids of the messages a turn hook handed the model at a tool boundary (A51)."""
+    content = attachment.get("content")
+    texts = content if isinstance(content, list) else [content]
+    return [
+        found.group(1)
+        for text in texts
+        if isinstance(text, str)
+        for found in _CHANNEL_TAG_ID.finditer(text)
+    ]
 
 
 def _first_block_index(row: dict[str, Any]) -> int:

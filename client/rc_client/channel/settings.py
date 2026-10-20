@@ -1,6 +1,6 @@
 """The `--settings` file the shim hands to Claude Code.
 
-It carries two hooks. A `SessionStart` hook tells the daemon which session the
+It carries up to five hooks. A `SessionStart` hook tells the daemon which session the
 terminal is in now: the environment a CLI starts with is the environment its
 MCP servers keep for as long as they live, so the channel bridge reports the
 session id Claude Code picked at startup and nothing else, and `/resume` and
@@ -14,8 +14,16 @@ it shows in the terminal and takes whichever answers first, so the hook waits
 as long as the dialog does — a day, which is far longer than anyone leaves a
 question open and short enough that nothing waits for ever.
 
-Written by both `rc-client shim install` and the daemon at startup, like the MCP
-config beside it, so the file matches whichever of the two ran most recently.
+`UserPromptSubmit`, `PostToolBatch` and `Stop` run `turnhook.py`, which tells
+the daemon where each turn stands the moment the CLI knows it, hands the model
+a message a phone steered into the turn at the next batch of tool calls, and
+holds a turn's end while the messages waiting for it go into the channel
+(amendment A51). A Claude Code too old for `PostToolBatch` must not be handed
+it, so a second file carries every hook but that one, and the terminal proxy
+passes whichever the CLI it starts can load (`versions.py`).
+
+Both are written by `rc-client shim install` and by the daemon at startup, like
+the MCP config beside them, so they match whichever of the two ran last.
 """
 
 from __future__ import annotations
@@ -34,6 +42,17 @@ START_TIMEOUT = 5
 # The question hook holds a person's question open, which is a different kind of
 # wait entirely: it lives until the question is answered somewhere.
 QUESTION_TIMEOUT = 24 * 60 * 60
+# A51: the turn hooks keep to their own budgets (`turnhook.py`): a second, and
+# two for `Stop` while it waits on held messages being written. These are
+# Claude Code's backstop, a second beyond each.
+TURN_TIMEOUT = 2
+STOP_TIMEOUT = 3
+TOOL_BATCH_EVENT = "PostToolBatch"
+TURN_EVENTS = (
+    ("UserPromptSubmit", TURN_TIMEOUT),
+    (TOOL_BATCH_EVENT, TURN_TIMEOUT),
+    ("Stop", STOP_TIMEOUT),
+)
 
 
 def hook_line(command: list[str] | None = None) -> str:
@@ -47,10 +66,28 @@ def _entry(command: list[str] | None, timeout: int) -> dict[str, Any]:
     return {"hooks": [{"type": "command", "command": hook_line(command), "timeout": timeout}]}
 
 
+def _turn_entry(command: list[str], timeout: int) -> dict[str, Any]:
+    """A turn hook names its socket itself, so it needs no device home in front of it."""
+    return {"hooks": [{"type": "command", "command": shlex.join(command), "timeout": timeout}]}
+
+
 def settings(
-    command: list[str] | None = None, question_command: list[str] | None = None
+    command: list[str] | None = None,
+    question_command: list[str] | None = None,
+    turn_command: list[str] | None = None,
+    *,
+    tool_batch: bool = True,
 ) -> dict[str, Any]:
-    """The two hooks: one for every session start, one for `AskUserQuestion`."""
+    """Every session start, `AskUserQuestion`, and where each turn stands (A51).
+
+    `tool_batch` is whether the CLI runs `PostToolBatch` hooks at all.
+    """
+    turn = turn_command or paths.turn_hook_command()
+    events = [
+        (event, timeout)
+        for event, timeout in TURN_EVENTS
+        if tool_batch or event != TOOL_BATCH_EVENT
+    ]
     return {
         "hooks": {
             "SessionStart": [_entry(command, START_TIMEOUT)],
@@ -60,14 +97,22 @@ def settings(
                     **_entry(question_command or paths.question_hook_command(), QUESTION_TIMEOUT),
                 }
             ],
+            **{event: [_turn_entry(turn, timeout)] for event, timeout in events},
         }
     }
 
 
 def write_settings(
-    command: list[str] | None = None, question_command: list[str] | None = None
+    command: list[str] | None = None,
+    question_command: list[str] | None = None,
+    turn_command: list[str] | None = None,
 ) -> Path:
-    target = paths.settings_path()
-    payload = json.dumps(settings(command, question_command), indent=2) + "\n"
-    write_atomic(target, payload.encode("utf-8"), mode=0o600)
-    return target
+    """Both settings files, with and without `PostToolBatch`; the first one's path."""
+    for target, tool_batch in (
+        (paths.settings_path(), True),
+        (paths.no_batch_settings_path(), False),
+    ):
+        hooks = settings(command, question_command, turn_command, tool_batch=tool_batch)
+        payload = json.dumps(hooks, indent=2) + "\n"
+        write_atomic(target, payload.encode("utf-8"), mode=0o600)
+    return paths.settings_path()

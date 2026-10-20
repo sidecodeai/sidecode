@@ -204,10 +204,15 @@ class SessionChannel:
     async def notice(self, level: str, text: str) -> None:
         await self.emit("notice", level=level, text=text)
 
-    async def error(self, message: str, code: str | None = None) -> None:
+    async def error(
+        self, message: str, code: str | None = None, block_id: str | None = None
+    ) -> None:
+        """An `error` row; `block_id` names the block it belongs to, which apps replace (5.14)."""
         fields: dict[str, Any] = {"message": message}
         if code:
             fields["code"] = code
+        if block_id:
+            fields["block_id"] = block_id
         await self.emit("error", **fields)
 
     async def resume(

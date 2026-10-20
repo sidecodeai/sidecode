@@ -174,6 +174,9 @@ class AgentInfo:
     # four", which is what every agent but Claude reports (A40).
     shared_settings_keys: list[str] | None = None
     shared_attachments: bool = False
+    # Whether `mode: "auto"` steers a running turn on a `shared` session; sent
+    # only when true, and only Claude's attachment needs it (A51).
+    shared_steer: bool = False
     # How the agent is signed in here; `None` is "the device did not look",
     # which is what an agent that is not installed reports (A33).
     accounts: list[AgentAccount] | None = None
@@ -200,6 +203,8 @@ class AgentInfo:
         }
         if self.shared_settings_keys is not None:
             result["shared_settings_keys"] = list(self.shared_settings_keys)
+        if self.shared_steer:
+            result["shared_steer"] = True
         if self.accounts is not None:
             result["accounts"] = [account.to_dict() for account in self.accounts]
         return result

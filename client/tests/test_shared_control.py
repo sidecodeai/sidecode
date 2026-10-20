@@ -13,6 +13,7 @@ import pytest
 from rc_client import attachments
 from rc_client.agents.claude import transcripts
 from rc_client.errors import RcError
+from rc_client.ids import block_uuid
 from rc_client.models import AgentInfo, Choice
 from rc_client.registry import Registry
 from rc_client.sessions.attach import Attachment, HookQuestion
@@ -259,31 +260,40 @@ async def test_a_message_typed_in_the_terminal_still_becomes_a_bubble() -> None:
     assert emits[0].fields["source"] == "terminal"
 
 
-async def test_an_absorbed_injection_is_marked_and_re_sent_once(harness: Harness) -> None:
+async def test_an_absorbed_injection_goes_in_again_three_times_and_then_fails_visibly(
+    harness: Harness,
+) -> None:
+    """A51: each turn's end sends it again until its own row shows, at most three times.
+
+    Absorbed after the third re-send, it is an `error` the apps show in the
+    bubble's place, under its block id: nothing delivered it.
+    """
     entry = await harness.attach()
     await harness.hub.send({"id": "req-3", "session_id": "sess-1", "text": "do it"})
-    message_id, _ = harness.attachment.injected[0]
+    first = harness.events("user_message")[0]
 
-    await harness.hub.shared.echo_absorbed(entry, message_id)
-    bubbles = harness.events("user_message")
-    assert bubbles[-1]["delivery"] == "absorbed"
-    assert bubbles[-1]["block_id"] == bubbles[0]["block_id"]
-    assert [item["text"] for item in entry.queue] == ["do it"]
+    for attempt in range(1, 4):
+        message_id, _ = harness.attachment.injected[-1]
+        await harness.hub.shared.echo_absorbed(entry, message_id)
+        bubble = harness.events("user_message")[-1]
+        assert (bubble["delivery"], bubble["block_id"]) == ("absorbed", first["block_id"])
+        assert [item["text"] for item in entry.queue] == ["do it"]
+        await tick(harness.hub, entry, running=False)
+        assert [text for _, text in harness.attachment.injected] == ["do it"] * (attempt + 1)
+        assert harness.events("user_message")[-1]["delivery"] == "delivered"
+    assert harness.events("error") == []
 
-    await tick(harness.hub, entry, running=False)
-    assert [text for _, text in harness.attachment.injected] == ["do it", "do it"]
-    assert harness.events("user_message")[-1]["delivery"] == "delivered"
-
-    # Absorbed a second time: the device stops re-sending and says so. The CLI
-    # read the message both times, so the bubble ends as delivered rather than
-    # on a promise of a re-send that will not come (A34).
-    second_id, _ = harness.attachment.injected[1]
-    await harness.hub.shared.echo_absorbed(entry, second_id)
+    last_id, _ = harness.attachment.injected[-1]
+    await harness.hub.shared.echo_absorbed(entry, last_id)
     assert entry.queue == []
-    assert harness.events("notice")[-1]["level"] == "warn"
-    last = harness.events("user_message")[-1]
-    assert last["delivery"] == "delivered"
-    assert last["block_id"] == bubbles[0]["block_id"]
+    [error] = harness.events("error")
+    assert error["message"] == (
+        'The terminal did not take "do it" as a message after 4 tries; send it again.'
+    )
+    assert error["block_id"] == first["block_id"] == block_uuid("req-3")
+    assert harness.events("user_message")[-1]["delivery"] == "absorbed"
+    await tick(harness.hub, entry, running=False)
+    assert len(harness.attachment.injected) == 4
 
 
 async def test_the_absorbed_attachment_row_is_recognised_by_its_message_id() -> None:
@@ -904,8 +914,7 @@ async def test_files_reach_the_terminal_as_paths_and_the_apps_as_names(
 
     # Delivered: the files stay where the words point, the bytes are let go.
     await harness.hub.shared.echo_delivered(entry, message_id)
-    assert entry.shared is not None
-    assert "data_base64" not in json.dumps(entry.shared.sent[message_id]["attachments"])
+    assert "data_base64" not in json.dumps(entry.sent[message_id]["attachments"])
     assert (folder / "shot.png").exists()
 
 

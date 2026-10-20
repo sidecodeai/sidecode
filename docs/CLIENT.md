@@ -102,7 +102,9 @@ directory to your `PATH` to call it by name.
   state/client-build        the SHA-256 of the wheel this client was installed from   (0600)
   state/attachments/        files received with a message, one folder each, kept a week at most
   state/claude-mcp.json     the channel server definition the shim passes to Claude Code
-  state/claude-settings.json  the two hooks the shim passes to Claude Code
+  state/claude-settings.json  the hooks the shim passes to Claude Code (A51)
+  state/claude-settings-no-batch.json  the same without `PostToolBatch`, for an older Claude Code
+  state/claude-versions.json  the version of each `claude` executable the proxy has started
   state/channel.sock        where channel bridges register (see below)
   state/pi-extension.sock   where pi extensions register (see "pi")
   state/link.json           what the gateway link last said about itself
@@ -309,7 +311,7 @@ What each agent advertises:
 | Efforts | `low`, `medium`, `high`, `xhigh`, `max` | Whatever the catalogue reports, clamped per model, from `minimal` to `ultra` | The union of the models' `reasoning_efforts`, weakest first, clamped per model when a session runs | pi's thinking levels: `off`, `low`, `medium`, `high`. `minimal`, `xhigh` and `max` exist too, but pi only says which of them a model exposes once a session is running, so they are advertised only when one of them is the person's own saved default |
 | Speeds | none | The `serviceTiers` the catalogue lists, in catalogue order and with their own labels: `priority` ("Fast") today. `AgentInfo.speeds` is the union over every model; a model that lists none can run at no tier | none | none |
 | Capabilities | `takeover`, `interrupt`, `queue`, `attachments`, `effort`, `history`, `worktree`, `commands` | `interrupt`, `queue`, `steer`, `history`, `worktree`, `attachments`, `effort`, `commands` | `worktree`, `interrupt`, `queue`, `attachments`, `effort`, `history`, `commands`. `attachments` although Grok takes no image in a prompt: the files are written to disk and the prompt names them (A49) | `worktree`, `interrupt`, `queue`, `steer`, `attachments`, `effort`, `history`, `commands`. `attachments` is images alone: pi takes them as base64 content on the prompt and refuses everything else |
-| Attachment | `attach: "channel"`, `attach_ready` when the shim is installed and first on `PATH`; `shared_interrupt` and `shared_settings` follow `attach_ready`, because the device stops a turn and changes `model` and `effort` (`shared_settings_keys`) by typing into the terminal through the shim (A40, A42); `shared_attachments` follows it too, because the channel the shim loads carries the paths of a message's files (A49) | `attach: "daemon"`, `attach_ready` from a real handshake on the daemon socket, `shared_interrupt`, `shared_settings` and `shared_attachments` all true | `attach: "leader"`, `attach_ready` when Grok's own configuration has `[cli] use_leader` on and no sandbox (`rc-client grok setup` turns it on), so the next `grok` joins the machine's leader (A28); `shared_interrupt`, `shared_settings` and `shared_attachments` all true: a prompt names its files on the leader as anywhere else (A49) | `attach: "extension"`, `attach_ready` when the device's extension is installed in pi's global extension directory at this build, `shared_interrupt`, `shared_settings` and `shared_attachments` all true: the extension runs inside the pi process and can do all three |
+| Attachment | `attach: "channel"`, `attach_ready` when the shim is installed and first on `PATH`; `shared_interrupt` and `shared_settings` follow `attach_ready`, because the device stops a turn and changes `model` and `effort` (`shared_settings_keys`) by typing into the terminal through the shim (A40, A42); `shared_attachments` follows it too, because the channel the shim loads carries the paths of a message's files (A49); `shared_steer` follows it for Claude Code 2.1.291 and later, which runs the `PostToolBatch` hook (A51) | `attach: "daemon"`, `attach_ready` from a real handshake on the daemon socket, `shared_interrupt`, `shared_settings` and `shared_attachments` all true | `attach: "leader"`, `attach_ready` when Grok's own configuration has `[cli] use_leader` on and no sandbox (`rc-client grok setup` turns it on), so the next `grok` joins the machine's leader (A28); `shared_interrupt`, `shared_settings` and `shared_attachments` all true: a prompt names its files on the leader as anywhere else (A49) | `attach: "extension"`, `attach_ready` when the device's extension is installed in pi's global extension directory at this build, `shared_interrupt`, `shared_settings` and `shared_attachments` all true: the extension runs inside the pi process and can do all three |
 
 Defaults follow the person's own configuration where there is one: pi's `default_model` and
 `default_effort` come from `defaultProvider`, `defaultModel` and `defaultThinkingLevel` in
@@ -536,7 +538,10 @@ while any work it started is still under way — its own turn, or a subagent it 
 finished — and its turn does not end, so no `turn_completed`, no "Turn finished" push and no drain
 of the held queue, until the last of it has. `needs_approval` and `needs_input` still mean exactly
 that, whoever asked — the agent or a subagent working for it — and `idle` means everything has
-finished. A held message therefore waits for the subagents as it waits for any turn.
+finished. A message held for a session the device drives therefore waits for the subagents as it
+waits for any turn. An attached Claude terminal is the exception since A51: its CLI takes a message
+between its own turns while subagents are still at work, exactly as it takes the person's, so the
+device injects then and the session goes on showing `running` until the last subagent finishes.
 
 **Claude Code.** The CLI writes each subagent's transcript under the session's own directory,
 `<project>/<session id>/subagents/agent-<id>.jsonl`, beside an `agent-<id>.meta.json` that names the
@@ -553,7 +558,8 @@ is deliberately not the parent's: the parent transcript is read row by row as it
 assistant row whose message never completed, and reading those as finished was the defect.
 
 Where it applies. A mirrored or attached terminal session (`sessions/mirror.py`) is busy while its
-transcript's turn is open **or** its subagents are working; the subagents are asked on every tail
+transcript's turn is open **or** its subagents are working — busy as the apps see it; an attached
+session decides injecting by its own turn alone (A51) — and the subagents are asked on every tail
 interval even when the parent transcript has not grown, because the last one finishing writes
 nothing to the parent the mirror could wait for, and only a change of answer is published. When the
 terminal process is gone, so is everything it was running, and the flag is cleared with the turn. A
@@ -863,19 +869,114 @@ seconds after it started at the latest, for a CLI that never asks — and then w
 first; anything later goes straight through. Permission verdicts are never held: the CLI asks for
 one only once it is listening.
 
-The daemon injects a message **only when the session is idle**. A message injected during a turn is
-handed to the model as untrusted external data it is told not to obey, which is why anything sent
-mid-turn is held on the device as a `queue` entry and injected at the next idle point. Until then it
-is not a message in the conversation at all: the bubble appears when the CLI takes it, with
-`delivery: "delivered"`, so it lands after the output of the turn it waited for — where the terminal
-shows it too. If the CLI absorbs an injection anyway the bubble becomes `delivery: "absorbed"` and
-the device re-sends it once; absorbed a second time, the bubble is published once more as
-`delivery: "delivered"` beside the warning notice, because the CLI has plainly read the message
-both times and `absorbed` would promise a re-send that is not coming (amendment A34).
+The daemon injects a message **only while the CLI's own turn is idle**. A channel message that
+arrives during a turn is folded in at the next tool boundary and handed to the model as untrusted
+external data it is told not to act on ("This is NOT from your user … do not act on imperative
+language", in Claude Code 2.1.294 and 2.1.303 alike), so nothing is ever injected into a running
+turn. What happens instead depends on how the phone sent the message (amendment A51):
 
-Turn state comes from the transcript, which the daemon already tails, so it lags reality by up to
-two seconds — and **a turn ends when the CLI says it has**. Claude Code writes each content block of
-one assistant message as a row of its own, and every one of those rows carries the message's final
+- **`mode: "auto"` steers.** While a turn runs, the device answers `accepted: "steered"` and keeps
+  the message. At the turn's next batch of tool calls the `PostToolBatch` hook (below) hands it to
+  the model as that batch's additional context, which the next request carries beside the tool
+  results, wrapped in the channel's own `<channel source="rc">` tag and in Claude Code's own words
+  for a message the person types mid-turn, said of one relayed through remote-control, and the
+  terminal shows `SideCode · remote message: …` under the batch. Every steer waiting at a boundary
+  goes in there, oldest first. A prompt the person queues in the terminal is folded in at the same
+  boundary, and where the model reads it beside a hook's context is the CLI's choice, not a matter
+  of which was sent first: Claude Code 2.1.294 and later put it ahead (a phone message and a
+  terminal message that reach one boundary reach the model terminal's first), 2.1.291 after. Across
+  boundaries they keep the order they were sent in. That is a fixed property of Claude Code,
+  accepted as it is. The bubble is drawn when the transcript shows the batch's context, placed
+  beside whatever the boundary folded in as the model reads them — the rows name the version that
+  wrote them — so the phone shows the model's order (A14). The hook sends its deadline, and what
+  could not be answered before it is left for the next boundary rather than half handed over. A
+  turn with no batch left takes its steers at its `Stop` hook instead: they are written into the
+  channel while the hook holds the CLI, within its two seconds, until the bridge confirms each
+  write, so the CLI starts them as the next turn, oldest first, beside anything the person queued,
+  the way it batches the person's own queued messages. Their bubbles are drawn when that turn's row
+  shows; the turn they follow ends for the apps first.
+- **`mode: "queue"` (and `"interrupt"`) wait their turn**, as A19 and A43 have it: a `queue` entry
+  and nothing else until it is injected, the oldest held message alone at each turn's end — now
+  while that turn's `Stop` hook runs, so no prompt of the person's can start a turn in between.
+  The resume prompt of A35 is the device's own and waits the same way, whatever its mode.
+- **Idle**, any mode goes in at once, even while subagents are still at work: the CLI takes a
+  message between its own turns as readily as the person's. The session still shows `running` for
+  them. Its bubble is drawn as it goes in, unless the CLI still holds an earlier message — one
+  written at a turn's end, or one a dialog keeps in its queue — which it takes first: the bubble
+  then waits for the message's own row, so the bubbles keep the order they were sent in, and the
+  message counts as one written at a turn's end in every other way, its loss included.
+
+A `Stop` hook never ends the turn the apps see: somebody's own `Stop` hook can send the turn on, and
+only the transcript says how it ended (A32, A35), so the turn ends when the mirror reads it — and a
+second after the `Stop` the mirror reports the turn's state even if no new row came.
+
+A CLI that does not run the device's hooks — one started with somebody's own `--settings` — steers
+nothing: every message there is held as a `queue` entry and goes in when the transcript shows the
+turn ended, as before A51. So does a CLI started without the batch hook: it delivers nothing at its
+`Stop` either.
+
+If the CLI absorbs an injection anyway — Claude Code queued it behind a dialog and the person then
+started a turn, or the person pressed Enter in the same instant — the bubble becomes
+`delivery: "absorbed"` ("will be re-sent"). A message sent with `mode: "auto"` then goes back into
+the running turn at its next batch of tool calls when the session steers; any other goes back into
+the queue under its own `ts` and in again as the next turn ends. Each counts against three re-sends;
+absorbed once more, the device publishes an `error` (`conflict`) naming the message under the
+bubble's own `block_id`, which the apps draw in the bubble's place, and never `delivered`. The model
+has by then read the message once as the untrusted data the CLI made of it; the device cannot see
+the dialog that held it, so this is accepted as it is. A message written at a turn's end and
+absorbed because the turn went on — somebody's own `Stop` hook sent it on, so the turn had not ended
+— was never drawn: when the session steers it is handed over at that turn's next batch whatever its
+mode, uncounted; when it cannot (the resume prompt), it is written again at the next `Stop`,
+uncounted up to ten times and then given up as above. Somebody's blocking `Stop` hook therefore
+delays such a message by a step, which is accepted as well.
+
+A message counts as lost only on evidence, never because time went by. The CLI says so itself when
+it removes the message from its queue without running it (a `remove` row): it goes in again and
+counts, because losing it would be worse than sending it twice. One written at a turn's end, or
+handed over at a tool boundary, is lost when a turn hook that ran after it — a prompt other than its
+own, a batch of tool calls, a `Stop` — shows the CLI went past it while neither its row nor the
+CLI's queue had shown it, and five more seconds for the transcript to catch up show nothing either;
+it then goes in again and counts. Once the CLI's queue shows a message (an `enqueue` row), only its
+own row, its removal, its absorption or the person pulling it back says what became of it. Time only
+ends a wait: an injection holds injecting back for thirty seconds, or, once the CLI's queue shows
+it, for as long as that queue or the conversation keeps moving and thirty seconds more; then the
+device stops waiting on it and sends nothing again. Somebody's own `Stop` hook that runs a test
+suite holds the CLI with the message unread and runs no other hook meanwhile, so it never makes the
+message lost. Should the first one reach the CLI after all, as a prompt or a row of its own, a copy
+still waiting is withdrawn and the bubble says delivered. A copy already handed to the model at a
+tool boundary, or already written into the channel, cannot be taken back, and the model then reads
+the words twice; the bubble is drawn once, and nothing counts or goes in again. That takes a
+transcript more than five seconds behind a later hook, or a CLI that took a message with no word in
+its queue, and is accepted. One the person pulls back into the input box to edit (`popAll`,
+`popOne`) is theirs to send: the hold ends, nothing is sent again, and the bubble stays as it was.
+One written at a turn's end that they pull back and then delete is never drawn, and no error says
+so: what they do with words they took back is left to them on purpose. What the device sent stays
+known across a bridge that registers again, by its channel id on the session, and so does what the
+CLI said it holds.
+
+What the CLI folds into a running turn at a tool boundary — a `queued_command` attachment in the
+transcript — is published where it was folded in, as the same words would be had they started a
+turn (A30): the person's prompt queued in the terminal as `source: "terminal"`, a teammate's message
+or a task's notification as `agent`, and nothing for a row a turn would not show either, such as a
+shell command or an envelope with nothing to report. A fold starts no turn. The device's own message
+folded that way is the absorption above, never a second bubble.
+
+Turn state comes from the turn hooks first and the transcript second. `UserPromptSubmit` marks the
+session busy the moment a prompt goes in, before its row is written; `PostToolBatch` proves a turn
+under way; `Stop` ends it for injecting. A prompt that no `Stop` follows and no turn row shows — a
+turn the person interrupted — stops counting after three seconds. A slash command holds injecting
+back for the same three seconds without showing a turn, since it may only open a dialog. The
+transcript, which the daemon already tails, lags reality by up to two seconds, and alone shows a
+turn a hidden row starts: a message from a teammate or from another Claude session (`isMeta`,
+`origin.kind: "peer"`, words in an `<agent-message from="…">` or a `<cross-session-message
+from-name="…">` envelope, published as A30 says), a turn the CLI continues by itself
+(`auto-continuation`), and what a slash command expands to — a skill, a command of the person's —
+in the hidden row right after the command's own all start one; `Stop hook feedback:` sends the
+ending turn on; and an assistant row with tool calls proves a turn under way however it began. The
+transcript also logs the CLI's own command queue (`queue-operation` rows); an injection the CLI
+queued and has not started is in flight for as long as the CLI holds it. And **a turn ends when the
+CLI says it has**. Claude Code writes each content block of one assistant message as a row of its
+own, and every one of those rows carries the message's final
 `stop_reason`, so the sentence a model says before its tool calls arrives as a text-only row that
 looks exactly like the last row of a turn. The device reads the row's `stop_reason` instead:
 `tool_use` means the turn goes on whatever the row holds, and anything else — `end_turn`,
@@ -920,7 +1021,7 @@ confirmation per session** warning about development channels; choose "I am usin
 development" and the device attaches within a second. `rc-client shim status` prints where the shim
 is, whether it is first on `PATH`, which executable it wraps, and the two files it passes.
 
-### The two hooks the settings file carries
+### The hooks the settings file carries
 
 An MCP server keeps the environment it was spawned with for as long as it lives, so the channel
 bridge can only ever report the session id Claude Code picked when the terminal started. That is
@@ -950,12 +1051,42 @@ nothing, exits 0, and what the person typed in the terminal stands. Claude Code 
 hook when its dialog is answered, so that release is the device's job, and a hook whose CLI exits
 first sees its socket close and expires the block.
 
-If you pass a `--settings` file of your own the wrapper leaves it alone: the session still attaches,
-it just carries no hooks, `/resume` inside it goes unnoticed, and its questions can only be answered
-in the terminal.
+The other three hooks say where a turn stands (A51): `UserPromptSubmit`, `PostToolBatch` and `Stop`
+all run `rc_client/channel/turnhook.py`. They run on every prompt, every batch of tool calls and
+every turn's end, so the file runs by path on the bare interpreter — `python -I -S turnhook.py
+<socket>` — and imports nothing but the standard library, this package included; the socket path
+is written into the command because the script cannot read the device's configuration. Each sends
+one `turn` frame and reads one `turn_reply`: a prompt says whose it was (the device's own injection
+by its id, another agent's message, a slash command, or the person's words) and never what it said;
+a batch of the main thread's tool calls — never a subagent's, which carry an `agent_id` — asks for
+what was steered into the turn and prints it as the batch's `additionalContext` with a
+`systemMessage` the terminal shows; a `Stop` waits while the daemon writes what it held for the
+turn's end. Each keeps to its budget — a second, two for `Stop`, counted from its start — and sends
+the moment it stops waiting, so the daemon begins nothing it could not answer in time; it answers at
+once when the daemon has nothing, and a `Stop` with nothing to deliver does not wait for the
+session at all. The timeouts in the settings file (2 s, 3 s for `Stop`) are Claude Code's backstop.
+Every failure, an interrupt included, prints nothing and exits 0.
 
-The settings file is written by `rc-client shim install` and again by the daemon at startup, so it
-names whichever installation ran most recently. **A `claude` that was already running when the shim
+`PostToolBatch` is for Claude Code 2.1.291 and later. Neither the public changelog nor the hooks
+reference dates the event, so the line is the oldest build checked on a machine, and a version that
+cannot be read counts as older. Two settings files are written side by side, with the hook and
+without it (`claude-settings-no-batch.json`), and the terminal proxy hands the CLI it starts the one
+its version can load: it asks the executable's `--version` once per build, remembered in
+`claude-versions.json` by real path, size, inode, modification and change times (a package may give
+every build the same modification time), a failed answer for five minutes only, and tells the daemon
+which file it chose. It knows the shim's file by the whole path the shim passes it, so a file of the
+person's own is never swapped, whatever its name. A CLI started without the proxy gets the file
+without the hook. A session steers, and delivers at its `Stop`, only when its proxy chose the file
+with the hook; the device reports `shared_steer` for Claude by the version it detects for the
+`claude` it would run. An older Claude Code keeps `UserPromptSubmit` and `Stop`, and a message sent
+during its turn is held as A19 says.
+
+If you pass a `--settings` file of your own the wrapper leaves it alone: the session still attaches,
+it just carries no hooks, `/resume` inside it goes unnoticed, its questions can only be answered in
+the terminal, and a message sent during a turn waits for the turn to end instead of steering it.
+
+The settings files are written by `rc-client shim install` and again by the daemon at startup, so
+they name whichever installation ran most recently. **A `claude` that was already running when the shim
 was installed or re-installed keeps the wrapper it started with** — the command line and the settings
 file are both read once, at startup — so quit and start it again to pick up a change.
 
@@ -965,7 +1096,7 @@ This table is the Claude channel. Codex on the shared daemon does more; see the 
 
 | From the apps | On a `shared` Claude session |
 | --- | --- |
-| Send a message | Yes, injected at the next idle point |
+| Send a message | Yes. Injected at once while the CLI's own turn is idle; during a turn `auto` steers it in at the next batch of tool calls, or as the turn ends, and `queue` holds it until the turn ends (A51) |
 | Approve or deny a tool call | Yes, `allow` and `deny` only — the relay offers no session-scoped grant |
 | Answer a question | Yes, through the `PermissionRequest` hook; the terminal's dialog and the card are one question |
 | Stop the turn | Yes since A42: Escape typed into the terminal while a turn runs (or a just-injected message is still on its way into the transcript); `conflict` ("answer the prompt first") while an approval or a question is on screen; nothing typed when no turn runs |
@@ -983,11 +1114,12 @@ when an app answered, `by: "terminal"` when the dialog did, with the terminal's 
 back from the tool result to the option ids the card offered. Only one question is open at a time;
 a second one expires the first. While one is open the session reports `needs_input` — an approval
 still outranks it, because an approval blocks the very work the question was asked about — and a
-message an older app sends is queued rather than injected, because the dialog owns the prompt. When
-the attachment drops, pending approvals and a pending question
+message an app sends meanwhile is never injected, because the dialog owns the prompt: it is steered
+or held as during any turn. When the attachment drops, pending approvals and a pending question
 become `expired`, and the session moves to `terminal` if the CLI process is still alive or to `none`
 if it exited. Messages still held in the queue stay there and go out through the ordinary resume
-path; their files are deleted now and written again by whatever delivers them (A49).
+path, and so do messages steered into the turn and not yet handed over (A51); their files are deleted
+now and written again by whatever delivers them (A49).
 
 ### The device types into the terminal (A40)
 
@@ -2003,7 +2135,7 @@ rc-client uninstall           # stop and remove the service and the shim, keep t
 rc-client uninstall --purge   # also delete config, state and logs
 ```
 
-`uninstall` also deletes `bin/claude` and `state/claude-settings.json`, takes the pi extension back
+`uninstall` also deletes `bin/claude` and both settings files, takes the pi extension back
 out of `~/.pi/agent/extensions/`, and strips the `# >>> remote-control >>>` block from your shell
 startup file. Pass `--no-shell-rc` to leave that file alone. pi, Claude Code, Codex and Grok Build
 themselves are left exactly as they were, and so is the `[cli] use_leader = true` that

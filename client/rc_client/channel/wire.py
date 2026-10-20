@@ -16,6 +16,8 @@ MAX_LINE_BYTES = 256 * 1024
 REGISTER = "register"
 PERMISSION_REQUEST = "permission_request"
 CLOSED = "closed"
+# bridge -> daemon: an injection is written to the CLI now (A51)
+INJECTED = "injected"
 # session-start hook -> daemon: one frame on its own connection, then EOF
 SESSION_START = "session_start"
 SESSION_START_SOURCES = ("startup", "resume", "clear", "compact")
@@ -23,6 +25,13 @@ SESSION_START_SOURCES = ("startup", "resume", "clear", "compact")
 QUESTION = "question"
 # pty proxy -> daemon: one frame naming the CLI it wraps, then request/response
 PTY = "pty"
+# turn hook -> daemon: one frame, then the hook waits for `TURN_REPLY` (A51).
+# `turnhook.py` imports nothing of this package and spells these out itself.
+TURN = "turn"
+TURN_EVENTS = ("prompt", "batch", "stop")
+PROMPT_KINDS = ("ours", "agent", "command", "person")
+# daemon -> turn hook
+TURN_REPLY = "turn_reply"
 # daemon -> bridge
 INJECT = "inject"
 PERMISSION = "permission"
@@ -54,13 +63,35 @@ def decode(line: bytes) -> dict[str, Any] | None:
 
 
 def register(session_id: str, cwd: str, pid: int, claude_version: str | None) -> dict[str, Any]:
+    """The frame a bridge opens with. `acks` says it confirms each injection it writes (A51)."""
     return {
         "type": REGISTER,
         "session_id": session_id,
         "cwd": cwd,
         "pid": pid,
         "claude_version": claude_version,
+        "acks": True,
     }
+
+
+def injected(message_id: str) -> dict[str, Any]:
+    """The bridge has written this injection to the CLI's stdin (A51)."""
+    return {"type": INJECTED, "message_id": message_id}
+
+
+def turn_reply(context: str = "", system_message: str = "") -> dict[str, Any]:
+    """What a turn hook hears back (A51).
+
+    `context` is what the hook hands the model as the batch's additional
+    context, `system_message` the line the terminal shows beside it; both are
+    absent when there is nothing to hand over.
+    """
+    frame: dict[str, Any] = {"type": TURN_REPLY}
+    if context:
+        frame["context"] = context
+    if system_message:
+        frame["system_message"] = system_message
+    return frame
 
 
 def session_start(
@@ -123,13 +154,14 @@ def permission(request_id: str, behavior: str) -> dict[str, Any]:
     return {"type": PERMISSION, "request_id": request_id, "behavior": behavior}
 
 
-def pty_register(pid: int) -> dict[str, Any]:
+def pty_register(pid: int, tool_batch: bool = False) -> dict[str, Any]:
     """What the pseudo-terminal proxy tells the daemon: the CLI it wraps (A40).
 
     The pid is the Claude Code process itself, which is also what the channel
     bridge registers with (`os.getppid()`), so the two meet on one session.
+    `tool_batch` says the CLI was started with the `PostToolBatch` hook (A51).
     """
-    return {"type": PTY, "pid": pid}
+    return {"type": PTY, "pid": pid, "tool_batch": tool_batch}
 
 
 def keys(request_id: str, data: str, clear: bool = False) -> dict[str, Any]:

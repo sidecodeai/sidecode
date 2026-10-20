@@ -273,8 +273,9 @@ async def test_the_daemon_stops_while_a_terminal_is_still_attached(
         await asyncio.to_thread(proxy.wait, 5)
 
 
-def test_the_registration_frame_names_the_cli_and_nothing_else() -> None:
-    assert wire.pty_register(1234) == {"type": "pty", "pid": 1234}
+def test_the_registration_frame_names_the_cli_and_the_settings_it_was_given() -> None:
+    assert wire.pty_register(1234) == {"type": "pty", "pid": 1234, "tool_batch": False}
+    assert wire.pty_register(1234, True)["tool_batch"] is True
     assert wire.keys("r1", "\x1b[A") == {"type": "keys", "id": "r1", "data": "\x1b[A"}
     assert wire.keys("r1", "/model\r", clear=True)["clear"] is True
     assert wire.typed("r1", 3, 1.23456) == {

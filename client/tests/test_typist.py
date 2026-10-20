@@ -722,7 +722,16 @@ def test_the_settings_keys_are_serialised_only_when_there_are_some() -> None:
 async def test_claude_reports_what_it_can_type_only_when_the_shim_is_there(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from rc_client.agents.claude import runtime as claude_runtime
     from rc_client.agents.registry import DetectContext
+
+    version = ["2.1.303"]
+
+    async def probe(path: str) -> str | None:
+        return version[0]
+
+    monkeypatch.setattr(claude_runtime, "resolve_binary", lambda: "/usr/local/bin/claude")
+    monkeypatch.setattr(claude_runtime, "probe_version", probe)
 
     def ready(installed: bool) -> Callable[[], shim.ShimStatus]:
         def status() -> shim.ShimStatus:
@@ -745,12 +754,24 @@ async def test_claude_reports_what_it_can_type_only_when_the_shim_is_there(
     assert (info.shared_interrupt, "interrupt" in info.capabilities) == (True, True)
     # A49: the channel the shim loads carries the paths of a message's files.
     assert (info.shared_attachments, "attachments" in info.capabilities) == (True, True)
+    # A51: the turn hooks in the shim's settings steer a running turn; Claude
+    # still lists no `steer`, because a session the SDK drives cannot.
+    assert info.shared_steer is True
+    assert info.to_dict()["shared_steer"] is True
+    assert "steer" not in info.capabilities
+
+    # A Claude Code older than the batch hook types and attaches, but steers nothing.
+    version[0] = "2.1.290"
+    info = await claude_plugin.detect(DetectContext())
+    assert (info.shared_settings, info.shared_steer) == (True, False)
 
     monkeypatch.setattr(shim, "status", ready(False))
     info = await claude_plugin.detect(DetectContext())
     assert (info.shared_settings, info.shared_settings_keys) == (False, None)
     assert info.shared_interrupt is False
     assert info.shared_attachments is False
+    assert info.shared_steer is False
+    assert "shared_steer" not in info.to_dict(), "sent only when true"
 
 
 async def test_the_sdk_session_runs_compact_as_a_prompt(tmp_path: Path) -> None:
@@ -799,7 +820,7 @@ def test_every_model_and_effort_the_device_offers_has_somewhere_to_land() -> Non
 
 def test_the_shim_runs_the_cli_inside_the_proxy_and_falls_back_without_it() -> None:
     script = shim.render("/usr/local/bin/claude")
-    assert f'-m {paths.pty_module()} -- "$REAL"' in script
+    assert f'-m {paths.pty_module()} --shim-settings "$RC_SETTINGS" -- "$REAL"' in script
     assert '[ -x "$RC_PYTHON" ]' in script
     # The fallback is the last word: a broken venv never costs anybody Claude.
     assert script.rstrip().endswith('exec "$REAL" "$@"')

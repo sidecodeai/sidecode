@@ -14,10 +14,10 @@ import tempfile
 from pathlib import Path
 
 from ..config import client_home, state_dir
+from .versions import NO_BATCH_SETTINGS_NAME, SETTINGS_NAME
 
 SOCKET_NAME = "channel.sock"
 MCP_CONFIG_NAME = "claude-mcp.json"
-SETTINGS_NAME = "claude-settings.json"
 SHIM_NAME = "claude"
 CHANNEL_SERVER_NAME = "rc"
 
@@ -39,6 +39,11 @@ def mcp_config_path() -> Path:
 
 def settings_path() -> Path:
     return state_dir() / SETTINGS_NAME
+
+
+def no_batch_settings_path() -> Path:
+    """The same hooks but `PostToolBatch`, for a Claude Code too old for it (A51)."""
+    return state_dir() / NO_BATCH_SETTINGS_NAME
 
 
 def socket_path() -> Path:
@@ -86,6 +91,17 @@ def hook_command() -> list[str]:
 def question_hook_command() -> list[str]:
     """The `PermissionRequest` hook Claude Code runs beside its question dialog."""
     return [*entrypoint(), "hook", "permission-request"]
+
+
+def turn_hook_command() -> list[str]:
+    """The hook that says where a turn stands (A51), run by path on the bare interpreter.
+
+    It runs on every prompt and every batch of tool calls, so it skips the
+    package and the site machinery altogether; the socket it reports to is
+    written into the command because it cannot read the device's configuration.
+    """
+    script = Path(__file__).with_name("turnhook.py")
+    return [python_executable(), "-I", "-S", str(script), str(socket_path())]
 
 
 def path_candidates(name: str) -> list[str]:

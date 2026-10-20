@@ -118,8 +118,11 @@ class MirrorService:
         # Sessions whose transcript has already been read once for the settings
         # in force (A17); the backfill costs a whole file and is worth doing once.
         self._settings_read: set[str] = set()
-        # Set when something waits on rows an attached session is writing (A40).
+        # Set when something waits on rows an attached session is writing (A40),
+        # and the sessions whose turn state is reported then even with no rows:
+        # a turn's `Stop` may come after its last row was read (A51).
         self._wake = asyncio.Event()
+        self._settling: set[str] = set()
         self._tasks: list[asyncio.Task[None]] = []
 
     def start(self) -> None:
@@ -142,6 +145,15 @@ class MirrorService:
     def read_soon(self) -> None:
         """Make the next tail pass now rather than at the end of the interval."""
         self._wake.set()
+
+    def settle_soon(self, session_id: str, delay: float) -> None:
+        """Report a session's turn state after `delay`, whether or not rows came."""
+
+        def due() -> None:
+            self._settling.add(session_id)
+            self._wake.set()
+
+        asyncio.get_running_loop().call_later(delay, due)
 
     # ---------------------------------------------------------------- scans
 
@@ -532,7 +544,9 @@ class MirrorService:
                 tailer = mirror.tailer if mirror is not None else None
                 trigger = tailer.turn_trigger if tailer is not None else "terminal"
                 end = _turn_end(tailer) if tailer is not None else TurnEnd()
-                await self.hub.shared.tick(entry, running, trigger, end)
+                # A51: the CLI's own turn decides injecting; its subagents are shown.
+                own = tailer.awaiting_reply if tailer is not None else False
+                await self.hub.shared.tick(entry, own, trigger, end, working=running)
                 continue
             if not scan.complete:
                 continue
@@ -652,7 +666,9 @@ class MirrorService:
         if not rows:
             return
         await self._apply_rows(session_id, entry, tailer, rows)
-        await self._after_rows(entry, tailer.busy, _turn_trigger(tailer), _turn_end(tailer))
+        await self._after_rows(
+            entry, tailer.busy, tailer.busy, _turn_trigger(tailer), _turn_end(tailer)
+        )
 
     async def _tail_claude(
         self, session_id: str, entry: SessionEntry, mirror: ClaudeMirror
@@ -669,12 +685,18 @@ class MirrorService:
         working = await asyncio.to_thread(mirror.subagents.working)
         changed = working != mirror.working
         mirror.working = working
-        if not rows and not changed:
+        settling = session_id in self._settling
+        self._settling.discard(session_id)
+        if not rows and not changed and not settling:
             return
         if rows:
             await self._apply_rows(session_id, entry, mirror.tailer, rows)
         await self._after_rows(
-            entry, mirror.busy, _turn_trigger(mirror.tailer), _turn_end(mirror.tailer)
+            entry,
+            mirror.tailer.awaiting_reply,
+            mirror.busy,
+            _turn_trigger(mirror.tailer),
+            _turn_end(mirror.tailer),
         )
 
     async def _apply_rows(
@@ -690,18 +712,38 @@ class MirrorService:
             grok_cursor.write(self.hub.registry, session_id, tailer.cursor)
 
     async def _after_rows(
-        self, entry: SessionEntry, running: bool, trigger: str, end: TurnEnd | None = None
+        self,
+        entry: SessionEntry,
+        own: bool,
+        working: bool,
+        trigger: str,
+        end: TurnEnd | None = None,
     ) -> None:
+        """Report turn state as the rows just read left it.
+
+        `own` is the session's own turn and `working` all of its work, the
+        subagents' included. An attached session injects by the first and
+        shows the second (A51); every other session shows the second.
+        """
         entry.session.updated_at = now_ms()
         if entry.shared is not None:
-            await self.hub.shared.tick(entry, running, trigger, end)
+            await self.hub.shared.tick(entry, own, trigger, end, working=working)
         elif entry.session.control == "terminal":
-            await entry.channel.set_state("running" if running else "readonly")
+            await entry.channel.set_state("running" if working else "readonly")
         await entry.channel.publish_summary()
 
     async def _apply(self, entry: SessionEntry, emit: Any) -> None:
         if emit.kind in _CHANNEL_ECHOES:
             await self._channel_echo(entry, emit)
+            return
+        if emit.kind == transcripts.STEER_DELIVERED:
+            # A51: the model has these steered messages; their bubbles are drawn now.
+            ids = [str(item) for item in emit.fields.get("message_ids") or []]
+            await self.hub.shared.steer_delivered(entry, ids)
+            return
+        if emit.kind == transcripts.QUEUE_MOVED:
+            # A51: the CLI's queue or conversation moved, so a hold is not stale.
+            await self.hub.shared.queue_moved(entry)
             return
         if emit.kind == transcripts.TITLE:
             await self._apply_title(
@@ -747,6 +789,9 @@ class MirrorService:
             and await self.hub.shared.typed_command(entry, str(emit.fields.get("text") or ""))
         ):
             return
+        if emit.kind == "user_message":
+            # A51: the conversation moved, so a hold in the CLI's queue is not stale.
+            await self.hub.shared.queue_moved(entry)
         if emit.kind == "user_message" and emit.fields.get("source") != "agent":
             # A session is named after its first message, and a teammate's
             # report is not one the person sent (amendment A30).
@@ -770,8 +815,20 @@ class MirrorService:
             return
         if emit.kind == transcripts.CHANNEL_DELIVERED:
             await self.hub.shared.echo_delivered(entry, message_id)
+        elif emit.kind == transcripts.CHANNEL_QUEUED:
+            await self.hub.shared.echo_queued(entry, message_id)
+        elif emit.kind == transcripts.CHANNEL_DROPPED:
+            await self.hub.shared.echo_dropped(entry, message_id)
+        elif emit.kind == transcripts.CHANNEL_PULLED:
+            await self.hub.shared.echo_pulled(entry, message_id)
         else:
             await self.hub.shared.echo_absorbed(entry, message_id)
 
 
-_CHANNEL_ECHOES = {transcripts.CHANNEL_DELIVERED, transcripts.CHANNEL_ABSORBED}
+_CHANNEL_ECHOES = {
+    transcripts.CHANNEL_DELIVERED,
+    transcripts.CHANNEL_QUEUED,
+    transcripts.CHANNEL_DROPPED,
+    transcripts.CHANNEL_PULLED,
+    transcripts.CHANNEL_ABSORBED,
+}

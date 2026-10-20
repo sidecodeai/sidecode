@@ -491,6 +491,10 @@
           "description": "Whether session.send attachments are delivered on a session with control \"shared\". False when absent.",
           "type": "boolean"
         },
+        "shared_steer": {
+          "description": "Whether session.send with mode \"auto\" steers a running turn on a session with control \"shared\": the device answers accepted \"steered\" and the message reaches the turn at its next step. An app steers a running session when capabilities has \"steer\", or when the session is shared and this is true. False when absent (A51).",
+          "type": "boolean"
+        },
         "speeds": {
           "type": "array",
           "items": {

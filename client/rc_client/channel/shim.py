@@ -88,6 +88,7 @@ def render(real: str) -> str:
         home=_quote(str(client_home())),
         mcp_config=_quote(str(paths.mcp_config_path())),
         settings=_quote(str(paths.settings_path())),
+        no_batch_settings=_quote(str(paths.no_batch_settings_path())),
         python=_quote(paths.python_executable()),
         pty_module=paths.pty_module(),
         channel_flag=CHANNEL_FLAG,
@@ -137,7 +138,7 @@ def status() -> ShimStatus:
 
 
 def install() -> ShimStatus:
-    """Write the wrapper, the MCP config and the settings file; all three every call."""
+    """Write the wrapper, the MCP config and the settings files; all of them every call."""
     ensure_dirs()
     target = paths.shim_path()
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -150,10 +151,11 @@ def install() -> ShimStatus:
 
 
 def remove() -> ShimRemoval:
-    """Delete the wrapper and its settings file, leaving anything we did not write alone."""
+    """Delete the wrapper and its settings files, leaving anything we did not write alone."""
     settings_file = paths.settings_path()
     removed_settings = settings_file.is_file()
     settings_file.unlink(missing_ok=True)
+    paths.no_batch_settings_path().unlink(missing_ok=True)
     target = paths.shim_path()
     if not target.is_file() or not is_shim(target):
         return ShimRemoval(shim=False, settings=removed_settings)
@@ -177,6 +179,7 @@ RC_FALLBACK_CLAUDE={real}
 RC_CLIENT_HOME=${{RC_CLIENT_HOME:-{home}}}
 RC_MCP_CONFIG={mcp_config}
 RC_SETTINGS={settings}
+RC_NO_BATCH_SETTINGS={no_batch_settings}
 RC_PYTHON={python}
 export RC_CLIENT_HOME
 
@@ -225,13 +228,18 @@ done
 
 if [ "$attach" -eq 1 ]; then
     set -- "$@" {channel_flag} {channel_value} --mcp-config "$RC_MCP_CONFIG"
-    if [ "$add_settings" -eq 1 ]; then
-        set -- "$@" --settings "$RC_SETTINGS"
-    fi
-    # The pseudo-terminal the device types into. An interpreter that is gone
-    # means our installation is broken, and that must not cost you Claude Code.
+    # The pseudo-terminal the device types into, which also swaps in the
+    # settings file without the batch hook for a CLI too old for it. An
+    # interpreter that is gone means our installation is broken, and that must
+    # not cost you Claude Code: the CLI then gets the file every version loads.
     if [ -x "$RC_PYTHON" ]; then
-        exec "$RC_PYTHON" -m {pty_module} -- "$REAL" "$@"
+        if [ "$add_settings" -eq 1 ]; then
+            set -- "$@" --settings "$RC_SETTINGS"
+        fi
+        exec "$RC_PYTHON" -m {pty_module} --shim-settings "$RC_SETTINGS" -- "$REAL" "$@"
+    fi
+    if [ "$add_settings" -eq 1 ] && [ -f "$RC_NO_BATCH_SETTINGS" ]; then
+        set -- "$@" --settings "$RC_NO_BATCH_SETTINGS"
     fi
 fi
 exec "$REAL" "$@"

@@ -808,6 +808,7 @@ The agent and option arrays are shortened here; the fixture holds the full objec
 | `shared_settings` | boolean | no | Whether `session.set` for `model`, `permission_mode`, `effort` and `speed` works on a `shared` session. False when absent. |
 | `shared_settings_keys` | string[] | no | With `shared_settings` true, the subset of `model`, `permission_mode`, `effort` and `speed` that `session.set` changes on a `shared` session; the others stay what the terminal set and an app draws them as values (A17). Absent means all four. Never present when `shared_settings` is false or absent (A40). |
 | `shared_attachments` | boolean | no | Whether `session.send` attachments are delivered on a `shared` session. False when absent. |
+| `shared_steer` | boolean | no | Whether `session.send` with `mode: "auto"` steers a running turn on a `shared` session: the device answers `accepted: "steered"` and the message reaches the turn at its next step — for Claude its next batch of tool calls, or right after the turn when it has none left. Sent only when true; false when absent (A51). |
 | `accounts` | `AgentAccount[]` | no | How the agent is signed in on this device: one entry per vendor credential it holds, with the vendor's plan and, in a `device.agents` reply, the rate-limit windows the device could read (A33). Absent when the device did not look; empty when the agent is installed but signed in nowhere. |
 
 **Accounts and quota (A33).** An agent runs on somebody's credentials: the vendor's own account —
@@ -851,7 +852,10 @@ each as a `device.agents` reply would carry it.
 
 Capabilities gate the UI. `steer` decides whether a message sent during a running turn is steered or
 queued; `takeover` decides whether a terminal-controlled session offers "Take over"; `history`
-decides whether the app can page backwards.
+decides whether the app can page backwards. On a `shared` session `shared_steer` decides steering
+as well: an app treats a running session as steering when the agent's `capabilities` has `steer`,
+or when the session is `shared` and the agent reports `shared_steer: true`, and as queueing
+otherwise (A51).
 
 `capabilities` is unchanged by the attachment fields. `takeover` keeps its meaning and applies to
 `control: "terminal"` only; `attach`, `attach_ready`, `shared_interrupt`, `shared_settings` and
@@ -869,7 +873,10 @@ the terminal's; the same typing runs `/compact`, so Claude carries the `commands
 and since A42 `shared_interrupt` is true for the same reason: `session.stop` types Escape into that
 terminal, which is how the person stops a turn there, only while a turn is running and no dialog is
 open — an approval or a question on screen is answered, not escaped, and the request answers
-`conflict` until it is. Codex reports `attach: "daemon"`, `attach_ready` true once a
+`conflict` until it is. Since A51 it reports `shared_steer` true whenever `attach_ready` is and its
+Claude Code runs the `PostToolBatch` hook (2.1.291 and later): the settings file the shim passes
+carries the turn hooks that hand a steered message to the model at the turn's next batch of tool
+calls. Claude lists no `steer` capability, because a session the SDK drives cannot steer. Codex reports `attach: "daemon"`, `attach_ready` true once a
 WebSocket handshake on the shared daemon socket succeeds rather than merely because the socket file
 is there, and `shared_interrupt`, `shared_settings` and `shared_attachments` all true, because the
 shared app-server accepts interrupts, settings updates and image inputs from every attached client.
@@ -1276,15 +1283,27 @@ having taken the message (for Codex, the daemon's `userMessage` item for it), so
 it after the output that preceded it. The app keeps its optimistic row at the bottom until then —
 that is where the message will land. If the turn ends without the agent ever taking the message,
 the device emits the block at the turn's end, with a `notice` of level `warning` when the turn was
-interrupted, so the message is shown exactly once either way.
+interrupted, so the message is shown exactly once either way. On a `shared` Claude session (A51)
+the agent takes a steered message at the turn's next batch of tool calls, and the block is emitted
+once the transcript shows it there, beside what the CLI folded into the turn at the same boundary —
+the person's prompt queued in the terminal, a teammate's message, a task's notification — which is
+published there too, as it would be had it started a turn (A30); the blocks come in the order the
+model reads them, which is the CLI's: the folded messages first from Claude Code 2.1.294 on, the
+steered one first in 2.1.291. A turn with no batch left takes it as it ends, as the next turn, and
+the block is emitted when that turn starts, after the turn it follows has ended.
 
 `delivery` reports what happened to a message injected into an attached CLI and is absent for an
 ordinary prompt. `delivered` means it was injected into the CLI. `absorbed` means the CLI treated
-it as mid-turn data rather than a prompt, so the device will re-inject it at the next idle point.
+it as mid-turn data rather than a prompt, so the device injects it again at the next turn's end, at
+most three times; absorbed once more, the device publishes an `error` naming the message under the
+block's own `block_id` (5.14), which apps draw in the bubble's place, because nothing delivered it —
+never `delivered` (A51).
 A message the device accepted while the terminal's turn was running is not a block at all until it
 is injected (amendment A19): it is a `queue` entry (5.12), the app keeps it in its queue as it does
 for any queued message, and the `user_message` appears only when the CLI takes it, so `first_seq`
-places it after the output of the turn it waited for — the order the terminal shows. The block
+places it after the output of the turn it waited for — the order the terminal shows. A message
+steered into the turn instead (A51) is no `queue` entry either; its block appears where the model
+reads it, as A14 says, with `delivery: "delivered"`. The block
 keeps its `block_id` throughout, and each re-injection is a replacement event carrying
 `delivery: "delivered"`. `source` stays `remote` for messages apps send into a shared session and
 `terminal` for messages typed in the CLI.
@@ -2728,7 +2747,7 @@ are never listed either: they change a terminal the app cannot see.
 
 | Request | Behaviour |
 | --- | --- |
-| `session.send` | Accepted whatever `mode` says; `steered` never applies. When the session is idle the device injects at once, replies `accepted: "sent"` and emits `user_message {delivery: "delivered"}`. When a turn is running, `auto` and `queue` alike, the device holds the message locally, replies `accepted: "queued"` with a `queued_id` and emits a `queue` event listing it — no `user_message` yet (A19) — then injects it once the transcript shows the turn ended and emits the block with `delivery: "delivered"`. `session.queue_remove` works on held items. Attachments are delivered as files the injected words name (4.8, A49), held or not, when the agent reports `shared_attachments: true`, and are refused with `unsupported` ("attachments cannot be delivered to a terminal session") when it does not. |
+| `session.send` | Accepted whatever `mode` says. When the CLI's own turn is idle — whatever its subagents are doing (A51) — the device injects at once, replies `accepted: "sent"` and emits `user_message {delivery: "delivered"}` — at once when the CLI holds no earlier message, otherwise when the terminal shows the message's own row, so the bubbles keep the order they were sent in (A51). While a turn runs, `mode: "auto"` is steered when the session's CLI runs the device's turn hooks and was started with `PostToolBatch` among them, which the terminal proxy gives a CLI only when its version can load it: the device replies `accepted: "steered"`, hands the message to the model at the turn's next batch of tool calls — or, when the turn has none left, writes it into the channel as the turn ends, so that it starts the next turn — and emits the block when it does (A14, A51). Steering is thus decided per session, not by `shared_steer` (4.2), which the device reports by the version of the `claude` it detects; `accepted` says which way a message went. `mode: "queue"` and `mode: "interrupt"`, and `mode: "auto"` on a session whose CLI started without that hook, are held locally: the device replies `accepted: "queued"` with a `queued_id` and emits a `queue` event listing it — no `user_message` yet (A19) — then injects the oldest held message as the turn ends, one per turn, and emits the block with `delivery: "delivered"`. `session.queue_remove` works on held items. A message the CLI absorbs, removes from its queue without running it, or goes past without its own row (a later turn hook ran, and neither its row nor the CLI's queue showed it; time alone never counts) goes in again — an `auto` one at the running turn's next batch of tool calls when the session steers, any other at the next turn's end — at most three times, and is then reported with an `error` under its bubble's `block_id` (A51). One written at a turn's end and absorbed by that turn going on is sent again outside those three: at the turn's next batch of tool calls whatever its `mode`, uncounted, when the session steers, and when it cannot, at the next turn's end, at most ten times before the same `error`. One the person pulls back into the terminal's input box is theirs and is not sent again. Attachments are delivered as files the words name (4.8, A49), held, steered or not, when the agent reports `shared_attachments: true`, and are refused with `unsupported` ("attachments cannot be delivered to a terminal session") when it does not. |
 | `session.approve` | Relays the option the block offered. An `option_id` the block did not offer, `elsewhere` included, is `bad_request`. Replying to a request the terminal already answered is a no-op returning `{}`. |
 | `session.answer` | Supported for a `question` block the device raised through its `PermissionRequest` hook (A20): the answer goes to the CLI as the tool's own answers and the block resolves with `by: "remote"`. Answering a question the terminal already answered is a no-op returning `{}`. A question the device did not raise has no block to answer. |
 | `session.stop` | `unsupported` unless the agent lists capability `interrupt` **and** reports `shared_interrupt: true`. Message: "stop it in the terminal". Claude reports it since A42: the device types Escape into the CLI's terminal while a turn runs; with an approval or a question on screen it answers `conflict` ("answer the prompt first"), and with no turn running it returns `{}` and types nothing. |
@@ -3574,7 +3593,8 @@ one app connection that asked. The gateway relays bytes and never reads them.
    session: it is a late or duplicate frame. Sort blocks by `first_seq` when it is present and by
    `seq` otherwise, so a block that finishes late stays where it started.
 3. **Sending during a running turn.** With `mode: "auto"` the message is queued, or steered for
-   agents with capability `steer`. The UI shows "working · your message will be queued" and offers
+   agents with capability `steer` and, on a `shared` session, for agents reporting
+   `shared_steer: true` (A51). The UI shows "working · your message will be queued" and offers
    "Interrupt & send". A steered message stays an optimistic row until the device's
    `user_message` arrives, which happens when the agent takes it, not when it was sent (A14).
 4. **Approval and question cards go inactive** as soon as `status` becomes `resolved` or `expired`.
@@ -3808,9 +3828,11 @@ one app connection that asked. The gateway relays bytes and never reads them.
       cannot perform.
 - [ ] Reports `control: "shared"` only while the attachment is live, and moves the session to
       `terminal` or `none` as soon as it drops.
-- [ ] On a `shared` session injects only while the transcript is idle, holds everything else as a
-      `queue` entry with no `user_message`, and emits the block with `delivery: "delivered"` only
-      once it is injected (A19).
+- [ ] On a `shared` session injects only while the CLI's own turn is idle, never waiting on its
+      subagents; steers a `mode: "auto"` message into a running turn through the turn hooks when it
+      reports `shared_steer`; holds everything else as a `queue` entry with no `user_message`,
+      injecting the oldest as each turn ends; and emits the block with `delivery: "delivered"` only
+      once the message is injected or handed to the model (A19, A51).
 - [ ] Keeps every queue in `ts` order with no two entries sharing a `ts`: holds a queued message
       that carries `queue_ts` under that `ts`, in front of every entry with a later one, any other
       at the end under a `ts` later than the last entry's, and a message it puts back itself under
@@ -3845,7 +3867,14 @@ one app connection that asked. The gateway relays bytes and never reads them.
       of a message that cannot reach the agent any more (4.8, A49).
 - [ ] Reports `shared_settings` and `shared_attachments` truthfully per agent, and honours them:
       `session.set` and `session.send` attachments succeed on a `shared` session exactly when the
-      matching flag is true and are refused with `unsupported` when it is false.
+      matching flag is true and are refused with `unsupported` when it is false. Reports
+      `shared_steer` only when a running `shared` session steers `mode: "auto"` (A51).
+- [ ] Counts a turn that a row the Claude CLI hides starts — a teammate's or another session's
+      message under `origin.kind: "peer"`, a turn the CLI continues by itself — as a turn, and
+      publishes the words of its `<agent-message>` or `<cross-session-message>` as A30 says (A51).
+- [ ] Publishes what the Claude CLI folds into a running turn at a tool boundary as the same words
+      would be published had they started a turn, never its own folded injection as a block, and
+      emits a message steered at that boundary beside them in the order the model reads them (A51).
 - [ ] Sets `attach_ready` for Codex from a successful handshake on the shared daemon socket, not
       from the socket file existing, and falls back to a per-session app-server with
       `attach_ready: false` when there is no daemon.
@@ -3876,8 +3905,10 @@ one app connection that asked. The gateway relays bytes and never reads them.
 - [ ] Reads the end of a mirrored Claude turn from the assistant row's `stop_reason`, never from a
       row that happens to hold no `tool_use` — the CLI writes each content block as a row of its
       own — so a message held for a running turn goes out only once the turn has really ended; and
-      when an injection is absorbed a second time, publishes the bubble as `delivered` with the
-      warning `notice`, since nothing more will be re-sent (A34).
+      injects an absorbed message, or one the CLI let go, again — an `auto` one at the running
+      turn's next batch of tool calls when the session steers, any other at a turn's end — at most
+      three times, then publishes an `error` naming it under the bubble's `block_id` and never
+      `delivered` (A34, A51).
 - [ ] Moves a Claude attachment to the session id the CLI's `SessionStart` hook names, and removes
       a terminal-origin session with no events and no transcript with `session.removed` the moment
       its terminal leaves it (A16).
@@ -3967,6 +3998,9 @@ one app connection that asked. The gateway relays bytes and never reads them.
       reconnects with backoff on any code other than 4401 and 4403.
 - [ ] Never auto-resends a `session.send`; retries reuse the original `id`.
 - [ ] Shows the queued or steered outcome from `accepted` rather than guessing.
+- [ ] Words a running session as steering — before sending as after — when the agent's
+      `capabilities` has `steer`, or when the session is `shared` and the agent reports
+      `shared_steer: true`, and as queueing otherwise (A51).
 - [ ] Shows the queue as one "Up next · N" control that opens the list of queued messages; every
       entry can be removed, and one without `attachments` can be edited — taken out with
       `session.queue_remove`, edited in the composer, and sent back with `mode: "queue"` and its
@@ -4579,3 +4613,65 @@ Changing the name in a device's own configuration after enrollment no longer ren
 Rename does. `name` stays required in `hello`, so devices and gateways on either side of this
 amendment exchange the same frame, and a gateway that predates it still overwrites a rename.
 Nothing else changes on the wire. See 3.3, 4.1, 7 and 9.1.
+
+**2026-10-20 A51 — a phone and a terminal take turns in one Claude session.** With the person typing
+in the terminal of an attached Claude session and a phone sending into it, the phone's message could
+be lost. Claude Code hands a channel message that arrives during a turn to the model as untrusted
+data it is told not to act on, and the device, reading turns from a transcript that lags and hides
+some of them, injected into turns already under way — one a hidden message from another Claude
+session started, one the person had just begun, one Claude Code's own queue began while a dialog
+held it — and gave up after one re-send; it also held every message while any subagent worked,
+though the CLI takes one between turns as readily as the person's. The settings file the shim passes
+now also carries `UserPromptSubmit`, `PostToolBatch` and `Stop` hooks, which tell the device where
+each turn stands as the CLI knows it. `AgentInfo` gains the optional `shared_steer`: when it is true
+and a `shared` session is running, `session.send` with `mode: "auto"` is steered — the device
+answers `accepted: "steered"` and the message reaches the turn at its next step. For Claude that is
+the turn's next batch of tool calls, where the hook hands the message to the model in the words
+Claude Code uses for a message the person types mid-turn and the terminal shows a line saying so; a
+turn with no batch left takes it as it ends, written into the channel while the `Stop` hook holds
+the CLI, so it starts the next turn beside anything the person queued, as the CLI batches the
+person's own queued messages, and its block is emitted when that turn starts, after the turn it
+follows has ended. A message the device injects while the CLI still holds an earlier one — written
+at a turn's end, or queued behind a dialog — is answered `accepted: "sent"` as before, and its block
+is emitted when its own row shows rather than as it goes in, so the bubbles keep the order they were
+sent in. A `Stop` hook never ends the turn the apps see: somebody's own `Stop` hook can send the
+turn on, and the transcript says when it ended. The `user_message` is emitted when the
+model takes the message (A14): for a batch, once the transcript shows the hook's context, beside
+whatever the CLI folded into the turn at the same boundary. What it folds in — the person's prompt
+queued in the terminal, a teammate's message, a task's notification — is published there as the same
+words would be had they started a turn (A30): `source: "terminal"` for the person's, `agent` for the
+others, nothing for what such a turn would not show; the device's own message folded that way is the
+absorption below, never a second block. The blocks of one boundary come in the order the model reads
+them, which the CLI decides whichever was sent first: what it folded in first from Claude Code
+2.1.294 on, what the hook handed over first in 2.1.291. An app treats a running session as steering,
+in its wording and its sending alike, when the agent's `capabilities` has `steer`, or when the
+session is `shared` and the agent reports `shared_steer: true`, and as queueing otherwise; an app
+that predates this amendment ignores the field, says the message will be queued, and draws the
+bubble the `steered` reply describes. Claude reports `shared_steer` true whenever `attach_ready` is
+and its Claude Code runs the `PostToolBatch` hook, 2.1.291 and later, and lists no `steer`
+capability, because a session the SDK drives cannot steer; an older Claude Code gets no such hook
+and steers nothing. The terminal proxy hands each CLI the settings file its version can load and
+tells the device which, and a session steers, or delivers at its `Stop`, only with the hook. The
+resume prompt of A35 is the device's own and never steers. `mode: "queue"` keeps A19 and A43: a held
+message goes in as a turn ends, one per turn, now while its `Stop` hook runs. The CLI's own turn
+decides injecting: subagents still at work keep the session `running` for the apps but never hold a
+message back. A message the CLI absorbs anyway — it took the message as data, so the model has read
+it once as such — goes in again until its own row appears: one sent with `mode: "auto"` at the
+running turn's next batch of tool calls when the session steers, any other as a turn ends. So does a
+message the CLI removes from its queue without running it, its queue cleared for one, and one the
+CLI went past without its own row ever coming: a turn hook ran after it was written or handed over,
+and the CLI's queue never showed it; the time gone by alone never makes a message lost. Should the
+CLI run such a message after all, the copy still waiting to go in is withdrawn. Each such message
+counts against three re-sends, except one written at a turn's end and absorbed by that turn going
+on: when the session steers, that one goes in at the turn's next batch of tool calls whatever its
+`mode`, uncounted, and when it cannot, as a turn ends, against a separate ten. Past its limit, the
+device publishes an `error` naming the message under the bubble's own `block_id` — the app request
+id of A12, or the queue's `queued_id` — so apps put the failure in the bubble's place, live and in a
+history alike; this replaces A34's `delivered` beside a warning. A message the person pulls back
+into the input box is theirs, and the device does not send it again. A turn that a row the CLI hides
+starts — a teammate's or another session's message under `origin.kind: "peer"` in an
+`<agent-message>` or `<cross-session-message>` envelope, or a turn the CLI continues by itself —
+counts as a turn, and the former's words are published as A30 says. A CLI started without these
+hooks, under somebody's own `--settings`, keeps the earlier behaviour apart from subagents and the
+re-sends.
+`fixtures/objects/agent.claude-attach.json` shows the new field. See 4.2, 5.2, 5.14, 6.3, 8 and 9.
