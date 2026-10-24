@@ -37,7 +37,7 @@ async def app_socket(ws: WebSocket) -> None:
     if account is None:
         await _close_revoked(ws)
         return
-    connection = AppConnection(ws, credential.username)
+    connection = AppConnection(ws, credential.username, credential.claims.jti)
     connection.start()
     await state.hub.attach_app(connection)
     watchdog = asyncio.create_task(_watch_revocation(ws, connection, state, credential))

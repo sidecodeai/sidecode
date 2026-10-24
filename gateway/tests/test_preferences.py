@@ -636,7 +636,7 @@ async def test_a_resume_notice_reaches_web_push_and_apns(tmp_path: Path) -> None
                 session_id=SESSION_ID,
                 device_id="c5efb1ec-2912-4619-90f7-93b5172fd712",
                 owner="admin",
-                has_active_subscriber=False,
+                active_subscribers=frozenset(),
             )
         )
 
@@ -655,7 +655,7 @@ async def test_a_resume_notice_reaches_web_push_and_apns(tmp_path: Path) -> None
     )
 
 
-async def test_no_resume_push_while_an_app_is_watching(tmp_path: Path) -> None:
+async def test_no_resume_web_push_while_an_app_is_watching(tmp_path: Path) -> None:
     store = PushStore(tmp_path / "push.sqlite3")
     await store.upsert_web(
         WebPushSubscription(
@@ -682,7 +682,7 @@ async def test_no_resume_push_while_an_app_is_watching(tmp_path: Path) -> None:
             session_id=SESSION_ID,
             device_id="d",
             owner="admin",
-            has_active_subscriber=True,
+            active_subscribers=frozenset({"browser-sign-in"}),
         )
     )
     assert web.sent == []

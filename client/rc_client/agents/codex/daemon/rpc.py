@@ -35,6 +35,16 @@ ServerRequestHandler = Callable[[Any, str, dict[str, Any]], Awaitable[dict[str, 
 ConnectedHandler = Callable[[], Awaitable[None]]
 
 
+class NoReply(Exception):
+    """Raised by a request handler that must leave the request unanswered.
+
+    The daemon sends a thread's request to every client subscribed to it, and the
+    first reply of any kind settles it, an error included. A client that is not
+    the one meant to answer therefore says nothing at all: its refusal would be
+    the answer the others never got to give.
+    """
+
+
 def initialize_params(version: str) -> dict[str, Any]:
     """Initialize the connection with the device's stable client identity."""
     return {
@@ -252,6 +262,11 @@ class DaemonClient:
     async def _serve(self, request_id: Any, method: str, params: dict[str, Any]) -> None:
         try:
             result = await self._on_request(request_id, method, params)
+        except NoReply as exc:
+            log.info(
+                "leaving a codex daemon request unanswered", method=method, reason=str(exc)[:200]
+            )
+            return
         except Exception as exc:
             log.warning("codex daemon request handler failed", method=method)
             await self.respond_error(request_id, -32000, str(exc)[:200])

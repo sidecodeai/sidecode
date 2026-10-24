@@ -1,7 +1,7 @@
 /**
  * A47 (PROTOCOL §8 rule 22, `docs/DESIGN.md` § "A red dot for a session that
  * stopped and waits for you"): the installed web app's icon carries the number
- * of unarchived sessions with a red dot, where the browser offers a badge
+ * of active sessions with a red dot, where the browser offers a badge
  * (`navigator.setAppBadge`) — none at zero, nothing at all elsewhere — kept to
  * the count while the page runs and cleared on sign-out. Every call goes to a
  * fake `navigator`: no test asks a real browser for anything.
@@ -11,7 +11,7 @@ import { act, render } from '@testing-library/react';
 import { clearAppBadge, showAppBadge } from '../src/push/appBadge';
 import { useAppBadge } from '../src/push/useAppBadge';
 import { useFront } from '../src/stores/front';
-import { countUnseen, keyOf, useSessions } from '../src/stores/sessions';
+import { countUnseen, keyOf, showsUnseenDot, useSessions } from '../src/stores/sessions';
 import { signOut } from '../src/stores/signOut';
 import { sessions as fixtureSessions } from '../mock/fixtures';
 import type { Session } from '../src/protocol/types';
@@ -58,7 +58,7 @@ afterEach(() => {
 });
 
 describe('the count', () => {
-  it('is the unarchived sessions with the mark', () => {
+  it('is the active sessions with the mark', () => {
     const list = index([
       session('a', { unseen: true }),
       session('b', { unseen: true }),
@@ -69,6 +69,28 @@ describe('the count', () => {
 
     expect(countUnseen(list)).toBe(2);
     expect(countUnseen({})).toBe(0);
+  });
+
+  it('leaves out a session nothing holds, which every list files in the Archive', () => {
+    const list = index([
+      session('a', { unseen: true, control: 'remote' }),
+      session('b', { unseen: true, control: 'terminal' }),
+      session('c', { unseen: true, control: 'shared' }),
+      session('d', { unseen: true, control: 'none' }),
+      session('e', { unseen: true, control: 'none', state: 'stopped', archived: true }),
+    ]);
+
+    expect(countUnseen(list)).toBe(3);
+  });
+
+  it('counts exactly the rows that draw a dot', () => {
+    const list = index([
+      session('a', { unseen: true }),
+      session('b', { unseen: true, control: 'none' }),
+      session('c', { unseen: true, archived: true }),
+    ]);
+
+    expect(Object.values(list).filter((s) => showsUnseenDot(s))).toHaveLength(countUnseen(list));
   });
 
   it('reads the mock’s seeded mark, so a first sign-in shows one', () => {

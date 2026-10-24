@@ -54,6 +54,10 @@ class FakeDaemon:
         # that matters: it refuses a thread whose first turn has not run.
         self.errors: dict[str, str] = {}
         self.responder: Responder | None = None
+        # Requests sent right behind the next answer to `thread/resume`, the way
+        # Codex replays what is pending on a thread to the connection that has
+        # just resumed it.
+        self.replays: list[tuple[Any, str, dict[str, Any]]] = []
         self.answers: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.connections = 0
         # What the real daemon stamps on the echo of a prompt. `None` is what it
@@ -115,8 +119,15 @@ class FakeDaemon:
             await connection.send(
                 json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result})
             )
+            if method == "thread/resume":
+                await self._replay()
             return
         await self.answers.put(message)
+
+    async def _replay(self) -> None:
+        replays, self.replays = self.replays, []
+        for request_id, method, params in replays:
+            await self.ask(request_id, method, params)
 
     def _result(self, method: str, params: dict[str, Any]) -> Any:
         if self.responder is not None:

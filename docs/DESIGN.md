@@ -951,9 +951,10 @@ the same function in each native app — and it is unit tested over the whole ta
 
 ### Working means all of it
 
-A session is **working** while any work it started is still under way: its own turn, or a subagent
-it spawned that has not finished. The dot is green and the
-apps say "<agent> is working" for as long as that holds, and the turn does not end — no
+A session is **working** while any work it started is still under way: its own turn, a subagent it
+spawned that has not finished, or, in a Claude Code terminal the device is attached to, a background
+workflow its turn left running. The dot is green and the apps say "<agent> is working" for as long
+as that holds, and the turn does not end — no
 `turn_completed`, no "Turn finished" push, held messages stay held — until the last of it has. A
 session is **waiting** (`needs_approval`, `needs_input`) only when the agent has put a permission
 or a question to the person, whoever asked it — the agent itself or a subagent working for it. It
@@ -967,6 +968,18 @@ until the last row of its transcript is an assistant message that ended its turn
 `stop_sequence`, `max_tokens`) or the API error that stopped it; a transcript nothing has written to
 for thirty minutes counts as abandoned, so a subagent killed mid-tool cannot hold a session green
 for good. The rule is the same whether the device drives the session or is attached to a terminal.
+
+A workflow leaves no transcript, but Claude Code 2.1.145 and later list every running background
+task in the `Stop` hook's `background_tasks`. For an attached terminal the device counts the
+`subagent` and `workflow` entries that are running or pending — a number, never what they run — and
+keeps the apps' turn open past that `Stop`: the CLI wakes for the end of a task with a prompt of its
+own, which lets the hold go, and the `Stop` of that turn counts afresh, so a turn that waited on
+tasks ends once, with the last of them. The hold also ends when the person presses Stop in an app or
+the CLI disconnects, and lapses thirty minutes after the `Stop` that made it, the bound of a silent
+subagent. Background shells are not counted, since some never end — a dev server, a watcher — and
+would hold a session working for good; nor are teammates, which always read `running`, Claude Code's
+own housekeeping tasks, or a `/loop`'s scheduled prompts (`session_crons`), none of which is work
+the person waits on.
 Codex announces the thread a subagent runs in as it announces any other (`thread/started`, the
 thread naming its `parentThreadId`) and that thread's turns, and the parent's own timeline names
 its agents and their states; a parent is working while any child thread of its own is active, a
@@ -1016,13 +1029,15 @@ moves nothing when it comes or goes; a screen reader hears "not yet opened". It 
 it on all: a phone clears it when the conversation is on screen with the app in front, a computer
 when the conversation is open in the window that has focus (and when that window comes to the
 front). The session working again clears it too — someone carried on from the terminal or another
-app — and so do archiving and closing it. A session already on screen when its turn ends never gets
-one. Grey and red dots never bring a red dot: a CLI that exited and a session that errored are not
-waiting for you.
+app — and so do archiving and closing it. A session nothing holds any more, a CLI that exited, is
+filed in the Archive, where no row draws a dot and the icon counts none; its dot is only hidden,
+and comes back if something holds the session again. A session already on screen when its turn
+ends never gets one, and neither does one being closed. Grey and red dots never bring a red dot: a
+CLI that exited and a session that errored are not waiting for you.
 
-**The app's icon counts them.** The number of unarchived sessions with a red dot — less the
-conversation in front of the person, whose dot is already on its way out — is the badge on the
-app's icon, none at zero, cleared on sign-out:
+**The app's icon counts them.** The number of sessions with a red dot — none of them in an Archive —
+less the conversation in front of the person, whose dot is already on its way out — is the badge on
+the app's icon, none at zero, cleared on sign-out:
 - **iPhone** — the home-screen badge, set by the app while it runs and by the gateway's pushes while
   it does not (every push carries the count, and a silent badge-only push follows a change no push
   carried), so it holds with the app closed. iOS shows a badge only where the person allows

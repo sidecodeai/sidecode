@@ -6,11 +6,14 @@
  * A session works while its state is `running` — a turn is under way; one that
  * only started has done nothing to look at — and waits for the person while it
  * is `needs_approval` or `needs_input`, or `idle` or `readonly` with a control
- * other than `none`: the status dot's amber. The mark
- * is set when a session moves from the one to the other, read from the states
- * alone, and cleared when it works again, when an app says the person has
- * looked (`session.seen`) and when it is archived. Pure, so the rule can be read
- * and tested without a socket; `server.ts` sends the frames.
+ * other than `none`: the status dot's amber. The mark is set when a session
+ * moves from the one to the other, read from the states alone, and cleared when
+ * it works again, when an app says the person has looked (`session.seen`) and
+ * when the session is explicitly closed: archived, or its agent stopped. A
+ * session nothing holds (`control: none`) keeps its mark, as the gateway does
+ * (it shows none while nothing holds the session, and the web draws and counts
+ * none either, `showsUnseenDot`). Pure, so the rule can be read and tested
+ * without a socket; `server.ts` sends the frames.
  */
 import type { ControlOwner, Session, SessionState } from '../src/protocol/types';
 
@@ -21,17 +24,21 @@ export const isWaiting = (state: SessionState, control: ControlOwner): boolean =
   state === 'needs_input' ||
   ((state === 'idle' || state === 'readonly') && control !== 'none');
 
+/** An explicit close, which takes the mark away for good: archived, or stopped. */
+export const isClosed = (session: Pick<Session, 'archived' | 'state'>): boolean =>
+  session.archived || session.state === 'stopped';
+
 /** Every state change goes through here, so the mark follows the move. */
 export function moveState(session: Session, state: SessionState): void {
   const was = session.state;
   session.state = state;
-  if (isWorking(state)) setMark(session, false);
+  if (isWorking(state) || isClosed(session)) setMark(session, false);
   else if (isWorking(was) && isWaiting(state, session.control)) setMark(session, true);
 }
 
 /**
- * `session.seen`, and an archive: the mark goes. Says whether there was one,
- * because only then does every socket of the account hear about it.
+ * `session.seen`: the mark goes. Says whether there was one, because only then
+ * does every socket of the account hear about it.
  */
 export function clearMark(session: Session): boolean {
   const marked = session.unseen === true;

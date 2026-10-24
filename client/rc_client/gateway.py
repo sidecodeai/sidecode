@@ -152,6 +152,8 @@ class GatewayLink:
         self._on_ready = on_ready
         self._queue = ByteQueue(SEND_QUEUE_ITEMS, SEND_QUEUE_BYTES)
         self._connected = False
+        # The hello's snapshot is taken and its ack has not come: see `send`.
+        self._greeting = False
         self._stop = False
         self._last_frame = 0.0
         self._task: asyncio.Task[None] | None = None
@@ -175,8 +177,14 @@ class GatewayLink:
             self._task = None
 
     async def send(self, frame: dict[str, Any]) -> None:
-        """Best-effort publish; drops while disconnected or when the queue is full."""
-        if not self._connected:
+        """Best-effort publish; drops while disconnected or when the queue is full.
+
+        From the hello's snapshot until the gateway acknowledges it, a frame queues behind the
+        hello instead: it describes a change the snapshot cannot hold, and the pump that sends it
+        starts once the ack is in. Before the snapshot the frame is dropped, because the snapshot
+        will hold what it describes.
+        """
+        if not (self._connected or self._greeting):
             return
         payload = json.dumps(frame, ensure_ascii=False)
         if not self._queue.offer(payload):
@@ -200,6 +208,7 @@ class GatewayLink:
                 linkstate.record(linkstate.RETRYING, description)
             finally:
                 self._connected = False
+                self._greeting = False
                 dropped = self._queue.clear()
                 if dropped:
                     log.debug("dropped queued frames on disconnect", frames=dropped)
@@ -236,6 +245,9 @@ class GatewayLink:
             hello.update(
                 {"type": "hello", "protocol": PROTOCOL_VERSION, "client_version": __version__}
             )
+            # Nothing has run since the snapshot was taken, so no change can fall between it and
+            # this flag.
+            self._greeting = True
             await socket.send(json.dumps(hello, ensure_ascii=False))
             ack = json.loads(await asyncio.wait_for(socket.recv(), timeout=30))
             if ack.get("type") != "hello_ack":

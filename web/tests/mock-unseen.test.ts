@@ -1,13 +1,14 @@
 /**
  * A47 §4.4 — the mark as the mock gateway keeps it, so what `npm run dev:mock`
  * shows is what a gateway would: set when a session moves from a running turn
- * to waiting for the person (`needs_approval`,
- * `needs_input`, or `idle` / `readonly` with a control), read from the states
- * alone; cleared when it works again, by `session.seen` and by an archive; and
- * carried only while it is true.
+ * to waiting for the person (`needs_approval`, `needs_input`, or `idle` /
+ * `readonly` with a control), read from the states alone; cleared when it works
+ * again, by `session.seen` and by an explicit close, archived or stopped, which
+ * takes it away for good; kept by a session nothing holds; and carried only
+ * while it is true.
  */
 import { describe, expect, it } from 'vitest';
-import { clearMark, isWaiting, isWorking, moveState } from '../mock/unseen';
+import { clearMark, isClosed, isWaiting, isWorking, moveState } from '../mock/unseen';
 import { sessions } from '../mock/fixtures';
 import type { ControlOwner, Session, SessionState } from '../src/protocol/types';
 
@@ -58,6 +59,16 @@ describe('working and waiting', () => {
       );
     }
   });
+
+  it('reads an explicit close from the archive flag and the stopped state alone', () => {
+    for (const state of STATES) {
+      for (const archived of [false, true]) {
+        expect(isClosed({ archived, state }), `${state} ${archived}`).toBe(
+          archived || state === 'stopped',
+        );
+      }
+    }
+  });
 });
 
 describe('setting the mark', () => {
@@ -82,6 +93,12 @@ describe('setting the mark', () => {
     expect(after('running', 'stopped')).toBe(false);
   });
 
+  it('does not mark an archived session whose turn ends', () => {
+    const s = { ...session('running', 'remote'), archived: true };
+    moveState(s, 'idle');
+    expect(s).not.toHaveProperty('unseen');
+  });
+
   it('does not mark a move from waiting to waiting, nor from rest', () => {
     expect(after('needs_approval', 'idle')).toBe(false);
     expect(after('needs_input', 'idle')).toBe(false);
@@ -94,7 +111,25 @@ describe('setting the mark', () => {
     expect(after('needs_approval', 'idle', 'remote', true)).toBe(true);
     expect(after('idle', 'needs_input', 'remote', true)).toBe(true);
     expect(after('idle', 'error', 'remote', true)).toBe(true);
+    // Nothing holds it, which is no close: `none` comes and goes.
     expect(after('idle', 'idle', 'none', true)).toBe(true);
+    expect(after('needs_approval', 'idle', 'none', true)).toBe(true);
+  });
+});
+
+describe('closing a session', () => {
+  it('takes the mark off a session that is archived or stopped', () => {
+    const archived = { ...session('idle', 'remote', true), archived: true };
+    moveState(archived, 'idle');
+    expect(archived).not.toHaveProperty('unseen');
+
+    expect(after('idle', 'stopped', 'remote', true)).toBe(false);
+  });
+
+  it('is what A39’s close does: archived, unowned and stopped at once', () => {
+    const s = { ...session('idle', 'remote', true), archived: true, control: 'none' as const };
+    moveState(s, 'stopped');
+    expect(s).not.toHaveProperty('unseen');
   });
 });
 
@@ -129,7 +164,7 @@ describe('what the mock starts with', () => {
 
     expect(marked.map((s) => s.session_id)).toEqual(['ses-vite']);
     for (const s of marked) {
-      expect(s.archived).toBe(false);
+      expect(isClosed(s)).toBe(false);
       expect(isWaiting(s.state, s.control)).toBe(true);
     }
     // Every other session leaves the field out, as the gateway does for false.

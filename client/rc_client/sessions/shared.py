@@ -24,7 +24,13 @@ another agent's hidden message starts. An injection marks itself in flight
 until its own row appears. What decides injecting is the CLI's own turn:
 subagents still at work are shown, because working means all of it, but never
 hold a message back, since the CLI takes one between them as readily as the
-person's.
+person's. The background subagents and workflows a turn leaves running are
+shown the same way: the `Stop` hook counts them, and the turn the apps see
+stays open past it. A background shell is not counted, since a dev server or a
+watcher never ends. The CLI wakes for the end of a task with a prompt of its
+own, which lets the hold go, and the `Stop` of that turn counts afresh; the
+hold also lapses after `BACKGROUND_HOLD`, and Stop from an app, the CLI having
+nothing to press Escape on, lets it go at once.
 
 A message the CLI takes as data anyway is put back and injected again at the
 next turn's end, at most three times; absorbed once more, it is an `error` the
@@ -59,6 +65,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from .. import attachments
 from ..agents.claude.questions import answers_for_tool, answers_from_tool
+from ..agents.claude.subagents import SUBAGENT_STALE_S
 from ..agents.claude.tools import reads_session_file, tool_kind, tool_title
 from ..agents.questions import normalise_questions
 from ..errors import RcError
@@ -112,6 +119,10 @@ STOP_SETTLE = 1.0
 # its conversation move: long enough for a dialog, never for good (A51).
 MAX_HELD_BY_CLI = 32
 HELD_QUIET = 30.0
+# How long the background tasks a `Stop` counted keep the session shown as
+# working: as long as a subagent's silent transcript is, since nothing marks a
+# task that was killed or one whose notification never came.
+BACKGROUND_HOLD = SUBAGENT_STALE_S
 # How much of a message the terminal's line repeats, and the give-up error quotes.
 NOTE_CHARS = 200
 QUOTE_CHARS = 60
@@ -174,7 +185,10 @@ class SharedState:
     of the turn's story comes from the turn hooks: `hooked` once the CLI runs
     them at all, `prompted_at` from a prompt to the turn's `Stop`,
     `command_at` from a slash command that may or may not start one, and
-    `stopping` while a `Stop` hook is answered.
+    `stopping` while a `Stop` hook is answered. `background` is how many
+    background subagents and workflows the last `Stop` found still running,
+    counted at `background_at`: shown as work, never a reason to hold a message
+    back.
     """
 
     attachment: Attachment
@@ -193,6 +207,8 @@ class SharedState:
     prompted_at: float | None = None
     command_at: float | None = None
     stopping: bool = False
+    background: int = 0
+    background_at: float = 0.0
     # Messages steered into the running turn and not handed over yet, oldest
     # first, and the ones handed over at a tool boundary until their row shows.
     steers: list[dict[str, Any]] = field(default_factory=list)
@@ -244,15 +260,25 @@ class SharedState:
         )
 
     @property
+    def backgrounded(self) -> bool:
+        """Whether the background tasks the last `Stop` counted are still taken to run.
+
+        Nothing but the CLI's next prompt or `Stop` says one has ended, so the
+        count is believed for `BACKGROUND_HOLD` and no longer.
+        """
+        return self.background > 0 and time.monotonic() - self.background_at < BACKGROUND_HOLD
+
+    @property
     def shown_busy(self) -> bool:
-        """Whether the apps are told the session runs: its subagents count here.
+        """Whether the apps are told the session runs: its subagents and tasks count here.
 
         A slash command is not shown until a turn follows it, and a message
         written at a turn's end not until its own turn starts, so the turn it
         follows can end first (A51).
         """
         own = self.running or self.prompted_at is not None or self.stopping
-        return own or (self.waiting and not self.inflight_at_stop) or self.working
+        waiting = self.waiting and not self.inflight_at_stop
+        return own or waiting or self.working or self.backgrounded
 
     @property
     def busy_typing(self) -> bool:
@@ -895,7 +921,7 @@ class SharedControl:
             return {}
         deadline = hook.deadline or time.time() + HOOK_FALLBACK_BUDGET
         if hook.event == "stop":
-            self._turn_over(state)
+            self._turn_over(state, hook.background)
             if self.reader is not None:
                 self.reader.settle_soon(entry.session.session_id, STOP_SETTLE)
             if not self.runs_tool_batch(state) or not self._owes_turn_end(entry, state):
@@ -950,7 +976,11 @@ class SharedControl:
         Our own injection taken as a prompt is no longer held by the CLI. A
         slash command may start a turn — a skill, a command of the person's —
         or only open a dialog, so it holds injecting back for a moment and
-        shows nothing until the transcript says which.
+        shows nothing until the transcript says which. A prompt that starts a
+        turn is how the CLI wakes for the end of a background task, among
+        other things, and that turn's `Stop` counts the tasks afresh: what the
+        last one counted is let go, so a turn the person interrupts, which
+        runs no `Stop`, cannot leave the session working.
         """
         now = time.monotonic()
         if hook.prompt_kind == "ours" and hook.message_id:
@@ -963,6 +993,7 @@ class SharedControl:
             state.command_at = now
             return
         state.prompted_at = now
+        state.background = 0
         await self._settle(entry)
 
     def runs_tool_batch(self, state: SharedState) -> bool:
@@ -1012,15 +1043,19 @@ class SharedControl:
         return {"context": steer_context(prompts), "system_message": steer_note(handed)}
 
     @staticmethod
-    def _turn_over(state: SharedState) -> None:
+    def _turn_over(state: SharedState, background: int) -> None:
         """The CLI says its turn is over, for injecting; the apps hear it from the transcript.
 
         Ending the turn here would end it too early: somebody's own `Stop` hook
         can send it on, and only the transcript says how it ended (A32, A35).
+        The tasks it leaves running replace what the last `Stop` counted, and
+        keep the apps' turn open when there are any.
         """
         state.prompted_at = None
         state.command_at = None
         state.running = False
+        state.background = background
+        state.background_at = time.monotonic()
 
     async def _turn_end(self, entry: SessionEntry, state: SharedState, deadline: float) -> None:
         """Write what waits for this turn's end into the channel before the CLI idles.
@@ -1339,10 +1374,22 @@ class SharedControl:
         The lock is the same one the other scripts hold, so a Stop never lands
         between two keystrokes of a settings change. Nothing is waited for: the
         CLI files `[Request interrupted by user]` and the transcript reader
-        ends the turn from that row (A32).
+        ends the turn from that row (A32). Background tasks holding the apps'
+        turn open are another matter: the CLI is idle and Escape stops none of
+        them, so Stop lets the hold go and ends the turn as interrupted, which
+        is all "I am done waiting" can mean.
         """
         async with entry.lock:
             await Typist(entry, self.terminal(entry), self).interrupt()
+            await self._drop_background(entry)
+
+    async def _drop_background(self, entry: SessionEntry) -> None:
+        """Stop believing in the tasks the last `Stop` counted, and show it."""
+        state = entry.shared
+        if state is None or not state.background:
+            return
+        state.background = 0
+        await self._settle(entry, TurnEnd("interrupted"))
 
     async def run_command(self, entry: SessionEntry, name: str, block_id: str) -> None:
         """Run one slash command by typing it (A27 through A40)."""

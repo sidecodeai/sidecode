@@ -94,6 +94,7 @@ class ThreadSummary:
     name: str
     model: str | None
     effort: str | None
+    # Unix milliseconds, as everywhere in the protocol; Codex itself counts seconds.
     created_at: int
     updated_at: int
     active: bool | None
@@ -116,8 +117,8 @@ class ThreadSummary:
         name = str(thread.get("name") or "").strip()
         preview = str(thread.get("preview") or "").strip()
         title = (name or preview.splitlines()[0] if preview or name else "")[:MAX_TITLE]
-        created = int(thread.get("createdAt") or 0) or now_ms()
-        updated = int(thread.get("updatedAt") or 0) or created
+        created = _millis(thread.get("createdAt")) or now_ms()
+        updated = _millis(thread.get("updatedAt")) or created
         model = thread.get("model")
         effort = thread.get("reasoningEffort")
         return cls(
@@ -142,6 +143,11 @@ class ThreadSummary:
 
 def _text(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _millis(seconds: Any) -> int:
+    """A Codex timestamp, which counts seconds, as the milliseconds the protocol counts."""
+    return int(seconds or 0) * 1000
 
 
 def is_empty(summary: ThreadSummary) -> bool:

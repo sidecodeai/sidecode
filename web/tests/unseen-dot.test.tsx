@@ -26,6 +26,9 @@ const index = (list: Session[]): Record<string, Session> =>
 
 const MARKED = 'Migrate web to Vite 6';
 const QUIET = 'Fix flaky auth test';
+/** In its device's Archive because the CLI exited, and because it was archived by hand. */
+const EXITED = 'Rewrite the pairing docs';
+const FILED = 'Sketch the pairing QR flow';
 
 beforeEach(() => {
   useDevices.setState({ devices, loaded: true, error: null });
@@ -179,6 +182,36 @@ describe('the red dot in the chat sidebar', () => {
     renderSidebar(keyOf(vite), false);
 
     expect(dotIn(MARKED)).not.toBeNull();
+  });
+});
+
+describe('a session in the Archive', () => {
+  beforeEach(() => {
+    useSettings.setState({ archiveExpanded: sessions.map((s) => s.device_id) });
+  });
+
+  it('draws no dot on the Sessions page, whatever mark a copy of it carries', () => {
+    mark(EXITED, true);
+    mark(FILED, true);
+    renderSessions();
+
+    expect(rowButton(EXITED)).toBeInTheDocument();
+    expect(rowButton(FILED)).toBeInTheDocument();
+    expect(dotIn(EXITED)).toBeNull();
+    expect(dotIn(FILED)).toBeNull();
+    expect(rowButton(EXITED)).not.toHaveAttribute('aria-describedby');
+    expect(document.querySelectorAll('.unseen-dot')).toHaveLength(1);
+  });
+
+  it('draws none in the chat sidebar either', () => {
+    mark(EXITED, true);
+    mark(FILED, true);
+    renderSidebar();
+
+    expect(rowButton(EXITED)).toBeInTheDocument();
+    expect(dotIn(EXITED)).toBeNull();
+    expect(dotIn(FILED)).toBeNull();
+    expect(document.querySelectorAll('.unseen-dot')).toHaveLength(1);
   });
 });
 

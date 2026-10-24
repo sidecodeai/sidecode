@@ -12,9 +12,11 @@ inside a tenth of a second whenever the device has nothing for it.
 - `PostToolBatch` asks for the messages a phone steered into the running turn
   and hands them to the model as the batch's additional context, with a line
   the terminal shows.
-- `Stop` says the turn is ending and waits while the daemon writes what it
-  held for this moment into the channel: up to two seconds, and only when it
-  holds something, since the daemon answers at once otherwise.
+- `Stop` says the turn is ending, and how many background subagents and
+  workflows it leaves running — a number, never what they run — and waits
+  while the daemon writes what it held for this moment into the channel: up to
+  two seconds, and only when it holds something, since the daemon answers at
+  once otherwise.
 
 A subagent's or a teammate's own hooks carry an `agent_id` and are none of the
 device's business: the person's messages go to the main thread.
@@ -56,6 +58,19 @@ AGENT_MARKS = (
     "<cross-session-message",
     "<task-notification",
 )
+# The `type`s of the `background_tasks` entries a `Stop` payload lists that are
+# work the person still waits for. Every other type is left out on purpose: a
+# shell may be a dev server or a watcher that never ends, and would hold the
+# session for good; a teammate reads `running` for as long as it exists,
+# finished or not; and Claude Code's own background work (dreams, memory
+# imports, scans) is not the person's. A scheduled prompt (`session_crons`) is
+# not work under way either.
+BACKGROUND_KINDS = frozenset({"subagent", "workflow"})
+# The `status`es of such an entry that are work under way. Claude Code lists only
+# running and pending work, so an entry saying anything else is finished or
+# killed and nothing to hold a session for; one that says nothing is taken as
+# under way.
+LIVE_STATUSES = frozenset({"running", "pending"})
 
 
 def prompt_kind(prompt: str) -> dict[str, str]:
@@ -69,6 +84,31 @@ def prompt_kind(prompt: str) -> dict[str, str]:
     if any(mark in prompt for mark in AGENT_MARKS):
         return {"prompt_kind": "agent"}
     return {"prompt_kind": "person"}
+
+
+def under_way(task: object) -> bool:
+    """Whether a `background_tasks` entry is work the person still waits for."""
+    if not isinstance(task, dict):
+        return False
+    kind, status = task.get("type"), task.get("status")
+    if not isinstance(kind, str) or kind not in BACKGROUND_KINDS:
+        return False
+    return status is None or (isinstance(status, str) and status in LIVE_STATUSES)
+
+
+def background_count(payload: Mapping[str, object]) -> int:
+    """How many background subagents and workflows the turn leaves running, as a number.
+
+    Claude Code lists the background tasks in the `Stop` payload's
+    `background_tasks`, each with an id, a type, a status and a description of
+    what it runs; only how many are under way leaves this process. A payload
+    without the list, or with anything else in its place, as a Claude Code from
+    before it has, leaves none.
+    """
+    tasks = payload.get("background_tasks")
+    if not isinstance(tasks, list):
+        return 0
+    return sum(1 for task in tasks if under_way(task))
 
 
 def frame(payload: Mapping[str, object]) -> dict[str, object] | None:
@@ -86,6 +126,8 @@ def frame(payload: Mapping[str, object]) -> dict[str, object] | None:
     message: dict[str, object] = {"type": TURN, "event": event, "session_id": session_id}
     if event == "prompt":
         message.update(prompt_kind(str(payload.get("prompt") or "")))
+    elif event == "stop":
+        message["background"] = background_count(payload)
     message["deadline"] = round(WALL_STARTED + BUDGETS[event], 3)
     return message
 

@@ -552,7 +552,7 @@ tool output ever appears in a push.**
 | `rc.session_id` | string | yes | Deep-link target |
 | `rc.device_name` | string | yes | Shown in the notification text |
 | `rc.title` | string | yes | The generic notification text; empty for `badge` |
-| `rc.badge` | integer ≥ 0 | no | How many of the account's unarchived sessions carry `unseen` (4.4) once this push's own change is made — the app icon's badge (A47). APNs payloads set `aps.badge` to it |
+| `rc.badge` | integer ≥ 0 | no | How many of the account's sessions carry `unseen` (4.4) once this push's own change is made — the app icon's badge (A47). APNs payloads set `aps.badge` to it |
 
 Three kinds follow what a device does about a session the usage limit stopped (amendment A35, 7.2):
 `limit_reached` when it schedules the resume (`resume {status: "scheduled"}`), `resumed` when the
@@ -579,10 +579,12 @@ has the session's `resume`.
 **The count travels with the push (A47).** Every push carries `rc.badge`, and an APNs push sets
 `aps.badge` from it, so the iPhone's home-screen badge holds while the app is closed. When the
 account's count changes without a push — a mark cleared by `session.seen` or by the session working
-again, or set while an app watches the session and the push is suppressed — the gateway sends each
-of the account's APNs registrations a badge-only notification once the count has been still for
-3 seconds: `aps.badge` and `rc` with `kind: "badge"`, the session whose mark changed and an empty
-`title`, no alert and no sound. Web Push gets none: a browser shows every push it receives.
+again, a session closing, one that nothing holds any more or that something holds again (4.4), or
+a mark set while an app other than the iPhone app watches the session and the push is suppressed —
+the gateway sends each of the account's APNs registrations a badge-only notification once the count
+has been still for 3 seconds: `aps.badge` and `rc` with `kind: "badge"`, the session whose mark
+changed and an empty `title`, no alert and no sound. Web Push gets none: a browser shows every push
+it receives.
 
 `fixtures/http/push.payload.badge.json`
 
@@ -943,11 +945,21 @@ person** while its `state` is `needs_approval` or `needs_input`, or `idle` or `r
 `control` other than `none`: the status dot's amber. (`starting` is green too, but a session that
 only started has done nothing to look at, so it never brings the mark.) The gateway sets `unseen`
 on the account's session when the device moves it from working to waiting — a turn ended, or it
-asks for an approval or an answer — and clears it when an app of the account sends `session.seen` (6.2), when the session works
-again (someone carried on, from a terminal or another app), or when it is archived or removed. The
-mark survives a gateway restart; every change reaches the account's apps as `session.updated`. The
-transition is read from the states alone: a turn that ended while the device was offline still
-marks the session when the device reports it.
+asks for an approval or an answer — and clears it when an app of the account sends `session.seen`
+(6.2), when the session works again (someone carried on, from a terminal or another app), or when
+it is closed, which is when it is archived or its `state` is `stopped`; A39's close ends in both.
+A session is shown the mark, and counted, only while it is open and held: not closed, and with a
+`control` other than `none`. `none` is no close. A device says it of a CLI that exited, and also of
+a session whose terminal it has not found yet, a pi extension that has not reconnected and a scan
+that missed the process, and it comes and goes; so the gateway keeps the mark of a session nothing
+holds and sends no `unseen` for it meanwhile, the apps filing the session in their Archive, and it
+sends the mark again when something holds the session. A close on its way to the device counts as
+done: from the moment the gateway forwards a `session.archive` with `archived: true` (6.3) until
+the device answers it, however soon the app that asked disconnects, what the session reports, the
+end of its interrupted turn included, marks nothing and sends no notification. The mark survives a
+gateway restart; every change reaches the account's apps as `session.updated`. The transition is
+read from the states alone: a turn that ended while the device was offline still marks the session
+when the device reports it.
 
 #### `control` values
 
@@ -2762,7 +2774,7 @@ are never listed either: they change a terminal the app cannot see.
 
 | Request | Behaviour |
 | --- | --- |
-| `session.send` | Accepted whatever `mode` says. When the CLI's own turn is idle — whatever its subagents are doing (A51) — the device injects at once, replies `accepted: "sent"` and emits `user_message {delivery: "delivered"}` — at once when the CLI holds no earlier message, otherwise when the terminal shows the message's own row, so the bubbles keep the order they were sent in (A51). While a turn runs, `mode: "auto"` is steered when the session's CLI runs the device's turn hooks and was started with `PostToolBatch` among them, which the terminal proxy gives a CLI only when its version can load it: the device replies `accepted: "steered"`, hands the message to the model at the turn's next batch of tool calls — or, when the turn has none left, writes it into the channel as the turn ends, so that it starts the next turn — and emits the block when it does (A14, A51). Steering is thus decided per session, not by `shared_steer` (4.2), which the device reports by the version of the `claude` it detects; `accepted` says which way a message went. `mode: "queue"` and `mode: "interrupt"`, and `mode: "auto"` on a session whose CLI started without that hook, are held locally: the device replies `accepted: "queued"` with a `queued_id` and emits a `queue` event listing it — no `user_message` yet (A19) — then injects the oldest held message as the turn ends, one per turn, and emits the block with `delivery: "delivered"`. `session.queue_remove` works on held items. A message the CLI absorbs, removes from its queue without running it, or goes past without its own row (a later turn hook ran, and neither its row nor the CLI's queue showed it; time alone never counts) goes in again — an `auto` one at the running turn's next batch of tool calls when the session steers, any other at the next turn's end — at most three times, and is then reported with an `error` under its bubble's `block_id` (A51). One written at a turn's end and absorbed by that turn going on is sent again outside those three: at the turn's next batch of tool calls whatever its `mode`, uncounted, when the session steers, and when it cannot, at the next turn's end, at most ten times before the same `error`. One the person pulls back into the terminal's input box is theirs and is not sent again. Attachments are delivered as files the words name (4.8, A49), held, steered or not, when the agent reports `shared_attachments: true`, and are refused with `unsupported` ("attachments cannot be delivered to a terminal session") when it does not. |
+| `session.send` | Accepted whatever `mode` says. When the CLI's own turn is idle — whatever its subagents and background workflows are doing (A51) — the device injects at once, replies `accepted: "sent"` and emits `user_message {delivery: "delivered"}` — at once when the CLI holds no earlier message, otherwise when the terminal shows the message's own row, so the bubbles keep the order they were sent in (A51). While a turn runs, `mode: "auto"` is steered when the session's CLI runs the device's turn hooks and was started with `PostToolBatch` among them, which the terminal proxy gives a CLI only when its version can load it: the device replies `accepted: "steered"`, hands the message to the model at the turn's next batch of tool calls — or, when the turn has none left, writes it into the channel as the turn ends, so that it starts the next turn — and emits the block when it does (A14, A51). Steering is thus decided per session, not by `shared_steer` (4.2), which the device reports by the version of the `claude` it detects; `accepted` says which way a message went. `mode: "queue"` and `mode: "interrupt"`, and `mode: "auto"` on a session whose CLI started without that hook, are held locally: the device replies `accepted: "queued"` with a `queued_id` and emits a `queue` event listing it — no `user_message` yet (A19) — then injects the oldest held message as the turn ends, one per turn, and emits the block with `delivery: "delivered"`. `session.queue_remove` works on held items. A message the CLI absorbs, removes from its queue without running it, or goes past without its own row (a later turn hook ran, and neither its row nor the CLI's queue showed it; time alone never counts) goes in again — an `auto` one at the running turn's next batch of tool calls when the session steers, any other at the next turn's end — at most three times, and is then reported with an `error` under its bubble's `block_id` (A51). One written at a turn's end and absorbed by that turn going on is sent again outside those three: at the turn's next batch of tool calls whatever its `mode`, uncounted, when the session steers, and when it cannot, at the next turn's end, at most ten times before the same `error`. One the person pulls back into the terminal's input box is theirs and is not sent again. Attachments are delivered as files the words name (4.8, A49), held, steered or not, when the agent reports `shared_attachments: true`, and are refused with `unsupported` ("attachments cannot be delivered to a terminal session") when it does not. |
 | `session.approve` | Relays the option the block offered. An `option_id` the block did not offer, `elsewhere` included, is `bad_request`. Replying to a request the terminal already answered is a no-op returning `{}`. |
 | `session.answer` | Supported for a `question` block the device raised through its `PermissionRequest` hook (A20): the answer goes to the CLI as the tool's own answers and the block resolves with `by: "remote"`. Answering a question the terminal already answered is a no-op returning `{}`. A question the device did not raise has no block to answer. |
 | `session.stop` | `unsupported` unless the agent lists capability `interrupt` **and** reports `shared_interrupt: true`. Message: "stop it in the terminal". Claude reports it since A42: the device types Escape into the CLI's terminal while a turn runs; with an approval or a question on screen it answers `conflict` ("answer the prompt first"), and with no turn running it returns `{}` and types nothing. |
@@ -3787,10 +3799,12 @@ one app connection that asked. The gateway relays bytes and never reads them.
       with its `update_url` when configured, and raises an app's minimum in the same release that
       stops supporting its older builds (A31, A45, A46).
 - [ ] Sets `unseen` when a session moves from working to waiting and clears it on `session.seen`,
-      on working again, and on archive or removal, keeps it across restarts, sends every change as
-      `session.updated`, carries `rc.badge` (and `aps.badge`) in every push, and sends APNs
-      registrations a badge-only notification when the count changes without one, 3 s after it
-      settles (A47).
+      on working again, and on closing (archived or `stopped`, a forwarded close included) or
+      removal, keeps it across restarts, shows it only while the session is open and held (one
+      with `control: "none"` keeps the mark and shows none), sends every change as
+      `session.updated`, carries `rc.badge` (and `aps.badge`) in every push, counts the sessions
+      that show it, and sends APNs registrations a badge-only notification when the count changes
+      without one, 3 s after it settles (A47).
 
 - [ ] Stores `preferences` per account, answers `GET` and `PATCH /api/preferences` for the caller's
       account only, carries the object in `hello`, sends `preferences.updated` to the account's app
@@ -4587,10 +4601,12 @@ A session whose dot went from green to amber gets a red dot, and the apps' icons
 sessions. The mark is the gateway's, because only the gateway sees every
 transition while every app may be closed, and because opening the session on one app should clear
 it on all of them: `Session.unseen` is set when the device moves a session from a running turn to
-waiting
-and cleared by `session.seen`, by the session working again, or by its archiving or removal. Every
-push carries the count as `rc.badge` (APNs `aps.badge`), and a badge-only APNs notification follows
-a change no push carried. Only a `running` turn
+waiting and cleared by `session.seen`, by the session working again, or by its closing (archived,
+or its agent stopped) or removal, a close on its way to the device included. The gateway keeps the
+mark and shows it, and a session that nothing holds (`control: "none"`, which a device also says of
+a terminal it has not found yet) is shown none and is in no count, but keeps the mark for when
+something holds it again. Every push carries the count as `rc.badge` (APNs `aps.badge`), and a
+badge-only APNs notification follows a change no push carried. Only a `running` turn
 brings the mark (a session that only started has done nothing to look at), and the conversation in
 front of the person draws no dot and is not counted while its `session.seen` is on its way.
 Additive: an app that predates it ignores the field, sends no
@@ -4676,8 +4692,14 @@ and steers nothing. The terminal proxy hands each CLI the settings file its vers
 tells the device which, and a session steers, or delivers at its `Stop`, only with the hook. The
 resume prompt of A35 is the device's own and never steers. `mode: "queue"` keeps A19 and A43: a held
 message goes in as a turn ends, one per turn, now while its `Stop` hook runs. The CLI's own turn
-decides injecting: subagents still at work keep the session `running` for the apps but never hold a
-message back. A message the CLI absorbs anyway — it took the message as data, so the model has read
+decides injecting: subagents still at work, and the background subagents and workflows the turn's
+`Stop` hook reports as still running, keep the session `running` for the apps but never hold a
+message back. A background shell is not counted, since some never end, such as a dev server or a
+watcher. That hold lasts until the CLI's next prompt that starts a turn (it wakes for the end of a
+task with one, and that turn's `Stop` counts afresh), until the person stops the session from an app
+(the turn then ends as `interrupted`), until the CLI disconnects, or for thirty minutes after the
+`Stop` that counted them; a Claude Code that reports no task list is unaffected. A message the CLI
+absorbs anyway — it took the message as data, so the model has read
 it once as such — goes in again until its own row appears: one sent with `mode: "auto"` at the
 running turn's next batch of tool calls when the session steers, any other as a turn ends. So does a
 message the CLI removes from its queue without running it, its queue cleared for one, and one the

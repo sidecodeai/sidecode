@@ -51,6 +51,7 @@ from .frames import (
     PING_INTERVAL_SECONDS,
     PROTOCOL_VERSION,
     REQUEST_TIMEOUT_SECONDS,
+    SESSION_ARCHIVE,
     SESSION_RESULT_TYPES,
     SILENT_TIMEOUT_SECONDS,
     TERMINAL_ATTACH,
@@ -159,7 +160,9 @@ class SessionTransition:
     session: Frame
     #: The account that owns the device: only its registrations are notified (A24).
     owner: str
-    has_active_subscriber: bool
+    #: The sign-ins (bearer `jti`s) of the owner's app sockets watching this session. What a watcher
+    #: spares the person depends on what it is, and that is push's to decide.
+    active_subscribers: frozenset[str]
 
 
 TransitionHook = Callable[[SessionTransition], Awaitable[None]]
@@ -179,7 +182,8 @@ class SessionResumeNotice:
     device_id: str
     #: The account that owns the device: only its registrations are notified (A24).
     owner: str
-    has_active_subscriber: bool
+    #: As on `SessionTransition`: the sign-ins of the owner's app sockets watching this session.
+    active_subscribers: frozenset[str]
 
 
 ResumeHook = Callable[[SessionResumeNotice], Awaitable[None]]
@@ -194,6 +198,9 @@ class _Pending:
     #: A38: the terminal a ``terminal.*`` request named, so an accepted ``terminal.close`` is
     #: forgotten by the id the request carried rather than by one the reply does not repeat.
     terminal_id: str = ""
+    #: A39: the session a `session.archive {archived: true}` is closing until the device answers.
+    #: What a session reports on its way out is the end of it, not news (A47).
+    closing: str = ""
     timer: asyncio.Task[None] | None = None
 
 
@@ -290,6 +297,7 @@ class Hub:
     async def start(self) -> None:
         if self._heartbeat is None:
             self._heartbeat = asyncio.create_task(self._heartbeat_loop())
+        await self._clear_closed_marks()
 
     async def stop(self) -> None:
         if self._heartbeat is not None:
@@ -799,7 +807,13 @@ class Hub:
     async def detach_app(self, connection: AppConnection) -> None:
         async with self._lock:
             self._apps.pop(connection.id, None)
-        for key in [key for key in self._pending if key[0] == connection.id]:
+        # A close the device is still working on outlives the socket that asked for it: it is what
+        # keeps the last words of the session from marking it (A39), whoever is listening.
+        for key in [
+            key
+            for key, item in self._pending.items()
+            if key[0] == connection.id and not item.closing
+        ]:
             pending = self._pending.pop(key, None)
             if pending is not None and pending.timer is not None:
                 pending.timer.cancel()
@@ -1053,7 +1067,12 @@ class Hub:
                 )
                 return
         self._track_pending(
-            connection, identifier, device_id, kind, text_field(frame, "terminal_id")
+            connection,
+            identifier,
+            device_id,
+            kind,
+            text_field(frame, "terminal_id"),
+            closing=_session_being_closed(frame),
         )
 
     def _track_pending(
@@ -1063,6 +1082,7 @@ class Hub:
         device_id: str,
         kind: str,
         terminal_id: str = "",
+        closing: str = "",
     ) -> None:
         key = (connection.id, identifier)
         existing = self._pending.get(key)
@@ -1073,6 +1093,7 @@ class Hub:
             connection_id=connection.id,
             kind=kind,
             terminal_id=terminal_id,
+            closing=closing,
         )
         self._pending[key] = pending
         pending.timer = asyncio.create_task(self._expire_pending(key, identifier))
@@ -1339,8 +1360,9 @@ class Hub:
         session_id = text_field(stored, "session_id")
         if not session_id or not await self._claim_session(device_id, session_id):
             return
+        closing = self._is_closing(session_id)
         previous = await self.index.get(session_id)
-        indexed = await self.index.upsert(stored)
+        indexed = await self.index.upsert(stored, closing=closing)
         if indexed is None:
             log.warning("session summary refused", device_id=device_id)
             return
@@ -1350,6 +1372,10 @@ class Hub:
             self._badge_changed(owner, indexed)
         # A36: an automatic update a busy device refused is asked again the moment it goes quiet.
         await self._auto_update.on_session_change(device_id)
+        # A session on its way out reports the end of its turn first (A39). The person who closed
+        # it is not told that a turn finished.
+        if closing:
+            return
         # A session the gateway has never seen has no transition to report: an index that was
         # just created (or a device reconnecting after a wipe) must not produce a push storm.
         if self._on_session_transition is None or previous is None:
@@ -1374,7 +1400,7 @@ class Hub:
             state=indexed.state,
             session=indexed.summary,
             owner=owner,
-            has_active_subscriber=self._has_active_subscriber(indexed.session_id),
+            active_subscribers=self._active_subscribers(indexed.session_id, owner),
         )
         self._spawn_notification(self._run_transition(hook, transition))
 
@@ -1398,12 +1424,13 @@ class Hub:
         hook = self._on_session_resume
         if hook is None:
             return
+        owner = await self.device_owner(device.device_id)
         notice = SessionResumeNotice(
             status=text_field(event, "status"),
             session_id=session_id,
             device_id=device.device_id,
-            owner=await self.device_owner(device.device_id),
-            has_active_subscriber=self._has_active_subscriber(session_id),
+            owner=owner,
+            active_subscribers=self._active_subscribers(session_id, owner),
         )
         self._spawn_notification(self._run_resume(hook, notice))
 
@@ -1460,18 +1487,38 @@ class Hub:
             owner, {"type": "session.removed", "session_id": session_id, "device_id": device_id}
         )
 
-    def _has_active_subscriber(self, session_id: str) -> bool:
-        """True when an app is watching this session and its user did something recently.
+    def _active_subscribers(self, session_id: str, owner: str) -> frozenset[str]:
+        """The sign-ins of the owner's apps that are watching this session and were used lately.
 
         Heartbeat traffic deliberately does not count as activity: a phone with a backgrounded
         tab still answers ``ping``, and suppressing its notification would defeat the feature.
+        The iPhone app is the one this cannot settle alone. It stays subscribed when it goes to
+        the background or the phone locks, so being here says nothing about whether anyone is
+        looking; the sign-ins are returned, not a verdict, so that push can tell that app from a
+        browser or a desktop app.
         """
-        return any(
-            connection.subscribed(session_id) and connection.idle_for() <= ACTIVE_APP_WINDOW_SECONDS
+        return frozenset(
+            connection.jti
             for connection in self._apps.values()
+            if connection.username == owner
+            and connection.subscribed(session_id)
+            and connection.idle_for() <= ACTIVE_APP_WINDOW_SECONDS
         )
 
     # ---- the A47 mark ----
+
+    def _is_closing(self, session_id: str) -> bool:
+        """A close of this session was forwarded to its device (A39) and is still unanswered."""
+        return any(item.closing == session_id for item in self._pending.values())
+
+    async def _clear_closed_marks(self) -> None:
+        """Take the kept mark off every closed session that still has one.
+
+        No app was ever shown such a mark, so the count does not move and no phone is told.
+        """
+        cleared = await self.index.clear_closed_unseen()
+        if cleared:
+            log.info("marks taken off closed sessions", sessions=cleared)
 
     async def _handle_seen(self, connection: AppConnection, frame: Frame) -> None:
         """The person has this conversation in front of them, so its mark goes (A47, §6.2).
@@ -1516,22 +1563,23 @@ class Hub:
 
         A device never sends the mark, and an app may draw the reply's session in place of the
         copy it holds, so a marked row would otherwise lose its dot until the next update. The
-        reply never adds a mark the index does not hold; it drops one the summary itself ends,
-        as archiving or the session working again does, so that row and list agree once the
-        device publishes the same summary.
+        reply never adds a mark the index does not keep; it drops one the summary itself ends,
+        as archiving or the session working again does, and shows it as the summary says: a
+        session nothing holds shows none. So that row and list agree once the device publishes
+        the same summary.
         """
         result = object_field(reply, "result")
         session = object_field(result, "session") if result is not None else None
         if result is None or session is None:
             return reply
         stored = await self.index.get(text_field(session, "session_id"))
-        unseen = (
+        kept = (
             stored is not None
             and stored.device_id == device_id
-            and stored.unseen
+            and stored.marked
             and next_unseen(stored.state, True, session)
         )
-        return {**reply, "result": {**result, "session": with_mark(dict(session), unseen)}}
+        return {**reply, "result": {**result, "session": with_mark(dict(session), kept)}}
 
     # ---- helpers ----
 
@@ -1633,6 +1681,13 @@ def _attachments_over_limit(frame: Frame) -> str | None:
         if isinstance(encoded, str) and len(encoded) // 4 * 3 > MAX_ATTACHMENT_BYTES:
             return f"attachments are limited to {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MiB each"
     return None
+
+
+def _session_being_closed(frame: Frame) -> str:
+    """The session a forwarded frame closes (A39), or nothing when it closes none."""
+    if frame_type(frame) == SESSION_ARCHIVE and frame.get("archived"):
+        return text_field(frame, "session_id")
+    return ""
 
 
 def _payload_bytes(frame: Frame) -> int:

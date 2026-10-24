@@ -420,6 +420,17 @@ def test_a_turn_hooks_deadline_is_kept_only_when_it_is_soon() -> None:
         assert hook is not None and hook.deadline == 0.0
 
 
+def test_a_stop_hooks_background_tasks_are_a_count_and_default_to_none() -> None:
+    """A hook from before the count, or a frame with anything else in its place, says none."""
+    frame = {"type": wire.TURN, "event": "stop", "session_id": "s1"}
+    hook = attach_module._turn_hook({**frame, "background": 2})
+    assert hook is not None and hook.background == 2
+    assert attach_module._turn_hook(frame) == TurnHook("s1", "stop")
+    for odd in (0, -1, 1.5, "2", None, [2], {"count": 2}):
+        hook = attach_module._turn_hook({**frame, "background": odd})
+        assert hook is not None and hook.background == 0
+
+
 async def test_a_terminal_says_whether_its_cli_has_the_batch_hook(short_dir: Path) -> None:
     """A51: the proxy picked the settings file, and only it knows which."""
     socket = short_dir / "channel.sock"

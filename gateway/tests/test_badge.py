@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from rc_gateway.app import build_state, create_app
@@ -42,6 +43,7 @@ from .conftest import (
     enroll_device,
     fake_app,
     fake_device,
+    frames_of,
     make_config,
     session_summary,
     sign_in,
@@ -335,7 +337,10 @@ class Rig:
 
 
 async def _rig(tmp_path: Path) -> Rig:
-    """A gateway with APNs, one device, one app socket and one registered phone, on a clock."""
+    """A gateway with APNs, one device, one registered phone and one app socket, on a clock.
+
+    The app socket is a browser's: its sign-in is not the one the phone registered with.
+    """
     recorder = ApnsRecorder()
     clock = VirtualClock()
     provider = apns_provider(recorder)
@@ -408,6 +413,27 @@ async def test_a_carried_count_costs_no_second_push(tmp_path: Path) -> None:
     await _stop(rig)
 
 
+async def test_an_alert_to_a_watching_phone_carries_the_count_and_costs_no_second_push(
+    tmp_path: Path,
+) -> None:
+    """The iPhone app stays subscribed with the phone locked, so its own socket cannot stand in."""
+    rig = await _rig(tmp_path)
+    phone = fake_app(jti=_registration().session_jti)
+    await rig.state.hub.attach_app(phone)
+    await _publish(rig, state="running")
+    await rig.state.hub.handle_app_frame(
+        phone, {"type": "session.subscribe", "id": "s1", "session_id": SESSION_ID}
+    )
+    await _publish(rig, state="idle")
+    await _until(lambda: len(rig.recorder.requests) == 1)
+    assert rig.recorder.bodies[0]["rc"]["kind"] == KIND_TURN_COMPLETED
+    assert rig.recorder.bodies[0]["aps"]["badge"] == 1
+    await rig.clock.advance(BADGE_SETTLE_SECONDS)
+    await asyncio.sleep(0.05)
+    assert len(rig.recorder.requests) == 1
+    await _stop(rig)
+
+
 async def test_a_count_no_push_carried_reaches_the_phone_once_it_settles(tmp_path: Path) -> None:
     rig = await _rig(tmp_path)
     await _publish(rig, SESSION_ID, state="running")
@@ -452,6 +478,131 @@ async def test_a_count_no_push_carried_reaches_the_phone_once_it_settles(tmp_pat
     assert rig.recorder.bodies[2]["aps"] == {"badge": 0}
     await asyncio.sleep(0.05)
     assert len(rig.recorder.requests) == 3
+    await _stop(rig)
+
+
+@pytest.mark.parametrize(
+    "closed",
+    [
+        # The CLI exited: nothing holds the session, so every app files it in the Archive.
+        {"state": "idle", "control": "none"},
+        # A39's close.
+        {"state": "stopped", "control": "none", "archived": True},
+    ],
+)
+async def test_a_session_that_closes_lowers_the_phones_count(
+    tmp_path: Path, closed: dict[str, Any]
+) -> None:
+    rig = await _rig(tmp_path)
+    await _publish(rig, state="running")
+    await _publish(rig, state="idle")
+    await _until(lambda: len(rig.recorder.requests) == 1)
+    assert rig.recorder.bodies[0]["aps"]["badge"] == 1
+
+    await _publish(rig, **closed)
+    await rig.clock.advance(BADGE_SETTLE_SECONDS)
+    await _until(lambda: len(rig.recorder.requests) == 2)
+    headers, body = rig.recorder.requests[1]
+    assert body["aps"] == {"badge": 0}
+    assert body["rc"]["kind"] == KIND_BADGE
+    assert headers["apns-priority"] == "5"
+    await _stop(rig)
+
+
+async def test_a_session_unheld_for_a_moment_costs_the_phone_no_push(tmp_path: Path) -> None:
+    """A scan that misses a terminal and the next one that finds it leave the count where it was."""
+    rig = await _rig(tmp_path)
+    await _publish(rig, state="running")
+    await _publish(rig, state="idle")
+    await _until(lambda: len(rig.recorder.requests) == 1)
+    assert rig.recorder.bodies[0]["aps"]["badge"] == 1
+
+    await _publish(rig, state="idle", control="none")
+    await rig.clock.advance(1.0)
+    await _publish(rig, state="readonly", control="terminal")
+    await rig.clock.advance(BADGE_SETTLE_SECONDS)
+    await asyncio.sleep(0.05)
+    assert len(rig.recorder.requests) == 1
+    await _stop(rig)
+
+
+async def test_a_session_unheld_for_longer_tells_the_phone_twice(tmp_path: Path) -> None:
+    rig = await _rig(tmp_path)
+    await _publish(rig, state="running")
+    await _publish(rig, state="idle")
+    await _until(lambda: len(rig.recorder.requests) == 1)
+
+    # Nothing holds it for as long as the count takes to settle: the count fell, and says so.
+    await _publish(rig, state="idle", control="none")
+    await rig.clock.advance(BADGE_SETTLE_SECONDS)
+    await _until(lambda: len(rig.recorder.requests) == 2)
+    assert rig.recorder.bodies[1]["aps"] == {"badge": 0}
+
+    # A terminal holds it again, with the mark it kept.
+    await _publish(rig, state="readonly", control="terminal")
+    await rig.clock.advance(BADGE_SETTLE_SECONDS)
+    await _until(lambda: len(rig.recorder.requests) == 3)
+    assert rig.recorder.bodies[2]["aps"] == {"badge": 1}
+    assert rig.recorder.bodies[2]["rc"]["kind"] == KIND_BADGE
+    await _stop(rig)
+
+
+async def test_taking_the_marks_off_closed_sessions_at_start_sends_the_phone_nothing(
+    tmp_path: Path,
+) -> None:
+    """No app was shown those marks, so the count the phone holds is already the right one."""
+    rig = await _rig(tmp_path)
+    await _publish(rig, SESSION_ID, state="stopped")
+    await _publish(rig, OTHER_ID, state="idle", archived=True)
+    with sqlite3.connect(rig.state.index.path) as connection:
+        connection.execute("UPDATE sessions SET unseen=1")
+    assert await rig.state.index.count_unseen([rig.device_id]) == 0
+
+    await rig.state.hub.start()
+    await rig.clock.advance(BADGE_SETTLE_SECONDS * 2)
+    await asyncio.sleep(0.05)
+    assert rig.recorder.requests == []
+    for session_id in (SESSION_ID, OTHER_ID):
+        closed = await rig.state.index.get(session_id)
+        assert closed is not None
+        assert closed.marked is False
+    await _stop(rig)
+
+
+@pytest.mark.parametrize("disconnect", [False, True])
+async def test_closing_a_working_session_sends_the_phone_nothing(
+    tmp_path: Path, disconnect: bool
+) -> None:
+    """The interrupted turn ends before the close does; neither is an alert or a count.
+
+    Nor when the phone that asked for it drops the moment it has: the close is the device's.
+    """
+    rig = await _rig(tmp_path)
+    await _publish(rig, state="running")
+    close = {"type": "session.archive", "id": "c1", "session_id": SESSION_ID, "archived": True}
+    await rig.state.hub.handle_app_frame(rig.app, close)
+    request = frames_of(rig.device)[-1]
+    if disconnect:
+        await rig.state.hub.detach_app(rig.app)
+
+    await _publish(rig, state="idle")
+    closed = session_summary(
+        SESSION_ID, rig.device_id, state="stopped", control="none", archived=True
+    )
+    await _publish(rig, state="stopped", control="none", archived=True)
+    await rig.state.hub.handle_device_frame(
+        rig.device,
+        {
+            "type": "reply",
+            "id": "c1",
+            "from": request["from"],
+            "ok": True,
+            "result": {"session": closed},
+        },
+    )
+    await rig.clock.advance(BADGE_SETTLE_SECONDS * 2)
+    await asyncio.sleep(0.05)
+    assert rig.recorder.requests == []
     await _stop(rig)
 
 

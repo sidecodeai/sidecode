@@ -131,6 +131,6 @@ class GatewayState:
         return record.name if record is not None else device_id
 
     async def badge_count(self, username: str) -> int:
-        """A47: how many of the account's unarchived sessions carry `unseen`, its icon's badge."""
+        """A47: how many of the account's sessions show `unseen`, its icon's badge."""
         owned = [record.device_id for record in await self.devices.list_for_user(username)]
         return await self.index.count_unseen(owned)

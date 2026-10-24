@@ -92,7 +92,10 @@ class TurnHook:
     `event` is `prompt`, `batch` or `stop`. A prompt says whose it was —
     `ours` with the injection's `message_id`, `agent`, `command` or `person` —
     and never what it said. `deadline` is when the hook stops waiting for an
-    answer, in seconds since the epoch; 0 when it did not say.
+    answer, in seconds since the epoch; 0 when it did not say. A `stop` says in
+    `background` how many background subagents and workflows the turn leaves
+    running, and never what they run; 0 for every other event, and for a CLI
+    that does not say.
     """
 
     session_id: str
@@ -100,6 +103,7 @@ class TurnHook:
     prompt_kind: str = ""
     message_id: str = ""
     deadline: float = 0.0
+    background: int = 0
 
 
 class AttachSink(Protocol):
@@ -433,12 +437,14 @@ def _turn_hook(message: dict[str, Any]) -> TurnHook | None:
     raw = message.get("deadline")
     deadline = float(raw) if isinstance(raw, int | float) else 0.0
     soon = 0 < deadline - time.time() <= MAX_HOOK_WAIT
+    background = message.get("background")
     return TurnHook(
         session_id=session_id,
         event=event,
         prompt_kind=kind if kind in wire.PROMPT_KINDS else "",
         message_id=str(message.get("message_id") or "")[:64],
         deadline=deadline if soon else 0.0,
+        background=background if isinstance(background, int) and background > 0 else 0,
     )
 
 

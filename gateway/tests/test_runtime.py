@@ -157,7 +157,7 @@ async def test_heartbeat_pings_and_closes_silent_connections(
 ) -> None:
     hub = Hub(SessionIndex(tmp_path / "idx.sqlite3"), state.devices)
     socket = _FakeSocket()
-    connection = AppConnection(socket, "admin")  # type: ignore[arg-type]
+    connection = AppConnection(socket, "admin", "j" * 20)  # type: ignore[arg-type]
     connection.start()
     await hub.attach_app(connection)
 

@@ -131,19 +131,6 @@ export function countWaiting(sessions: Session[]): number {
 }
 
 /**
- * A47: the number on the app's icon — the unarchived sessions with a red dot.
- * The conversation in front of the person draws none, so it is not counted.
- */
-export function countUnseen(
-  sessions: Record<SessionKey, Session>,
-  front: SessionKey | null = null,
-): number {
-  return Object.values(sessions).filter(
-    (s) => s.unseen === true && !s.archived && keyOf(s) !== front,
-  ).length;
-}
-
-/**
  * Active is what a CLI or the device still holds: `control` is `remote`,
  * `terminal` or `shared`. `control: "none"` means the CLI exited and nothing
  * owns the session any more, so it belongs to the Archive with the sessions the
@@ -151,6 +138,24 @@ export function countUnseen(
  */
 export function isActiveSession(session: Session): boolean {
   return !session.archived && session.control !== 'none';
+}
+
+/**
+ * A47: whether the session's row draws the red dot, and the app's icon counts
+ * it. Only an active session does — one in the Archive waits for nobody,
+ * whatever mark a gateway left on it — and the conversation in front of the
+ * person draws none: it is being looked at.
+ */
+export function showsUnseenDot(session: Session, front: SessionKey | null = null): boolean {
+  return session.unseen === true && isActiveSession(session) && keyOf(session) !== front;
+}
+
+/** A47: the number on the app's icon — the red dots the app draws. */
+export function countUnseen(
+  sessions: Record<SessionKey, Session>,
+  front: SessionKey | null = null,
+): number {
+  return Object.values(sessions).filter((s) => showsUnseenDot(s, front)).length;
 }
 
 /** Attention first, then a running turn, then the rest. Lower sorts earlier. */

@@ -61,6 +61,7 @@ Exit codes: `0` success, `1` runtime failure, `2` usage error, `3` not enrolled.
   state/attachments/        files received with a message
   state/claude-mcp.json     the channel server definition handed to Claude Code
   state/channel.sock        where channel bridges register
+  state/daemon.lock         held while a daemon runs, so only one runs per home
   bin/claude                the shim that starts an attachable Claude session
   logs/                     service stdout and stderr
 ```

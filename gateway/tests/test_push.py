@@ -138,7 +138,7 @@ def test_state_transitions_produce_one_push_each(
     assert set(payload) == {"rc"}
 
 
-def test_no_push_while_a_subscribed_app_is_active(
+def test_no_web_push_while_a_subscribed_app_is_active(
     client: TestClient, auth: dict[str, str], web_sender: FakeWebPushSender
 ) -> None:
     enrolled = enroll_device(client, auth)

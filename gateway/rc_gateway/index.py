@@ -12,7 +12,10 @@ older than an event it has already received live.
 
 The A47 mark is the gateway's own and lives in a column beside the summary, never inside it. It is
 worked out from the stored row in the same step that replaces the summary, so a `session.seen` that
-lands while a device's summary is on its way in is never undone by that summary.
+lands while a device's summary is on its way in is never undone by that summary. What the column
+holds is the mark kept, and what an app is shown is `unseen.shows` of it: a session that is closed
+or that nothing holds keeps its mark and shows none, so every read lays the mark through
+`unseen.with_mark`, and a count adds up the sessions that show it.
 """
 
 from __future__ import annotations
@@ -29,7 +32,7 @@ from typing import Any
 
 from .logging import logger
 from .migrations import Migration, apply_migrations
-from .unseen import FIELD, next_unseen, with_mark
+from .unseen import FIELD, is_closed, next_unseen, shows, with_mark
 
 log = logger("rc_gateway.index")
 
@@ -51,7 +54,10 @@ class IndexedSession:
     device_id: str
     state: str
     last_seq: int
-    #: A47: the gateway's mark, already laid over ``summary``.
+    #: A47: the mark the gateway keeps for the session, shown to apps or not.
+    marked: bool
+    #: A47: whether apps are shown the mark, and a count includes the session: it is kept and the
+    #: session is neither closed nor unheld. Already laid over ``summary``.
     unseen: bool
     summary: Session
 
@@ -99,8 +105,11 @@ class SessionIndex:
             )
             apply_migrations(connection, MIGRATIONS)
 
-    async def upsert(self, summary: Session) -> IndexedSession | None:
+    async def upsert(self, summary: Session, *, closing: bool = False) -> IndexedSession | None:
         """Store a summary announced by a device. Returns the stored row.
+
+        ``closing`` says the session is being closed (A39): what it reports on the way is the end
+        of it, so the mark is not kept.
 
         Returns ``None`` when the summary is unusable or when another device already owns the
         session: ownership is set on first sight and never rebound, so a compromised device cannot
@@ -109,7 +118,7 @@ class SessionIndex:
         session_id = summary.get("session_id")
         async with self._db_lock:
             pending = self._pending_seq.get(session_id, 0) if isinstance(session_id, str) else 0
-            indexed = await asyncio.to_thread(self._upsert, summary, pending)
+            indexed = await asyncio.to_thread(self._upsert, summary, pending, closing)
             if indexed is None:
                 return None
             if self._pending_seq.get(indexed.session_id, 0) <= indexed.last_seq:
@@ -130,7 +139,7 @@ class SessionIndex:
             ).fetchone()
         return str(row["device_id"]) if row is not None else None
 
-    def _upsert(self, summary: Session, pending_seq: int) -> IndexedSession | None:
+    def _upsert(self, summary: Session, pending_seq: int, closing: bool) -> IndexedSession | None:
         session_id = summary.get("session_id")
         device_id = summary.get("device_id")
         if not isinstance(session_id, str) or not isinstance(device_id, str):
@@ -158,7 +167,7 @@ class SessionIndex:
             stored = dict(summary)
             stored.pop(FIELD, None)
             stored["last_seq"] = merged_seq
-            unseen = _mark_after(row, stored)
+            marked = not closing and _mark_after(row, stored)
             connection.execute(
                 """
                 INSERT INTO sessions(
@@ -177,7 +186,7 @@ class SessionIndex:
                     device_id,
                     state,
                     archived,
-                    int(unseen),
+                    int(marked),
                     merged_seq,
                     updated_at,
                     _dumps(stored),
@@ -188,8 +197,9 @@ class SessionIndex:
             device_id=device_id,
             state=state,
             last_seq=merged_seq,
-            unseen=unseen,
-            summary=with_mark(stored, unseen),
+            marked=marked,
+            unseen=shows(marked, stored),
+            summary=with_mark(stored, marked),
         )
 
     # ---- sequence cursor ----
@@ -272,25 +282,28 @@ class SessionIndex:
     # ---- the A47 mark ----
 
     async def clear_unseen(self, session_id: str) -> IndexedSession | None:
-        """Take a session's mark away. Returns the session when it had one, ``None`` otherwise."""
+        """Take a session's mark away. Returns the session when an app was being shown the mark.
+
+        The mark kept for a session nothing holds goes as well, but no app was shown it, so
+        nothing an app draws has changed and ``None`` comes back.
+        """
         async with self._db_lock:
             indexed = await asyncio.to_thread(self._clear_unseen, session_id)
             return None if indexed is None else self._overlaid(indexed)
 
     def _clear_unseen(self, session_id: str) -> IndexedSession | None:
         with self._connect() as connection:
-            cleared = connection.execute(
-                "UPDATE sessions SET unseen=0 WHERE session_id=? AND unseen=1", (session_id,)
-            ).rowcount
-            if not cleared:
-                return None
             row = connection.execute(
-                f"SELECT {_ROW} FROM sessions WHERE session_id=?", (session_id,)
+                f"SELECT {_ROW} FROM sessions WHERE session_id=? AND unseen=1", (session_id,)
             ).fetchone()
-        return None if row is None else _indexed(row)
+            if row is None:
+                return None
+            connection.execute("UPDATE sessions SET unseen=0 WHERE session_id=?", (session_id,))
+        shown = _indexed(row)
+        return _unmarked(shown) if shown.unseen else None
 
     async def count_unseen(self, device_ids: list[str]) -> int:
-        """How many unarchived sessions on these devices carry the mark: one account's badge."""
+        """How many sessions on these devices show the mark: one account's badge."""
         if not device_ids:
             return 0
         async with self._db_lock:
@@ -298,12 +311,33 @@ class SessionIndex:
 
     def _count_unseen(self, device_ids: list[str]) -> int:
         with self._connect() as connection:
-            row = connection.execute(
-                "SELECT COUNT(*) FROM sessions WHERE unseen=1 AND archived=0 "
+            rows = connection.execute(
+                "SELECT summary FROM sessions WHERE unseen=1 "
                 f"AND device_id IN ({','.join('?' * len(device_ids))})",
                 device_ids,
-            ).fetchone()
-        return int(row[0])
+            ).fetchall()
+        return sum(shows(True, _loads(row["summary"])) for row in rows)
+
+    async def clear_closed_unseen(self) -> int:
+        """Take the mark off every closed session still keeping one; returns how many had it.
+
+        Only a device replaces its summaries, so while one is away, a mark kept for one of its
+        closed sessions would stay, with nothing to take it off. No app was shown such a mark, so
+        no count moves.
+        """
+        async with self._db_lock:
+            return await asyncio.to_thread(self._clear_closed_unseen)
+
+    def _clear_closed_unseen(self) -> int:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT session_id, summary FROM sessions WHERE unseen=1"
+            ).fetchall()
+            closed = [
+                (str(row["session_id"]),) for row in rows if is_closed(_loads(row["summary"]))
+            ]
+            connection.executemany("UPDATE sessions SET unseen=0 WHERE session_id=?", closed)
+        return len(closed)
 
     # ---- reads ----
 
@@ -398,15 +432,22 @@ def _mark_after(row: Any, summary: Session) -> bool:
 
 
 def _indexed(row: Any) -> IndexedSession:
-    unseen = bool(row["unseen"])
+    marked = bool(row["unseen"])
+    summary = _loads(row["summary"])
     return IndexedSession(
         session_id=str(row["session_id"]),
         device_id=str(row["device_id"]),
         state=str(row["state"]),
         last_seq=int(row["last_seq"]),
-        unseen=unseen,
-        summary=with_mark(_loads(row["summary"]), unseen),
+        marked=marked,
+        unseen=shows(marked, summary),
+        summary=with_mark(summary, marked),
     )
+
+
+def _unmarked(item: IndexedSession) -> IndexedSession:
+    """``item`` with its mark taken away."""
+    return replace(item, marked=False, unseen=False, summary=with_mark(dict(item.summary), False))
 
 
 def _dumps(summary: Session) -> str:

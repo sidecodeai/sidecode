@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import uuid
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -513,8 +514,9 @@ def fake_device(device_id: str) -> DeviceConnection:
     return DeviceConnection(FakeSocket(), device_id)  # type: ignore[arg-type]
 
 
-def fake_app(username: str = "admin") -> AppConnection:
-    return AppConnection(FakeSocket(), username)  # type: ignore[arg-type]
+def fake_app(username: str = "admin", jti: str | None = None) -> AppConnection:
+    """An app socket; each one is its own sign-in unless the test names it."""
+    return AppConnection(FakeSocket(), username, jti or uuid.uuid4().hex)  # type: ignore[arg-type]
 
 
 def frames_of(connection: Connection) -> list[dict[str, Any]]:

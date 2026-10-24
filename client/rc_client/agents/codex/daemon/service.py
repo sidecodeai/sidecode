@@ -23,10 +23,10 @@ from ....models import Session
 from ....sessions import titles
 from ..account import RATE_LIMITS
 from ..models import ModelCatalog, catalog_cache
-from . import approvals, terminals, threads
+from . import dialogs, terminals, threads
 from .children import ChildIndex
 from .repair import DaemonRepair
-from .rpc import DaemonClient
+from .rpc import DaemonClient, NoReply
 from .session import CodexDaemonSession
 from .transport import socket_exists
 
@@ -68,6 +68,33 @@ def thread_config() -> dict[str, Any] | None:
         log.warning("ignoring an unreadable thread config override", env=THREAD_CONFIG_ENV)
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def _unattended(session: CodexDaemonSession) -> bool:
+    """Whether a request only a terminal could answer would wait for a person who is not there.
+
+    What the apps cannot show is otherwise left unanswered, for the terminal. A
+    turn started from an app on a thread no terminal is in has none, and
+    unanswered, the request would stop the turn for good. A turn the terminal
+    started is never called unattended. The scan that finds terminals is blind
+    to some, and a terminal may not be known yet when Codex replays its open
+    request to a thread just attached, so an answer would be given for a person
+    who is there.
+    """
+    return session.local_turn and not session.terminal_holds
+
+
+def _listed(answer: dict[str, Any]) -> bool:
+    """Whether a daemon listing answered at all: one that failed is `{}`, with no list in it."""
+    return isinstance(answer.get("data"), list)
+
+
+def _whole_history(listing: dict[str, Any]) -> bool:
+    """Whether a `thread/list` answer is the whole history, which Codex ends with no cursor.
+
+    An answer that failed is no page at all, so never the whole history.
+    """
+    return _listed(listing) and not listing.get("nextCursor")
 
 
 class CodexDaemonService:
@@ -238,8 +265,12 @@ class CodexDaemonService:
         }
         child_updates: list[tuple[str, str, bool]] = []
         async with self._lock:
+            # Most recently used first. Codex orders by creation unless told
+            # otherwise, which pushes a thread started long ago off the page
+            # however recently it was used. Every release from 0.153 takes the key.
             history = await self._safe_request(
-                "thread/list", {"limit": HISTORY_LIMIT, "sortDirection": "desc"}
+                "thread/list",
+                {"limit": HISTORY_LIMIT, "sortKey": "updated_at", "sortDirection": "desc"},
             )
             loaded = await self._safe_request("thread/loaded/list", {})
             live = {
@@ -252,7 +283,10 @@ class CodexDaemonService:
                 await self._adopt(summary, loaded=summary.thread_id in live)
             for thread_id in live - self._known:
                 await self._adopt_by_id(thread_id, child_updates=child_updates)
-            await self._forget_deleted(page, live)
+            if _listed(loaded):
+                # Without the list of loaded threads nothing can be called gone: a
+                # thread being driven may have no rollout to list yet.
+                await self._forget_deleted(page, live, complete=_whole_history(history))
             await self.refresh_terminals()
         # Finishing a turn can drain its queue and start another daemon request.
         # Neither the index lock nor the session's notification lock may hold it.
@@ -325,17 +359,27 @@ class CodexDaemonService:
                     claims -= 1
                 await self.publish_control(entry)
 
-    async def _forget_deleted(self, page: list[threads.ThreadSummary], live: set[str]) -> None:
+    async def _forget_deleted(
+        self, page: list[threads.ThreadSummary], live: set[str], complete: bool
+    ) -> None:
         """Drop sessions for threads deleted in Codex, as the mirror does for transcripts.
 
-        `thread/list` is one page, so a thread missing from it may only have
-        fallen off the end. Only a thread newer than the oldest entry on the page
-        would have been on it, which is what makes its absence proof of deletion.
+        A complete page is the whole history, so a thread missing from it is gone
+        however long ago it was used. Otherwise `thread/list` is one page, most
+        recently used first, and a thread missing from it may only have fallen
+        off the end. Only a thread the daemon last saw used after the oldest
+        entry on the page would have been on it, which is what makes its absence
+        proof of deletion; one used at that very moment may have been cut off by
+        the page size. That time is `_used`, in the clock the page is sorted by:
+        the session record's own `updated_at` moves to now whenever the device
+        publishes the session, so it says nothing about when Codex last saw the
+        thread used. An empty page proves nothing, complete or not: it is what a
+        daemon that listed nothing looks like, and silence is not evidence.
         """
         if not page:
             return
         seen = {summary.thread_id for summary in page}
-        cutoff = min(summary.updated_at for summary in page)
+        cutoff = None if complete else min(summary.updated_at for summary in page)
         for thread_id in sorted(self._known - seen - live):
             entry = self.hub.entries.get(thread_id)
             if entry is None:
@@ -344,7 +388,8 @@ class CodexDaemonService:
             keeps_running = entry.runner is not None and not isinstance(
                 entry.runner, CodexDaemonSession
             )
-            if keeps_running or entry.session.updated_at < cutoff:
+            last_used = self._used.get(thread_id, entry.session.updated_at)
+            if keeps_running or (cutoff is not None and last_used <= cutoff):
                 continue
             self._known.discard(thread_id)
             self._loaded.discard(thread_id)
@@ -537,13 +582,17 @@ class CodexDaemonService:
         self._attaching.add(thread_id)
         try:
             runner = self.session_for(entry, resume=thread_id)
+            # Codex replays what is pending on a thread the moment it is resumed,
+            # and a request finds its session through the entry: the runner goes
+            # there first, or a terminal's open approval is replayed to nobody.
+            entry.runner = runner
             await runner.start()
         except RcError as exc:
+            entry.runner = None
             log.warning("could not attach to a codex thread", error=exc.message[:120])
             return
         finally:
             self._attaching.discard(thread_id)
-        entry.runner = runner
         if runner.subscribed:
             await runner.publish_settings()
 
@@ -817,9 +866,15 @@ class CodexDaemonService:
         thread_id = str(params.get("threadId") or "")
         session = self._session(thread_id)
         if session is None:
-            if method in approvals.APPROVAL_METHODS:
-                # Nobody is watching this thread here; let the terminal answer.
-                raise RcError("conflict", "no attached session for this thread")
+            # Nobody here follows this thread, so whoever does can answer it, and
+            # an error from this side would settle the request before they could.
+            raise NoReply(f"no attached session for {method}")
+        if _unattended(session) and not dialogs.presents(method):
+            # Nobody else can answer what the apps cannot show, and a request
+            # left open would stop the turn for good: an elicitation has a
+            # decline that needs no person, and anything else is refused.
+            if method == dialogs.ELICITATION_METHOD:
+                return dialogs.elicitation_decline()
             raise RcError("unsupported", f"unhandled codex request {method}")
         return await session.server_request(request_id, method, params)
 

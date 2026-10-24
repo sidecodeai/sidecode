@@ -108,6 +108,7 @@ directory to your `PATH` to call it by name.
   state/channel.sock        where channel bridges register (see below)
   state/pi-extension.sock   where pi extensions register (see "pi")
   state/link.json           what the gateway link last said about itself
+  state/daemon.lock         held while a daemon runs, so only one runs per home
   bin/claude                the shim that starts an attachable Claude session
   logs/                     rc-client.out.log and rc-client.err.log (macOS)
   logs/update.log           what the last `self-update` did, and why it stopped if it did
@@ -175,6 +176,20 @@ loginctl enable-linger $USER
 
 The Linux path has not been exercised: neither `rc-client service install` nor the systemd unit has
 been run on a real machine.
+
+**One daemon runs per home.** The daemon takes an exclusive `flock` on `state/daemon.lock` before it
+opens a socket or dials the gateway, and holds it until its sockets have been removed on the way
+out. It has to: each daemon unlinks the channel and pi sockets as it starts and as it stops, so a
+second one on the same home would take the first one's sockets away, and every shim, hook, bridge
+and pi extension would dial a path nobody listens on until the service restarted. The kernel drops
+the lock when the process dies, `SIGKILL` included, and the daemon's children never inherit it. A
+second `rc-client run` on the same `RC_CLIENT_HOME`, such as a foreground run beside the service,
+waits up to 20 seconds for the lock, then prints
+`error: another rc-client is already running for this home`, naming the lock file, and exits `1`,
+leaving the first daemon's sockets alone; a different `RC_CLIENT_HOME` has its own lock. launchd and
+systemd start such a loser again each time it gives up, about every 25 seconds, until the holder
+exits. A filesystem that cannot lock logs `single-instance lock unavailable` and the daemon runs
+without the lock.
 
 ## A terminal on the device (A38)
 
@@ -549,14 +564,28 @@ to `remote`.
 ### Working means all of it
 
 `docs/DESIGN.md` § "Working means all of it": a session is `running`
-while any work it started is still under way — its own turn, or a subagent it spawned that has not
-finished — and its turn does not end, so no `turn_completed`, no "Turn finished" push and no drain
-of the held queue, until the last of it has. `needs_approval` and `needs_input` still mean exactly
+while any work it started is still under way — its own turn, a subagent it spawned that has not
+finished, or, in an attached Claude terminal, a background workflow its turn left running — and its
+turn does not end, so no `turn_completed`, no "Turn finished" push and no drain of the held queue,
+until the last of it has. `needs_approval` and `needs_input` still mean exactly
 that, whoever asked — the agent or a subagent working for it — and `idle` means everything has
 finished. A message held for a session the device drives therefore waits for the subagents as it
 waits for any turn. An attached Claude terminal is the exception since A51: its CLI takes a message
 between its own turns while subagents are still at work, exactly as it takes the person's, so the
 device injects then and the session goes on showing `running` until the last subagent finishes.
+
+The same holds in an attached Claude terminal for the background subagents and workflows its `Stop`
+hook counts (`background` in the hook's `turn` frame: the `subagent` and `workflow` entries of the
+payload's `background_tasks` whose status is missing, `running` or `pending`, as a number and never
+what they run). The apps' turn stays open across the wake-ups the end of each task causes: each
+prompt that starts a turn lets the hold go and that turn's `Stop` counts afresh, so one turn ends
+once, when the count reaches zero. Background shells are not counted, since some never end, such as
+dev servers and watchers; nor are teammates, which read `running` for as long as they exist, or a
+`/loop`'s scheduled prompts (`session_crons`). The hold also ends when the person presses Stop in an
+app (no Escape is typed, the CLI being idle, and the turn ends as `interrupted`), when the CLI
+disconnects, and thirty minutes after the `Stop` that counted it (`BACKGROUND_HOLD`, the bound of a
+silent subagent). A slash command lets nothing go, since it may only open a dialog, which no `Stop`
+follows; a Claude Code that lists no tasks keeps the earlier behaviour.
 
 **Claude Code.** The CLI writes each subagent's transcript under the session's own directory,
 `<project>/<session id>/subagents/agent-<id>.jsonl`, beside an `agent-<id>.meta.json` that names the
@@ -574,7 +603,9 @@ assistant row whose message never completed, and reading those as finished was t
 
 Where it applies. A mirrored or attached terminal session (`sessions/mirror.py`) is busy while its
 transcript's turn is open **or** its subagents are working — busy as the apps see it; an attached
-session decides injecting by its own turn alone (A51) — and the subagents are asked on every tail
+session decides injecting by its own turn alone (A51), and is shown busy as well while the
+background subagents and workflows its last `Stop` counted are taken to run — and the subagents are
+asked on every tail
 interval even when the parent transcript has not grown, because the last one finishing writes
 nothing to the parent the mirror could wait for, and only a change of answer is published. When the
 terminal process is gone, so is everything it was running, and the flag is cleared with the turn. A
@@ -731,6 +762,18 @@ Every ten seconds the daemon scans for agent sessions it did not create:
 
 pi needs no scan: its terminal sessions reach the device through the extension that
 `rc-client pi setup` installs (see "pi").
+
+The first scan does not wait for the interval. It starts with the daemon, before the link dials, and
+the first `hello` of a run waits for it, at most three seconds (`FIRST_SCAN_WAIT`). The hub
+restores every persisted session as held by nothing (`control: "none"`), and the gateway shows no
+unseen mark (A47) for a session nothing holds, so a `hello` that said so after a restart, an
+update's included, would hide the mark of every terminal still running. That first pass settles who
+holds what, Claude's terminals first because they need nothing from the Codex daemon or the Grok
+leader, whose ticks wait on those processes, and leaves the settings reads, a whole transcript per
+session, for the one after it. A scan that is not done when the wait ends is not waited for again:
+the `hello` goes as the hub restored the sessions, one warning line says so (`first hello sent
+before the first terminal scan settled`), and what the scan finds afterwards is published like any
+change. A reconnect in the same run never waits.
 
 An attached Claude session does not wait for the scan. A terminal attaches before its CLI has
 written anything, and the transcript appears with the first row, so every tail pass (every two
@@ -1075,8 +1118,10 @@ one `turn` frame and reads one `turn_reply`: a prompt says whose it was (the dev
 by its id, another agent's message, a slash command, or the person's words) and never what it said;
 a batch of the main thread's tool calls — never a subagent's, which carry an `agent_id` — asks for
 what was steered into the turn and prints it as the batch's `additionalContext` with a
-`systemMessage` the terminal shows; a `Stop` waits while the daemon writes what it held for the
-turn's end. Each keeps to its budget — a second, two for `Stop`, counted from its start — and sends
+`systemMessage` the terminal shows; a `Stop` says how many background subagents and workflows it
+leaves running — a number, never what they run; shells are not counted, since some never end — and
+waits while the daemon writes what it held for the turn's end. Each keeps to its budget — a second,
+two for `Stop`, counted from its start — and sends
 the moment it stops waiting, so the daemon begins nothing it could not answer in time; it answers at
 once when the daemon has nothing, and a `Stop` with nothing to deliver does not wait for the
 session at all. The timeouts in the settings file (2 s, 3 s for `Stop`) are Claude Code's backstop.
@@ -1413,9 +1458,23 @@ One connection for the whole machine, opened at startup, identified as `remote-c
 that is historical evidence, not a rule for every release. A terminal thread on Codex 0.160.0
 carries `originator: "codex-tui"` and `source: "vscode"`. On top of the connection:
 
-- `thread/list` is the session history and `thread/loaded/list` the live threads. Threads marked
+- `thread/list` is the session history and `thread/loaded/list` the live threads. The history is one
+  page of 100 asked for most recently used first (`sortKey: "updated_at"`): Codex orders by creation
+  unless told otherwise, which pushes a thread started long ago off the page however recently it was
+  used. Every release from 0.153, the oldest supported, accepts that key (read in the source of each
+  stable tag up to 0.164), and a `thread/list` parameter a release does not know is ignored, not
+  rejected. Codex counts `createdAt` and `updatedAt` in seconds, and the device converts them to
+  milliseconds when it reads a thread, as every timestamp in the protocol is. Threads marked
   `ephemeral` are dropped: Codex spawns one per turn just to generate a title, and so is every
   thread another application on this machine owns (below).
+- A session whose thread is missing from that page and is not loaded is forgotten only if it cannot
+  have fallen off the end of it. An answer that ends with no `nextCursor` is the whole history, and
+  the session goes however long ago the thread was used. Otherwise only a thread the daemon last
+  reported used strictly after the page's oldest entry would have been on the page, so only its
+  absence proves deletion; the session record's own `updated_at` is never compared, because it
+  moves to now whenever the device publishes the session. An empty page, or an answer that failed,
+  forgets nothing, and neither does a refresh whose list of loaded threads failed: a thread the
+  device is driving may have no rollout to list yet, and that list is all that says it exists.
 - A loaded thread is subscribed with `thread/resume {excludeTurns: true}` and backfilled from
   `thread/items/list`, so the block timeline comes from the daemon rather than from a rollout file.
   Rollout mirroring stays only for the threads the daemon does not know about.
@@ -1465,6 +1524,23 @@ carries `originator: "codex-tui"` and `source: "vscode"`. On top of the connecti
   `allow_always` and `deny`. Whoever answers first wins; when somebody else answers,
   `serverRequest/resolved` closes our block with `decision: {option_id: "elsewhere", by: "terminal"}`
   and our late reply is discarded silently.
+- A request the device does not present is left unanswered, not refused. The daemon sends a thread's
+  request to every subscribed client and the first reply of any kind, an error included, settles
+  it, so an error from the device would decline a tool call before the terminal's person was asked
+  (read in the source of Codex 0.153.0 and 0.163.0). The device replies only to the three approval
+  kinds and `item/tool/requestUserInput` of a thread it follows; every other method, and every
+  request for a thread with no session here, gets no reply (`NoReply` in `daemon/rpc.py`), except
+  in a turn this device started on a thread no terminal is in: nobody else could answer there and
+  the request would stop the turn for good, so an unhandled method is refused with an error. The
+  runner goes on the session before `thread/resume`, because Codex replays what is pending on a
+  thread right behind its answer.
+- An MCP elicitation (`mcpServer/elicitation/request`, which Codex 0.163 also uses to approve an MCP
+  tool call) is not shown in the apps and is left to the terminal. The exception is a turn this
+  device started on a thread no terminal is in: nobody could answer it and the turn would wait for
+  good, so the device declines it with `{"action": "decline", "content": null, "_meta": null}`, the
+  result shape every release from 0.153 to 0.164 declares. A turn a terminal started is never
+  declined: the terminal scan is blind to some terminals and may not know one yet when the request
+  is replayed on attach.
 - The connection reconnects with backoff. On every reconnect each followed thread is resumed again
   and backfilled from the last item we published, so a daemon restart loses nothing.
 
@@ -2201,6 +2277,11 @@ the frame pump, never in front of it. Holding the pump back left every forwarded
 until that work finished, including the ones it was meant to answer, and the backfill request timed
 out against a device that was connected and silent.
 
+A frame published between the `hello`'s snapshot and the gateway's ack queues behind the `hello`
+instead of being dropped: it describes a change the snapshot cannot hold, and the sender that
+writes it starts once the ack is in. A frame published before the snapshot is still dropped,
+because the snapshot holds what it describes, and so is one published while the link is down.
+
 ### Staying on time
 
 Two things used to put the loop on the disk's clock. Registry writes committed one per published
@@ -2301,6 +2382,9 @@ and Codex out of step.
 
 - Linux has never been run: neither the systemd unit nor `service install`.
 - Codex sessions cannot be taken over, by design: on the shared daemon they are attached instead.
+- A Codex MCP tool approval (`mcpServer/elicitation/request`) is not shown in the apps: it is left
+  to the terminal, and declined when a turn an app started has no terminal in the thread. One left
+  to a terminal that then exits is not decided again, and waits for Stop.
 - A successful `session.takeover` has not been exercised end to end; the refusal path has.
 - `todos` events were unit-tested but never driven through a live agent.
 - The session-scoped grant (`allow_session`) and an approval for a command have not been exercised

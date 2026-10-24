@@ -5,6 +5,7 @@ import { StatusDot } from '../../components/StatusDot';
 import { UnseenDot } from '../../components/UnseenDot';
 import { relativeTime, tildePath } from '../../lib/format';
 import { agentLabel, sessionOriginLabel, sessionTitle, strings } from '../../strings';
+import { showsUnseenDot } from '../../stores/sessions';
 import type { Session } from '../../protocol/types';
 import { SessionCloseButton } from './SessionCloseButton';
 
@@ -25,7 +26,7 @@ export function SessionRow({ session, online, onOpen }: Props) {
   const origin = sessionOriginLabel(session);
   const word = session.archived ? `${strings.sessions.archived} · ${origin}` : origin;
   const unseenId = useId();
-  const unseen = session.unseen === true;
+  const unseen = showsUnseenDot(session);
 
   return (
     <li className="session-row">

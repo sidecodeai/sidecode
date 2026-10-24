@@ -100,6 +100,169 @@ def test_the_frame_says_when_the_hook_stops_waiting() -> None:
     assert abs(float(str(frame["deadline"])) - expected) < 0.01
 
 
+def tasks(*kinds: str) -> list[dict[str, Any]]:
+    """The `background_tasks` of a Stop payload: one running entry for each type."""
+    return [
+        {"id": f"t{index}", "type": kind, "status": "running", "description": f"a {kind}"}
+        for index, kind in enumerate(kinds)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("kinds", "count"),
+    [
+        ((), 0),
+        (("subagent",), 1),
+        (("workflow", "workflow"), 2),
+        (("subagent", "workflow"), 2),
+        (("shell",), 0),
+        (("shell", "shell"), 0),
+        (("shell", "subagent", "shell", "workflow"), 2),
+        (("teammate",), 0),
+        (("teammate", "subagent", "teammate", "workflow"), 2),
+        (("monitor", "dream", "something_new"), 0),
+    ],
+)
+def test_a_stop_counts_the_subagents_and_workflows_it_leaves_running(
+    kinds: tuple[str, ...], count: int
+) -> None:
+    frame = turnhook.frame(payload("Stop", background_tasks=tasks(*kinds)))
+    assert frame is not None and frame["background"] == count
+
+
+def test_a_background_shell_is_not_work_the_turn_waits_for() -> None:
+    """A dev server or a watcher never ends: counting it would hold the session for good."""
+    server = {
+        "id": "b1",
+        "type": "shell",
+        "status": "running",
+        "description": "Run the dev server",
+        "command": "npm run dev",
+    }
+    frame = turnhook.frame(payload("Stop", background_tasks=[server]))
+    assert frame is not None and frame["background"] == 0
+    frame = turnhook.frame(payload("Stop", background_tasks=[server, *tasks("workflow")]))
+    assert frame is not None and frame["background"] == 1
+
+
+@pytest.mark.parametrize(
+    ("fields", "count"),
+    [
+        ({"status": "running"}, 1),
+        ({"status": "pending"}, 1),
+        ({}, 1),
+        ({"status": None}, 1),
+        ({"status": "completed"}, 0),
+        ({"status": "failed"}, 0),
+        ({"status": "killed"}, 0),
+        ({"status": "something_new"}, 0),
+        ({"status": ["running"]}, 0),
+    ],
+)
+def test_a_task_counts_while_it_runs_or_waits_and_not_once_it_is_over(
+    fields: dict[str, Any], count: int
+) -> None:
+    """Claude Code lists only live work, and one that says it is over is not held for."""
+    entry = {"id": "t1", "type": "subagent", "description": "a subagent", **fields}
+    frame = turnhook.frame(payload("Stop", background_tasks=[entry]))
+    assert frame is not None and frame["background"] == count
+
+
+def test_each_entry_is_judged_by_its_own_status() -> None:
+    listed = [
+        {"id": "a", "type": "subagent", "status": "completed"},
+        {"id": "b", "type": "workflow", "status": "pending"},
+        {"id": "c", "type": "workflow", "status": "running"},
+        {"id": "d", "type": "workflow", "status": "killed"},
+        {"id": "e", "type": "teammate", "status": "running"},
+        {"id": "f", "type": "shell", "status": "running"},
+    ]
+    frame = turnhook.frame(payload("Stop", background_tasks=listed))
+    assert frame is not None and frame["background"] == 2
+
+
+def test_a_scheduled_prompt_is_not_work_under_way() -> None:
+    crons = [{"id": "c1", "cron": "*/5 * * * *", "prompt": "check the build"}]
+    frame = turnhook.frame(payload("Stop", background_tasks=[], session_crons=crons))
+    assert frame is not None and frame["background"] == 0
+    frame = turnhook.frame(payload("Stop", background_tasks=tasks("subagent"), session_crons=crons))
+    assert frame is not None and frame["background"] == 1
+
+
+@pytest.mark.parametrize(
+    "listed",
+    [
+        None,
+        "subagent",
+        3,
+        {"type": "subagent"},
+        [
+            None,
+            7,
+            "subagent",
+            ["subagent"],
+            {"type": ["subagent"]},
+            {"type": None},
+            {"status": "running"},
+        ],
+    ],
+)
+def test_a_stop_with_no_usable_list_of_tasks_counts_none_and_is_still_sent(listed: Any) -> None:
+    """A Claude Code from before the field has none, and the turn's end is told all the same."""
+    frame = turnhook.frame(payload("Stop", background_tasks=listed))
+    assert frame is not None and frame["background"] == 0
+    bare = turnhook.frame(payload("Stop"))
+    assert bare is not None and bare["background"] == 0
+
+
+def test_only_the_stop_carries_the_count() -> None:
+    for event in ("UserPromptSubmit", "PostToolBatch"):
+        frame = turnhook.frame(payload(event, prompt="go", background_tasks=tasks("subagent")))
+        assert frame is not None and "background" not in frame
+
+
+def test_only_a_number_crosses_the_hook_boundary(short_dir: Path) -> None:  # noqa: F811
+    """What the background tasks run, and what they were asked, stay in the hook."""
+    path = short_dir / "c.sock"
+    secrets = ("rm -rf /private/dir", "token-in-a-description", "the secret plan", "secret cron")
+    running = [
+        {
+            "id": "b1",
+            "type": "shell",
+            "status": "running",
+            "description": secrets[1],
+            "command": secrets[0],
+        },
+        {
+            "id": "a1",
+            "type": "subagent",
+            "status": "running",
+            "description": "x",
+            "prompt": secrets[2],
+        },
+        {"id": "w1", "type": "workflow", "status": "running", "description": "y"},
+    ]
+    daemon = Daemon(path, wire.turn_reply())
+    try:
+        done, _ = run_hook(
+            path,
+            payload(
+                "Stop",
+                background_tasks=running,
+                session_crons=[{"id": "c1", "prompt": secrets[3]}],
+                last_assistant_message="the secret reply",
+            ),
+        )
+        daemon.thread.join(timeout=2)
+    finally:
+        daemon.close()
+    assert done.returncode == 0
+    assert [without_deadline(frame) for frame in daemon.frames] == [
+        {"type": "turn", "event": "stop", "session_id": "sess-1", "background": 2}
+    ]
+    assert not any(secret in json.dumps(daemon.frames) for secret in (*secrets, "secret reply"))
+
+
 def test_frames_the_device_has_no_part_in_are_not_sent() -> None:
     assert turnhook.frame(payload("PreToolUse")) is None
     assert turnhook.frame({**payload("Stop"), "session_id": "no spaces allowed"}) is None

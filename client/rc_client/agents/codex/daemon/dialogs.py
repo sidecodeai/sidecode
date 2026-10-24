@@ -18,14 +18,32 @@ from ....logging_setup import logger
 from ....sessions.channel import SessionChannel
 from ..prompts import answers_payload, question_blocks
 from . import approvals
+from .rpc import NoReply
 
 log = logger("rc_client.codex.daemon.dialogs")
 
 APPROVAL_TIMEOUT = 300.0
 QUESTION_METHOD = "item/tool/requestUserInput"
+# An MCP server asking for a person's word, which Codex 0.163 also uses for the
+# approval of an MCP tool call. Only a terminal can answer one today.
+ELICITATION_METHOD = "mcpServer/elicitation/request"
 
 DiffLookup = Callable[[str], dict[str, Any] | None]
 BusyCheck = Callable[[], bool]
+
+
+def presents(method: str) -> bool:
+    """Whether the apps can show this request to a person, which is the only answer they have."""
+    return method in approvals.APPROVAL_METHODS or method == QUESTION_METHOD
+
+
+def elicitation_decline() -> dict[str, Any]:
+    """The result that declines an MCP elicitation, the one answer needing no person.
+
+    Codex types the result as `action` plus a nullable `content` and `_meta`
+    (`McpServerElicitationRequestResponse`); a decline carries no content.
+    """
+    return {"action": "decline", "content": None, "_meta": None}
 
 
 def approval_block(method: str, params: dict[str, Any], cwd: str) -> dict[str, Any]:
@@ -95,11 +113,13 @@ class DialogDesk:
     # ------------------------------------------------------------- inbound
 
     async def request(self, daemon_id: Any, method: str, params: dict[str, Any]) -> Any:
-        if method in approvals.APPROVAL_METHODS:
-            return await self._approval(daemon_id, method, params)
+        if not presents(method):
+            # Whatever else the daemon asks was meant for another client, and an
+            # error from here would answer it for them.
+            raise NoReply(f"the apps cannot answer {method}")
         if method == QUESTION_METHOD:
             return await self._question(daemon_id, params)
-        raise RcError("unsupported", f"unhandled codex request {method}")
+        return await self._approval(daemon_id, method, params)
 
     async def resolved_elsewhere(self, daemon_id: Any) -> None:
         """`serverRequest/resolved`: somebody else answered this prompt first."""

@@ -6,6 +6,11 @@ payload carries identifiers and one generic sentence, so a notification on a loc
 user which device wants attention and nothing about the code being written. Either cue is
 delivered to the registrations of the account that owns the device and to nobody else (A24).
 
+An app watching the session (see `SessionTransition`) spares its person a second notice of what is
+already on a screen: any watcher silences Web Push, and a watcher silences the alert for the
+phones unless it is one of the phones. The iPhone app stays subscribed when it goes to the
+background or the phone locks, which is when its alert is wanted most.
+
 Every payload also carries the account's count of sessions marked `unseen` (A47), which an iPhone
 shows as its app icon's badge, and a change to that count no push carried reaches the account's
 phones as a badge-only notification once the count settles (see `badge.py`).
@@ -25,7 +30,7 @@ from .apns import PRIORITY_IMMEDIATE, PRIORITY_POWER_AWARE, ApnsProvider, ApnsRe
 from .badge import BadgeChange, BadgeSettler, Sleep
 from .hub import SessionResumeNotice, SessionTransition
 from .logging import logger
-from .push_store import PushStore, WebPushSubscription
+from .push_store import ApnsRegistration, PushStore, WebPushSubscription
 
 log = logger("rc_gateway.push")
 
@@ -71,7 +76,7 @@ WEB_PUSH_TIMEOUT_SECONDS = 10.0
 PUSH_THREADS = 4
 
 DeviceNameLookup = Callable[[str], Awaitable[str]]
-#: A47: an account's unarchived sessions carrying `unseen`, read when a push is built.
+#: A47: how many of an account's sessions show `unseen`, read when a push is built.
 BadgeCount = Callable[[str], Awaitable[int]]
 
 
@@ -97,6 +102,20 @@ def transition_kind(previous_state: str, state: str) -> str | None:
 def resume_kind(status: str) -> str | None:
     """Map a ``resume`` event's status to a notification kind, or ``None`` for a silent one."""
     return _RESUME_KINDS.get(status)
+
+
+def phones_silenced(
+    active_subscribers: frozenset[str], registrations: list[ApnsRegistration]
+) -> bool:
+    """Whether a watcher that is not one of the phones silences the alert for them.
+
+    A phone's own sign-in never does, however recently it was used: the iPhone app keeps its
+    subscription through the background and a locked screen, and drops a notification itself while
+    it is in the foreground. Any other sign-in is a screen the person is using, a browser or a
+    desktop app, and the alert would tell them twice. A sign-in with no live registration is not a
+    phone, an expired one included.
+    """
+    return bool(active_subscribers - {item.session_jti for item in registrations})
 
 
 def build_payload(
@@ -181,15 +200,16 @@ class PushService:
         kind = transition_kind(transition.previous_state, transition.state)
         if kind is None:
             return
-        if transition.has_active_subscriber:
-            log.debug("push suppressed: an app is watching this session", kind=kind)
-            return
         if not transition.owner:
             log.debug("push skipped: the device has no owner", kind=kind)
             return
         device_id = str(transition.session.get("device_id") or "")
         await self.notify(
-            kind, transition.session, await self._device_name(device_id), transition.owner
+            kind,
+            transition.session,
+            await self._device_name(device_id),
+            transition.owner,
+            transition.active_subscribers,
         )
 
     async def on_session_resume(self, notice: SessionResumeNotice) -> None:
@@ -197,25 +217,38 @@ class PushService:
         kind = resume_kind(notice.status)
         if kind is None:
             return
-        if notice.has_active_subscriber:
-            log.debug("push suppressed: an app is watching this session", kind=kind)
-            return
         if not notice.owner:
             log.debug("push skipped: the device has no owner", kind=kind)
             return
         session = {"session_id": notice.session_id, "device_id": notice.device_id}
-        await self.notify(kind, session, await self._device_name(notice.device_id), notice.owner)
+        await self.notify(
+            kind,
+            session,
+            await self._device_name(notice.device_id),
+            notice.owner,
+            notice.active_subscribers,
+        )
 
     async def notify(
-        self, kind: str, session: dict[str, Any], device_name: str, owner: str
+        self,
+        kind: str,
+        session: dict[str, Any],
+        device_name: str,
+        owner: str,
+        active_subscribers: frozenset[str] = frozenset(),
     ) -> None:
+        """Push to the owner's browsers and phones, unless an app watching the session shows it.
+
+        ``active_subscribers`` are the sign-ins of the apps watching the session. Any one of them
+        silences Web Push; only one that is not a phone silences the alert for the phones.
+        """
         # Counted now, after the hub stored the change that cued this push (A47).
         badge = await self._badge_count(owner)
         payload = build_payload(kind, session, device_name, badge)
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         await asyncio.gather(
-            self._deliver_web(body, owner),
-            self._enqueue_apns(payload, owner),
+            self._deliver_web(body, owner, watched=bool(active_subscribers)),
+            self._enqueue_apns(payload, owner, active_subscribers),
             return_exceptions=True,
         )
 
@@ -237,12 +270,16 @@ class PushService:
         payload = build_payload(
             KIND_BADGE, session, await self._device_name(change.device_id), badge
         )
-        await self._enqueue_apns(payload, change.owner)
+        # Shows nothing, so there is nothing for a watching app to spare anyone.
+        await self._enqueue_apns(payload, change.owner, frozenset())
 
     # ---- web push ----
 
-    async def _deliver_web(self, body: str, owner: str) -> None:
+    async def _deliver_web(self, body: str, owner: str, *, watched: bool) -> None:
         if not self.web_enabled:
+            return
+        if watched:
+            log.debug("web push suppressed: an app is watching this session")
             return
         subscriptions = await self.store.list_web(owner)
         results = await asyncio.gather(
@@ -294,13 +331,20 @@ class PushService:
 
     # ---- apns ----
 
-    async def _enqueue_apns(self, payload: dict[str, Any], owner: str) -> None:
+    async def _enqueue_apns(
+        self, payload: dict[str, Any], owner: str, active_subscribers: frozenset[str]
+    ) -> None:
         if self.apns is None:
             return
         registrations = await self.store.list_apns(owner)
         if not registrations:
             return
         rc = payload["rc"]
+        if phones_silenced(active_subscribers, registrations):
+            log.debug(
+                "apns push suppressed: an app besides the phones is watching", kind=rc["kind"]
+            )
+            return
         body = json.dumps(_apns_payload(payload), ensure_ascii=False, separators=(",", ":"))
         for registration in registrations:
             await self.store.enqueue(

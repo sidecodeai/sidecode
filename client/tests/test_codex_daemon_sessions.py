@@ -53,8 +53,9 @@ def thread_row(thread_id: str = THREAD, **extra: Any) -> dict[str, Any]:
         "cwd": "/repo",
         "preview": "Typecheck the web app",
         "ephemeral": False,
-        "createdAt": 1788946200000,
-        "updatedAt": 1788946241700,
+        # Codex counts seconds here; the protocol counts milliseconds.
+        "createdAt": 1788946200,
+        "updatedAt": 1788946241,
         "model": "gpt-5.4-codex",
         "reasoningEffort": "medium",
         "status": {"type": "idle"},
@@ -373,8 +374,8 @@ async def test_one_terminal_claims_one_thread_in_its_directory(harness: Harness)
     for the whole directory.
     """
     await started(harness, loaded=[])
-    older = thread_row("t-old", updatedAt=1788946000000)
-    recent = thread_row("t-recent", updatedAt=1788946900000)
+    older = thread_row("t-old", updatedAt=1788946000)
+    recent = thread_row("t-recent", updatedAt=1788946900)
     harness.daemon.replies["thread/list"] = {"data": [thread_row(), older, recent]}
     harness.daemon.replies["thread/loaded/list"] = {"data": [THREAD, "t-old", "t-recent"]}
     await harness.service.refresh()
@@ -391,7 +392,7 @@ async def test_two_terminals_in_one_directory_claim_two_threads(harness: Harness
     await started(harness, loaded=[])
     harness.terminals.counts = {"/repo": 2}
     harness.daemon.replies["thread/list"] = {
-        "data": [thread_row(), thread_row("t-old", updatedAt=1788946000000)]
+        "data": [thread_row(), thread_row("t-old", updatedAt=1788946000)]
     }
     harness.daemon.replies["thread/loaded/list"] = {"data": [THREAD, "t-old"]}
     await harness.service.refresh()
@@ -409,18 +410,18 @@ async def test_a_thread_a_terminal_opens_is_no_session_until_it_speaks(
     """
     await started(harness, loaded=[])
     harness.daemon.replies["thread/list"] = {
-        "data": [thread_row(), thread_row("t-old", updatedAt=1788946000000)]
+        "data": [thread_row(), thread_row("t-old", updatedAt=1788946000)]
     }
     harness.daemon.replies["thread/loaded/list"] = {"data": [THREAD, "t-old"]}
     await harness.service.refresh()
 
-    opened = thread_row("t-tui", preview="", updatedAt=1788947000000)
+    opened = thread_row("t-tui", preview="", updatedAt=1788947000)
     await harness.daemon.notify("thread/started", {"thread": opened})
     await asyncio.sleep(0.1)
     assert "t-tui" not in harness.hub.entries
     assert harness.service.knows("t-tui") is True
 
-    used = thread_row("t-tui", preview="ok then", updatedAt=1788947000000)
+    used = thread_row("t-tui", preview="ok then", updatedAt=1788947000)
     harness.daemon.replies["thread/read"] = {"thread": used}
     await harness.daemon.notify(
         "thread/status/changed", {"threadId": "t-tui", "status": {"type": "active"}}
@@ -439,7 +440,7 @@ async def test_a_thread_a_terminal_opens_is_no_session_until_it_speaks(
 
     # The one terminal in the directory now speaks for the thread it opened.
     harness.daemon.replies["thread/list"] = {
-        "data": [thread_row(), thread_row("t-old", updatedAt=1788946000000), used]
+        "data": [thread_row(), thread_row("t-old", updatedAt=1788946000), used]
     }
     harness.daemon.replies["thread/loaded/list"] = {"data": [THREAD, "t-old", "t-tui"]}
     await harness.service.refresh()
@@ -476,9 +477,7 @@ async def test_a_thread_deleted_while_we_are_attached_is_forgotten(harness: Harn
     await started(harness, loaded=[THREAD])
     assert isinstance(harness.hub.entry(THREAD).runner, CodexDaemonSession)
 
-    harness.daemon.replies["thread/list"] = {
-        "data": [thread_row("t-other", updatedAt=1788946000000)]
-    }
+    harness.daemon.replies["thread/list"] = {"data": [thread_row("t-other", updatedAt=1788946000)]}
     harness.daemon.replies["thread/loaded/list"] = {"data": []}
     await harness.service.refresh()
     assert THREAD not in harness.hub.entries
@@ -1081,7 +1080,10 @@ async def test_interrupt_mode_stops_the_turn_and_then_sends(harness: Harness) ->
 async def test_a_thread_deleted_in_codex_stops_being_a_session(harness: Harness) -> None:
     """`codex delete` removes the thread, so the device must not keep a ghost of it."""
     other = "01a08c99-0000-7000-8000-000000000001"
-    harness.daemon.replies["thread/list"] = {"data": [thread_row(), thread_row(other)]}
+    # Used after the thread that stays, so the page it was on would still show it.
+    harness.daemon.replies["thread/list"] = {
+        "data": [thread_row(other, updatedAt=1788946300), thread_row()]
+    }
     harness.daemon.replies["thread/loaded/list"] = {"data": []}
     harness.daemon.replies["thread/items/list"] = {"data": []}
     assert await harness.service.start("/bin/codex") is True
@@ -1098,16 +1100,16 @@ async def test_a_thread_deleted_in_codex_stops_being_a_session(harness: Harness)
 
 
 async def test_an_older_thread_that_fell_off_the_page_is_kept(harness: Harness) -> None:
-    """A page is not the whole history: absence only proves deletion above the cutoff."""
+    """With more behind the page, absence only proves deletion above the cutoff."""
     old = "01a08c99-0000-7000-8000-000000000002"
     harness.daemon.replies["thread/list"] = {
-        "data": [thread_row(), thread_row(old, updatedAt=1788000000000)]
+        "data": [thread_row(), thread_row(old, updatedAt=1788000000)]
     }
     harness.daemon.replies["thread/loaded/list"] = {"data": []}
     harness.daemon.replies["thread/items/list"] = {"data": []}
     assert await harness.service.start("/bin/codex") is True
 
-    harness.daemon.replies["thread/list"] = {"data": [thread_row()]}
+    harness.daemon.replies["thread/list"] = {"data": [thread_row()], "nextCursor": "older"}
     await harness.service.refresh()
 
     assert old in harness.hub.entries

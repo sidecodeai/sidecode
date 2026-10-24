@@ -193,11 +193,15 @@ class Connection:
 class AppConnection(Connection):
     """An app WebSocket plus its per-session replay cursors."""
 
-    def __init__(self, ws: WebSocket, username: str, **kwargs: int) -> None:
+    def __init__(self, ws: WebSocket, username: str, jti: str, **kwargs: int) -> None:
         kwargs.setdefault("cap", APP_QUEUE_CAP)
         kwargs.setdefault("byte_cap", APP_QUEUE_BYTES)
         super().__init__(ws, **kwargs)
         self.username = username
+        #: The sign-in this socket authenticated with: the `jti` of its bearer token. The iPhone
+        #: app registers for APNs under the same one, which is how a push tells its socket from a
+        #: browser's or a desktop app's.
+        self.jti = jti
         self.cursors: dict[str, int] = {}
         self.last_active_at = time.monotonic()
 

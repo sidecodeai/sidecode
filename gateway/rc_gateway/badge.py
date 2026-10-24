@@ -2,11 +2,13 @@
 
 Every push carries the account's count (§3.7), so a phone's home-screen badge is right after any
 notification it shows. The count also moves when nothing is pushed: a mark cleared by
-`session.seen` or by the session working again, a marked session archived or removed, or a mark
-set while an app watched the session and its push was suppressed. Each of those reaches the push
-service as a `BadgeChange`, and once an account's count has been still for three seconds its phones
-get one notification that changes the badge and shows nothing. Waiting for the count to settle is
-what keeps a turn that ends on screen, and is opened a moment later, from costing a push at all.
+`session.seen` or by the session working again, a marked session closed or removed, one that
+nothing holds any more or that something holds again, or a mark set while an app watched the
+session and its push was suppressed. Each of those reaches the push service as a `BadgeChange`, and
+once an account's count has been still for three seconds its phones get one notification that
+changes the badge and shows nothing. Waiting for the count to settle is what keeps a turn that ends
+on screen, and is opened a moment later, from costing a push at all, and a session that is unheld
+for a moment and held again from costing two.
 """
 
 from __future__ import annotations

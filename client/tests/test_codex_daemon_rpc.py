@@ -8,7 +8,12 @@ from typing import Any
 
 import pytest
 
-from rc_client.agents.codex.daemon.rpc import DaemonClient, handshake_ok, initialize_params
+from rc_client.agents.codex.daemon.rpc import (
+    DaemonClient,
+    NoReply,
+    handshake_ok,
+    initialize_params,
+)
 from rc_client.errors import RcError
 from tests.fake_codex_daemon import FakeDaemon
 
@@ -20,12 +25,15 @@ class Sink:
         self.reconnects = 0
         self.reply: dict[str, Any] = {"decision": "accept"}
         self.fail = False
+        self.silent = False
 
     async def notification(self, method: str, params: dict[str, Any]) -> None:
         self.notifications.append((method, params))
 
     async def request(self, request_id: Any, method: str, params: dict[str, Any]) -> Any:
         self.requests.append((request_id, method, params))
+        if self.silent:
+            raise NoReply("not ours to answer")
         if self.fail:
             raise RcError("unsupported", "no")
         return self.reply
@@ -141,6 +149,28 @@ async def test_a_failing_handler_answers_with_an_error_rather_than_nothing(
         answer = await asyncio.wait_for(daemon.answers.get(), timeout=2)
         assert answer["id"] == 9
         assert answer["error"]["code"] == -32000
+    finally:
+        await client.close()
+
+
+async def test_a_handler_that_must_not_answer_leaves_the_request_unanswered(
+    daemon: FakeDaemon,
+) -> None:
+    """The daemon fans a request out and the first reply of any kind, an error too, settles it."""
+    sink = Sink()
+    sink.silent = True
+    client = await _client(daemon, sink)
+    try:
+        await daemon.ask(10, "item/tool/call", {"threadId": "t1"})
+        await _settle(lambda: sink.requests)
+
+        # A later request is answered, so the first answer in is the later one's.
+        sink.silent = False
+        await daemon.ask(11, "item/commandExecution/requestApproval", {"threadId": "t1"})
+        answer = await asyncio.wait_for(daemon.answers.get(), timeout=2)
+        assert answer == {"jsonrpc": "2.0", "id": 11, "result": {"decision": "accept"}}
+        assert [request_id for request_id, _, _ in sink.requests] == [10, 11]
+        assert daemon.answers.empty()
     finally:
         await client.close()
 

@@ -6,7 +6,13 @@ import { ArchiveGroupHeader, DeviceGroupHeader } from '../../components/GroupHea
 import { strings } from '../../strings';
 import { useDevices } from '../../stores/devices';
 import { useFront } from '../../stores/front';
-import { countWaiting, selectSessionLayout, selectSessionList, useSessions } from '../../stores/sessions';
+import {
+  countWaiting,
+  selectSessionLayout,
+  selectSessionList,
+  showsUnseenDot,
+  useSessions,
+} from '../../stores/sessions';
 import { useSettings } from '../../stores/settings';
 import type { Session } from '../../protocol/types';
 import { SidebarItem } from './SidebarItem';
@@ -55,7 +61,7 @@ export function Sidebar({ activeKey, onNewSession }: Props) {
         active={key === activeKey}
         // A47: the conversation in front of the person is being looked at, so
         // its row never shows the dot the `session.seen` on its way clears.
-        unseen={session.unseen === true && key !== front}
+        unseen={showsUnseenDot(session, front)}
         onOpen={() => navigate(`/sessions/${key}`)}
       />
     );

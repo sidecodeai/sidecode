@@ -65,7 +65,7 @@ never reach the network: the STT backend, Web Push and APNs senders are injected
 | `rc_gateway/auth_store.py`, `session_registry.py` | issued logins, durable in `auth.sqlite3` |
 | `rc_gateway/devices.py` | pairing codes and device tokens (hashed, single use) |
 | `rc_gateway/index.py` | SQLite session index |
-| `rc_gateway/unseen.py` | when a session carries the A47 mark: set on working to waiting, and what clears it |
+| `rc_gateway/unseen.py` | when a session carries the A47 mark: set on working to waiting, shown only while the session is open and held, and what clears it |
 | `rc_gateway/migrations.py` | additive column migrations applied when a store opens |
 | `rc_gateway/hub.py`, `connections.py`, `replay.py` | WebSocket routing core |
 | `rc_gateway/routes/` | HTTP endpoints |

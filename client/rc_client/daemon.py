@@ -29,6 +29,7 @@ from .errors import RcError
 from .fs import list_dirs, make_dir, merge_recents
 from .gateway import GatewayLink
 from .git import git_info
+from .instance_lock import InstanceLock, lock_path
 from .logging_setup import logger
 from .looplag import watch_loop_lag
 from .models import AgentInfo
@@ -42,6 +43,9 @@ from .update import log_tail, spawn_self_update
 log = logger("rc_client.daemon")
 
 AGENT_REFRESH_INTERVAL = 900.0
+# How long the first hello of a run waits for the first scan to say which terminals still hold
+# their sessions. The scan runs while the link connects, so this is the most it can cost.
+FIRST_SCAN_WAIT = 3.0
 # A session in one of these states is doing work an update would throw away.
 BUSY_STATES = frozenset({"starting", "running", "needs_approval", "needs_input"})
 FROM_SOURCE = "this client was installed from source; update it on the host"
@@ -50,6 +54,7 @@ FROM_SOURCE = "this client was installed from source; update it on the host"
 class Daemon:
     def __init__(self, config: Config) -> None:
         self.config = config
+        self.instance_lock = InstanceLock(lock_path())
         self.registry = Registry(config_module.database_path())
         self.agents: list[AgentInfo] = []
         self.hub = SessionHub(self.registry, self._publish, config.device_id, lambda: self.agents)
@@ -77,6 +82,7 @@ class Daemon:
             proxy=config.proxy,
         )
         self.hub.link_up = lambda: self.link.connected
+        self._greeted = False
         self._refresh_task: asyncio.Task[None] | None = None
         self._lag_task: asyncio.Task[None] | None = None
         self._update_task: asyncio.Task[None] | None = None
@@ -85,6 +91,9 @@ class Daemon:
     # ------------------------------------------------------------- lifecycle
 
     async def run(self) -> None:
+        # Before anything binds, unlinks or dials: a second daemon on this home
+        # would delete the first one's sockets, as it starts and as it exits.
+        await self._claim_home()
         scrub_parent_secrets()
         self.hub.load()
         # Amendment A35: the resumes the device owes, read back before anything
@@ -102,8 +111,10 @@ class Daemon:
             agents=",".join(info.agent for info in self.agents if info.available),
         )
         await self._prepare_attachment()
-        self.link.start()
+        # Before the link, so the first scan runs while it connects and the first hello can say
+        # which terminals still hold their sessions.
         self.mirror.start()
+        self.link.start()
         self.hub.resumes.start()
         self._refresh_task = asyncio.create_task(self._refresh_loop())
         self._lag_task = asyncio.create_task(watch_loop_lag(), name="loop-lag")
@@ -112,6 +123,17 @@ class Daemon:
             await self._wait_for_stop()
         finally:
             await self.shutdown()
+
+    async def _claim_home(self) -> None:
+        """Hold this home's single-instance lock, or refuse to run beside the daemon that does.
+
+        A filesystem that cannot lock is no reason to stay down: the daemon then
+        runs as it did before there was a lock, and says so.
+        """
+        try:
+            await self.instance_lock.acquire()
+        except OSError as exc:
+            log.warning("single-instance lock unavailable", error=str(exc))
 
     async def _prepare_attachment(self) -> None:
         """Publish the files the shim points at and open the channel socket.
@@ -166,6 +188,9 @@ class Daemon:
         await self.hub.close()
         await self.link.stop()
         self.registry.close()
+        # Last: a daemon waiting for this home binds the moment it is let go, and
+        # the sockets above must be gone by then or their unlink would take its own.
+        self.instance_lock.release()
 
     async def _refresh_loop(self) -> None:
         while True:
@@ -208,6 +233,14 @@ class Daemon:
         await self.mirror.scan_once()
 
     async def _hello(self) -> dict[str, Any]:
+        # Once: a reconnect has the answer already, or has waited for it.
+        if not self._greeted:
+            self._greeted = True
+            if not await self.mirror.wait_settled(FIRST_SCAN_WAIT):
+                log.warning(
+                    "first hello sent before the first terminal scan settled",
+                    waited=FIRST_SCAN_WAIT,
+                )
         return {
             "client_build": read_build(),
             "name": self.config.name or socket.gethostname(),

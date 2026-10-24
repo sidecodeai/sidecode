@@ -27,6 +27,9 @@ WS_MAX_MESSAGE_BYTES = 72 * 1024 * 1024
 
 Frame = dict[str, Any]
 
+#: With `archived: true` it closes a session the device drives (A39); the gateway watches for one.
+SESSION_ARCHIVE = "session.archive"
+
 #: App requests the gateway forwards to a device, mapped to the field that names the target.
 FORWARDED_BY_SESSION = frozenset(
     {
@@ -44,7 +47,7 @@ FORWARDED_BY_SESSION = frozenset(
         "session.resume_set",
         "session.resume_cancel",
         "session.takeover",
-        "session.archive",
+        SESSION_ARCHIVE,
         "session.delete",
     }
 )
@@ -57,7 +60,7 @@ SESSION_RESULT_TYPES = frozenset(
         "session.resume_set",
         "session.resume_cancel",
         "session.takeover",
-        "session.archive",
+        SESSION_ARCHIVE,
     }
 )
 #: A38: a terminal belongs to a machine, never to a session, so all five name the device.

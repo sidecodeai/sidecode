@@ -124,9 +124,13 @@ class MirrorService:
         self._wake = asyncio.Event()
         self._settling: set[str] = set()
         self._tasks: list[asyncio.Task[None]] = []
+        # Set once the first scan has said who holds each session, whether it worked or not.
+        self._settled = asyncio.Event()
+        self._started = False
 
     def start(self) -> None:
         self.hub.shared.reader = self
+        self._started = True
         self._tasks = [
             asyncio.create_task(self._scan_loop()),
             asyncio.create_task(self._tail_loop()),
@@ -141,6 +145,19 @@ class MirrorService:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         self._tasks = []
+
+    async def wait_settled(self, timeout: float) -> bool:
+        """Wait up to `timeout` for the first scan to say who holds each session; whether it has.
+
+        The hub restores every session as held by nothing, and a hello that said so would tell
+        the gateway that each terminal still running had exited: it shows no mark for a session
+        nothing holds. A mirror that was never started has no scan to wait for.
+        """
+        if not self._started or self._settled.is_set():
+            return True
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(self._settled.wait(), timeout)
+        return self._settled.is_set()
 
     def read_soon(self) -> None:
         """Make the next tail pass now rather than at the end of the interval."""
@@ -158,7 +175,17 @@ class MirrorService:
     # ---------------------------------------------------------------- scans
 
     async def _scan_loop(self) -> None:
-        # Before the first scan, and on the same task, so the settings of a
+        # Who holds what comes first: it is what a hello says about every session,
+        # and the settings read below take a whole file per session.
+        try:
+            await self.scan_once(settings=False)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("terminal session scan failed")
+        finally:
+            self._settled.set()
+        # Before the next scan, and on the same task, so the settings of a
         # session the hub starts with are read exactly once.
         try:
             await self._backfill_known()
@@ -173,15 +200,23 @@ class MirrorService:
                 log.exception("terminal session scan failed")
             await asyncio.sleep(SCAN_INTERVAL)
 
-    async def scan_once(self) -> None:
+    async def scan_once(self, *, settings: bool = True) -> None:
         """Re-scan the agent state directories and refresh who controls what.
 
         Only the filesystem walk runs off the loop: registering a mirror
-        creates tasks, so it must happen on the event loop thread.
+        creates tasks, so it must happen on the event loop thread. `settings`
+        is whether the sessions just adopted have their settings read too.
         """
         found_claude = await asyncio.to_thread(
             transcripts.discover, self.limits.max_sessions, self.limits.max_age_days
         )
+        # Claude's terminals first: they need nothing from the Codex daemon or the Grok leader,
+        # whose ticks wait on those processes, and the first hello waits for who holds what.
+        self._adopt_claude(found_claude)
+        # After the adoption, so a session whose transcript was just found is
+        # never mistaken for one that never had one.
+        await self.hub.sweep_ghosts()
+        await self._refresh_claude_control()
         found_codex = await asyncio.to_thread(
             rollouts.discover, self.limits.max_sessions, self.limits.max_age_days
         )
@@ -192,19 +227,15 @@ class MirrorService:
             await self.codex_daemon.tick(resolve_codex())
         if self.grok_leader is not None:
             await self.grok_leader.tick(resolve_grok())
-        self._adopt_claude(found_claude)
-        # After the adoption, so a session whose transcript was just found is
-        # never mistaken for one that never had one.
-        await self.hub.sweep_ghosts()
         self._adopt_codex(found_codex)
         await self._adopt_grok(found_grok)
         await self._watch_titles()
-        await self._refresh_claude_control()
         await self._refresh_codex_control()
         await self._refresh_grok_control()
-        # Every mirrored session whose settings have not been read yet: the
-        # ones just adopted, and any whose read failed last time.
-        await self._backfill_settings(list(self._claude))
+        if settings:
+            # Every mirrored session whose settings have not been read yet: the
+            # ones just adopted, and any whose read failed last time.
+            await self._backfill_settings(list(self._claude))
 
     def _driven_claude(self) -> set[str]:
         """Claude sessions this device is running right now.

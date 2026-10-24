@@ -320,8 +320,9 @@ when a TUI exits and the thread simply stays loaded.
 
 A thread that disappears from `thread/list` altogether is a different matter: the device deletes the
 session and emits `session.removed`, so a thread deleted with `codex delete` does not linger in the
-apps. That check is guarded against a thread merely falling off the end of a page and against a
-session a runner is still driving, because both would otherwise look like a deletion.
+apps. That check is guarded against a thread merely falling off the end of a page (an answer with
+no `nextCursor` is the whole history and has no end to fall off) and against a session a runner is
+still driving, because both would otherwise look like a deletion.
 
 Above the daemon client, a shared Codex session is an ordinary session. It is a hub runner like any
 other, so `session.send`, steering, the queue, `session.stop`, `session.set` and `session.answer` all
@@ -400,6 +401,11 @@ only a request id: not who answered, and not what they chose. The device closes 
 reserved decision `{option_id: "elsewhere", by: "terminal"}`, which matches none of the options on
 purpose, and both apps render it as "answered in the terminal". `session.approve` still accepts only
 an option the block offered, `elsewhere` included in the refusal, so an app can never send it back.
+
+A request the device does not present gets no reply at all: the first reply of any kind, an error
+included, settles a request for every subscriber, so answering what is not the device's to answer
+would answer it for the terminal too. The device answers only when nobody else could, in a turn it
+started on a thread no terminal is in; CLIENT.md, "Codex on the shared daemon", has the rule.
 
 ### Without a daemon, and the one rule for users
 
@@ -628,11 +634,17 @@ the device and the reason and nothing else:
         "device_name": "mac-studio-office", "title": "…", "badge": 2}}
 ```
 
-A notification fires on an observed *transition* between two states, and only when no app is
-actively watching that session. A session the gateway is seeing for the first time has no previous
-state, so a device reconnecting with a hundred sessions produces no notifications at all. The three
-resume kinds follow the same "no app is watching" rule: the app that has the session open draws the
-notice above the transcript, and a push on top of it would say the same thing twice.
+A notification fires on an observed *transition* between two states, unless an app that is
+actively watching the session (subscribed to it, and used within the last minute) already shows
+it. The hub reports the sign-ins of those apps, the `jti` of each socket's bearer token, and the
+push service decides what each one silences: any watcher silences Web Push, but the alert for the
+phones is silenced only by a watcher that is not one of them, one whose sign-in has no live APNs
+registration. The iPhone app registers for APNs under the same sign-in its socket carries and stays
+subscribed when it goes to the background or the phone locks, so its own socket never stands in for
+the alert; in the foreground it drops the banner itself. A session the gateway is seeing for the
+first time has no previous state, so a device reconnecting with a hundred sessions produces no
+notifications at all. The three resume kinds follow the same rule: the app that has the session
+open draws the notice above the transcript, and a push on top of it would say the same thing twice.
 
 Delivery is an outbound HTTP call to a browser vendor or to APNs, so it runs as a task rather than
 inside the frame handler that noticed the transition: awaiting it there would hold every later
@@ -643,15 +655,43 @@ shutdown gives the calls already in flight five seconds to finish before cancell
 Every payload also carries the account's count of sessions marked `unseen` (A47) — `rc.badge`, and
 `aps.badge` on APNs — so an iPhone's home-screen badge is right after any notification it shows.
 The count also moves when nothing is pushed: a mark cleared by `session.seen` or by the session
-running again, a marked session archived or removed, a mark set while an app watched the session.
-For those the gateway sends the account's phones one badge-only APNs notification (`kind: "badge"`,
-an empty title, no alert or sound, `apns-priority` 5) once the count has been still for three
-seconds, and only when it differs from the last count it sent; waiting for it to settle is what
-keeps a turn that ends on screen, and is opened a moment later, from costing a push at all. Web Push
-never carries one, because a browser shows every push it receives. Two consequences are accepted:
-APNs keeps only the newest notification for a phone that is offline, so a badge-only push can
-replace an alert not yet delivered (as a second alert would), and an alert the journal retries
-carries the count it was built with until the next push corrects it.
+running again, a marked session closed or removed, one that nothing holds any more or that
+something holds again, a mark set while an app besides the phone
+watched the session. For those the gateway sends the account's phones one badge-only APNs
+notification (`kind: "badge"`, an empty title, no alert or sound, `apns-priority` 5) once the count
+has been still for three seconds, and only when it differs from the last count it sent; waiting for
+it to settle is what keeps a turn that ends on a screen other than the phone's, and is opened a
+moment later, from costing a push at all. The phone's own screen gets no such saving: the gateway
+cannot tell whether its app is in the foreground, so the phone is alerted either way, and a session
+opened afterwards costs one badge-only push, because the alert already carried the count with its
+mark. Web Push never carries one, because a browser shows every push it receives. Two consequences
+are accepted: APNs keeps only the newest notification for a phone that is offline, so a badge-only
+push can replace an alert not yet delivered (as a second alert would), and an alert the journal
+retries carries the count it was built with until the next push corrects it.
+
+The count is of the sessions that show the mark, and what shows is not what is kept. A session is
+closed when it is archived (A39's close ends in `archived: true`, `control: "none"` and `state:
+"stopped"` at once) or its state is `stopped`: it loses its mark for good and the count falls with
+it, which costs the phones a badge-only push like any other change. A session that nothing holds
+(`control: "none"`) is no close. A device says it of a CLI that exited, and also of a terminal its
+scan has not found yet, a pi extension that has not reconnected and a scan that missed a holder,
+and it comes and goes. So the mark is kept and not shown while nothing holds the session, which
+every app files in its Archive, and shown again when something does; a session that is unheld and
+held again within the three seconds the count takes to settle costs no push. A close takes the
+device a moment: it interrupts the turn first, and the end of that turn reaches the gateway as an
+`idle` summary before the archived one does. So the hub notes every `session.archive` with
+`archived: true` it forwards until the device answers, reads what that session reports meanwhile as
+part of the close, and cues no notification for it: the person who closed it is not told that a
+turn finished, and the count never includes it. The note is the request's own entry in the table of
+unanswered requests, which outlives the app socket that asked, so a phone that taps Close and
+disconnects at once is not told either, and ends when the device replies, refuses, goes offline or
+the request times out after 60 seconds. When it starts, the hub also takes the mark off every
+closed session that still keeps one, because only a device replaces the summary it last sent and
+one that is away cannot; no app was shown those marks, so the count does not move and nobody is
+told. A device that restarts would hide every mark at once, since its hub restores every session
+as held by nothing; so its first hello waits for the first scan of its terminals
+(`docs/CLIENT.md`) and reports what that scan found, and a terminal that is still running shows
+its mark all the same.
 
 Web Push is a blocking library call, so it runs on threads of its own with an explicit ten-second
 timeout. Both matter: `pywebpush` passes its `timeout` argument through even when it is `None`, so
@@ -685,7 +725,7 @@ sessions delivered to that person's phone.
 | --- | --- |
 | Gateway `DATA_DIR` | `auth.sqlite3` (issued login sessions), `devices.sqlite3` (devices, pairing codes — both hashed), `sessions.sqlite3` (the latest summary per session, with its `unseen` mark in a column of its own, A47), `push.sqlite3` (Web Push subscriptions, APNs tokens, a delivery journal), `users.sqlite3` (the accounts and their hashed passwords), `preferences.sqlite3` (one row of preferences per account, A35, A41), `session_secret` and `vapid_private.pem`. The databases and both secrets are created at 0600 |
 | Gateway memory | Live connections, the per-session replay buffer, and a cache in front of the login-session store that also holds the event which closes a socket the moment its session is signed out |
-| Device `~/.rc-client` | `config.toml` at 0600 (gateway origin, device id, device token, name), `state/rc-client.sqlite3` (sessions, events, a key-value table, and request ids for `session.send` idempotency), `state/attachments/`, `state/channel.sock` and `state/claude-mcp.json` for the attachment, `bin/claude` when the shim is installed, `logs/` |
+| Device `~/.rc-client` | `config.toml` at 0600 (gateway origin, device id, device token, name), `state/rc-client.sqlite3` (sessions, events, a key-value table, and request ids for `session.send` idempotency), `state/attachments/`, `state/channel.sock` and `state/claude-mcp.json` for the attachment, `state/daemon.lock` (the single-instance lock), `bin/claude` when the shim is installed, `logs/` |
 | Browser | The session cookie, plus whatever the service worker caches of the built app |
 
 Schema changes on the gateway are additive only: `CREATE TABLE IF NOT EXISTS` cannot add a column to
