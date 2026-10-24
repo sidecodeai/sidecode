@@ -393,10 +393,10 @@ the copy itself stays the gateway's.
 is `navigator.setAppBadge(n)`, or `clearAppBadge()` at zero, and nothing at all where the browser
 offers neither; a refusal — a page that is not installed, badges switched off — is swallowed.
 `src/push/useAppBadge.ts`, called from `App`, keeps the badge at `countUnseen(sessions, front)`, the
-unarchived sessions with the mark less the conversation in front, from the moment the sessions store
-is `loaded`, so a badge the service worker set from a push stands until the page has the account's
-list. `signOut()` clears it, and the service worker sets it from every push's `rc.badge` (§ "Push and
-the service worker").
+sessions with the mark that are open and held, less the conversation in front, from the moment the
+sessions store is `loaded`, so a badge the service worker set from a push stands until the page has
+the account's list. `signOut()` clears it, and the service worker sets it from every push's
+`rc.badge` (§ "Push and the service worker").
 
 **The mock** behaves as the gateway. `mock/unseen.ts` holds the rule — working is `starting` or
 `running`; waiting is `needs_approval` or `needs_input`, or `idle` or `readonly` with a control other
@@ -434,12 +434,13 @@ left open across a gateway upgrade keeps working. `tests/service-worker.test.ts`
 against a stand-in `self` and drives both handlers, because the file is plain JavaScript the browser
 loads on its own and nothing else in the suite would reach it.
 
-Every push also carries `rc.badge` (A47), how many of the account's unarchived sessions have the red
-dot, and the worker sets the installed app's icon from it (`self.navigator.setAppBadge`, cleared at
-zero) beside the notification, which is how the number holds while no page of the app is open. A
-payload without a whole, non-negative count leaves the badge alone, a browser without the API shows
-the notification as before, and a refusal never stops it. A push of kind `badge` changes the count
-and shows nothing; the gateway sends that kind to APNs only, but it means the same here.
+Every push also carries `rc.badge` (A47), how many of the account's sessions that are open and held
+have the red dot, and the worker sets the installed app's icon from it
+(`self.navigator.setAppBadge`, cleared at zero) beside the notification, which is how the number
+holds while no page of the app is open. A payload without a whole, non-negative count leaves the
+badge alone, a browser without the API shows the notification as before, and a refusal never stops
+it. A push of kind `badge` changes the count and shows nothing; the gateway sends that kind to APNs
+only, but it means the same here.
 
 ## Accounts
 

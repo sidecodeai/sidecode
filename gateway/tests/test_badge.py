@@ -1,9 +1,10 @@
 """A47: the count in every push, and the badge-only APNs push once a count settles.
 
-Every push carries the account's unarchived `unseen` sessions as `rc.badge` and, to APNs, as
-`aps.badge`. A change no push carried reaches each of the account's phones as one notification
-with the badge and nothing else, three seconds after the count stopped moving, and never reaches a
-browser. The quiet period runs on a virtual clock here, so nothing waits for real time.
+Every push carries the number of the account's `unseen` sessions that are open and held as
+`rc.badge` and, to APNs, as `aps.badge`. A change no push carried reaches each of the account's
+phones as one notification with the badge and nothing else, three seconds after the count stopped
+moving, and never reaches a browser. The quiet period runs on a virtual clock here, so nothing
+waits for real time.
 """
 
 from __future__ import annotations
@@ -671,7 +672,7 @@ def test_a_signed_out_phone_hears_no_more_counts(tmp_path: Path) -> None:
 def test_pushes_count_the_accounts_marked_sessions(
     client: TestClient, auth: dict[str, str], web_sender: FakeWebPushSender
 ) -> None:
-    """Counted after the push's own change, unarchived only, and fallen when one is opened."""
+    """Counted after the push's own change, shown marks only, and fallen when one is opened."""
     enrolled = enroll_device(client, auth)
     subscribed = client.post(
         "/api/push/web/subscribe",

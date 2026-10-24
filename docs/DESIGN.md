@@ -980,6 +980,7 @@ subagent. Background shells are not counted, since some never end — a dev serv
 would hold a session working for good; nor are teammates, which always read `running`, Claude Code's
 own housekeeping tasks, or a `/loop`'s scheduled prompts (`session_crons`), none of which is work
 the person waits on.
+
 Codex announces the thread a subagent runs in as it announces any other (`thread/started`, the
 thread naming its `parentThreadId`) and that thread's turns, and the parent's own timeline names
 its agents and their states; a parent is working while any child thread of its own is active, a

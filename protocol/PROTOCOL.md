@@ -3725,7 +3725,7 @@ one app connection that asked. The gateway relays bytes and never reads them.
     closed session brings it back as before (A15).
 22. **A session that stopped working and waits for you is marked until someone looks.** A session
     whose `unseen` is true (4.4) carries a red dot on its row in every list that draws the row, and
-    the number of such sessions among the unarchived ones is the app's icon badge where the platform
+    the number of such sessions that are open and held is the app's icon badge where the platform
     has one, none at zero. An app sends `session.seen` (6.2) for the conversation the person has in
     front of them, so a session already on screen when its turn ends never keeps a dot: that
     conversation draws none and is left out of the count while its `session.seen` is on its way, so
@@ -4058,8 +4058,8 @@ one app connection that asked. The gateway relays bytes and never reads them.
 - [ ] Draws the red dot on every row of a session whose `unseen` is true, sends `session.seen` for
       the conversation the person has in front of them (on opening it, on its window coming to the
       front, and on a mark arriving while it is on screen), keeps the app icon's badge at the count
-      of unarchived unseen sessions where the platform has a badge, and clears it on sign-out; the
-      conversation in front draws no dot and is not counted (A47).
+      of unseen sessions that are open and held where the platform has a badge, and clears it on
+      sign-out; the conversation in front draws no dot and is not counted (A47).
 - [ ] Offers the dictation polish switch, model and strength only when `polish.enabled` is true
       (disabled with a note otherwise), polishes only the dictated span, keeps the dictated words one
       undo away, sends the words as dictated when the user sends first, and never sends a polished
