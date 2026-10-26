@@ -189,7 +189,12 @@ export const api = {
   /** A29: the models the operator's provider offers, for the Voice settings. */
   polishModels: () => get<PolishModelsResponse>('/api/polish/models'),
   /** A29: one dictation said cleanly. Nothing is stored and nothing is sent on. */
-  polish: (body: PolishRequest) => post<PolishResponse>('/api/polish', body),
+  polish: (body: PolishRequest, signal?: AbortSignal) =>
+    request<PolishResponse>('/api/polish', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      ...(signal ? { signal } : {}),
+    }),
 
   vapidKey: () => get<{ public_key: string }>('/api/push/web/vapid'),
   subscribePush: (subscription: unknown) =>

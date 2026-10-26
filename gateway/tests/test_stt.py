@@ -521,6 +521,8 @@ def test_one_account_holds_only_a_few_stt_streams(client: TestClient, auth: dict
     """GW-5: nothing capped how many live streams one account could hold open."""
     from rc_gateway.ws.stt_ws import MAX_SOCKETS_PER_USER
 
+    # Finishing background dictations keep their sockets while a new one records.
+    assert MAX_SOCKETS_PER_USER == 8
     with contextlib.ExitStack() as stack:
         for _ in range(MAX_SOCKETS_PER_USER):
             stack.enter_context(client.websocket_connect("/ws/stt", headers=auth))

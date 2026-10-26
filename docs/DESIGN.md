@@ -775,8 +775,8 @@ and keeps the transcript in the field; it stands where Send stands, at Send's si
 the one primary action while listening. There is no Cancel: a dictation you do not want is Done
 and then edited or cleared like any draft, and a second button of a different size beside the
 primary only made the row look unfinished. There is no time limit; listening runs until Done is
-tapped, and only leaving the app ends it early: the background suspends dictation with its words
-kept, while Control Centre, the app switcher's peek, an incoming-call banner and a system alert only
+tapped, and only leaving the app ends listening early: the background suspends a dictation that is
+still listening with its words kept, while Control Centre, the app switcher's peek, an incoming-call banner and a system alert only
 make the app inactive, and dictation listens through them — as the app lock stays down through
 them, engaging when the app returns from the background and not before, exactly as its own footer
 says. On iOS a soft multi-colour glow runs around the edge of the whole display while
@@ -789,6 +789,35 @@ readable to the margin, and the colour never reaches the text. The label says "T
 edit before sending", and it means it — the transcript is a draft you edit and send with the
 ordinary Send button; no utterance is ever sent by the act of stopping the recording. The mic
 disappears entirely when the gateway has no speech backend rather than failing when pressed.
+
+**Dictation keeps going when you leave.** Once Done is tapped, a dictation is a job owned by an
+app-level job store (one per app, keyed by account and session), not by the composer, and it outlives
+the composer, the single open chat and every session switch on every app. Its states are
+finishing (waiting for the last final transcript), polishing, and ready; or interrupted, when the
+transcription ended without a final and the partial words were kept. A polish that fails or is
+refused ends ready, with the plain transcript in the draft and the usual failure note shown when
+the session is opened. While the person stays in the session nothing changes: live words, the
+spinner, the polish in place, the Polished · Undo note. At the moment the composer would go away — a
+session switch, a deep link, a notification — it hands the job over instead of cancelling it, and
+a dictation still listening at that moment is treated as Done and handed over too, so the person can
+go straight to another session and dictate there: one recording at a time, any number of jobs
+finishing and polishing in parallel. The result lands in the open composer, which adopts the job
+and applies it by the ordinary polish rules, or, when the session is not open, in that session's
+persisted draft: on handover the live partial words are taken out of the draft if it still holds
+exactly them, the plain transcript is appended the moment it is final — before polish starts —
+and the polished text replaces it only while the draft is still as the transcript left it. Text
+typed meanwhile always wins; a result is appended, never overwrites. A job has no send path:
+the result waits in the draft for the person to check and send. The composer's status line is
+driven by the job, so reopening the session shows the live state, and the session list row carries
+a small trailing label while a job exists or its result is unseen: "Transcribing…" (转写中…),
+"Polishing…" (润色中…), "Draft ready" (草稿已就绪) and "Dictation interrupted" (听写已中断); opening
+the session clears the last two. On a phone the
+system may suspend the app while a job finishes; the job then ends interrupted with its partial
+words kept, and listening while backgrounded stays unsupported. No audio is retained and
+a transcription is never retried, so an interrupted job keeps only what was heard; the protocol
+does not change, and the gateway lets one account hold eight speech streams (`MAX_SOCKETS_PER_USER`),
+which is usually enough for several finishing jobs to overlap a new recording; switching quickly
+across more than four long dictations can still hit it.
 
 **Done becomes a spinner, and the spinner becomes Send.** The tap on Done is answered at once: the
 capsule gives way to Send's circle holding a spinner, in the same slot at the same height, and
@@ -812,7 +841,8 @@ writing.
 **A draft belongs to its session.** Words typed and files attached for one session stay with it
 when another is opened, and are found again on return, on both apps. Nothing typed for one session
 is ever sent to another, and nothing typed for one is offered as the answer to a question in
-another. A dictation running at the switch ends, its words staying in the session it was spoken
+another. A dictation does not end at the switch: it is handed to the background job described
+under **Dictation keeps going when you leave**, and its result lands in the session it was spoken
 for. A refused send returns everything to the composer — the words and the attachments — so a
 second tap sends what the first one meant to.
 
@@ -1014,8 +1044,8 @@ channel that reaches a locked phone.
 
 **A notification opens its session in place.** Tapping a notification, or following a link, for
 session B while session A is open replaces A with B; Back returns to the list, not to A. Nothing
-of A is touched — its draft stays with A, and a dictation running in A ends with its words in A's
-draft — and B is open the moment it is on screen, streaming and with its composer, never a spinner
+of A is touched — its draft stays with A, and a dictation running in A carries on in the background
+and lands in A's draft (§ "The composer", **Dictation keeps going when you leave**) — and B is open the moment it is on screen, streaming and with its composer, never a spinner
 that waits for a tap.
 
 ### A red dot for a session that stopped and waits for you

@@ -429,6 +429,10 @@ export const zhHans: StringTable = {
     polished: '已润色',
     undo: '撤销',
     polishFailed: '润色失败，你的原话未改动',
+    rowTranscribing: '转写中…',
+    rowPolishing: '润色中…',
+    rowReady: '草稿已就绪',
+    rowInterrupted: '听写已中断',
   },
 
   settings: {

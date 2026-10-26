@@ -500,6 +500,11 @@ export const en = {
     polished: 'Polished',
     undo: 'Undo',
     polishFailed: 'Polishing failed, your words are unchanged',
+    /** The session row's trailing label while a dictation runs on after the person left. */
+    rowTranscribing: 'Transcribing…',
+    rowPolishing: 'Polishing…',
+    rowReady: 'Draft ready',
+    rowInterrupted: 'Dictation interrupted',
   },
 
   /**

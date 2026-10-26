@@ -16,6 +16,7 @@ import { useChat } from './chat';
 import { useCommands } from './commands';
 import { useConnection } from './connection';
 import { useDevices } from './devices';
+import { useDictationJobs } from './dictationJobs';
 import { useDrafts } from './drafts';
 import { useFront } from './front';
 import { useOutbox } from './outbox';
@@ -28,6 +29,7 @@ export function signOut(): void {
   // First, so nothing arriving over the socket writes into a store behind us.
   useConnection.getState().disconnect();
   useChat.getState().reset();
+  useDictationJobs.getState().reset();
   useDrafts.getState().reset();
   useOutbox.getState().reset();
   useAnswers.getState().reset();

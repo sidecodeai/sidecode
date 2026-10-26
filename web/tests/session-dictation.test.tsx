@@ -1,11 +1,11 @@
 /**
- * `docs/DESIGN.md` § "The composer" — "A dictation running at the switch ends,
- * its words staying in the session it was spoken for."
+ * `docs/DESIGN.md` § "The composer" — a dictation at the switch is handed to
+ * the job store, and its words land in the session it was spoken for.
  *
- * The controller tears down on unmount, so what proves the rule is that the
- * composer is remounted when the route's session changes: the microphone of
- * the conversation being left is closed, and its transcript is still in that
- * conversation's draft when it is opened again.
+ * What proves the rule is that the composer is remounted when the route's
+ * session changes: the microphone of the conversation being left is closed,
+ * and its transcript is still in that conversation's draft when it is opened
+ * again.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';

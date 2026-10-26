@@ -43,9 +43,11 @@ from ..stt_realtime import LiveTranscription, RealtimeTranscriber
 log = logger("rc_gateway.ws.stt")
 router = APIRouter()
 
-#: Live streams one account may hold. A person dictates into one composer at a time; four covers
-#: a phone and a browser with one stale socket each.
-MAX_SOCKETS_PER_USER = 4
+#: Live streams one account may hold. A person records into one composer at a time, but a dictation
+#: that has had Done tapped keeps its sockets until the last transcript arrives (at most about 30 s
+#: for one or two sockets of a long dictation), so several finishing jobs can overlap a new
+#: recording; eight is usually enough, with a stale socket or two to spare.
+MAX_SOCKETS_PER_USER = 8
 
 
 @router.websocket("/ws/stt")

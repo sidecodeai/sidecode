@@ -10,6 +10,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { strings } from '../../strings';
+import type { TranscriptSink } from '../../stores/dictationJobs';
 import { MicRecorder, type RecorderError } from './recorder';
 import { TranscriptSegments } from './segments';
 import { SttSocket, type SttEvent, type SttSocketFactory } from './sttSocket';
@@ -43,8 +44,16 @@ interface Options {
   /**
    * The transcript so far. `isFinal` marks the last call of a dictation, after
    * which the text belongs to the field and this controller is idle again.
+   * `interrupted` marks a last call that is not the recogniser's final word: the
+   * gateway failed or never answered, and the text is what had been heard.
    */
-  onTranscript: (text: string, isFinal: boolean) => void;
+  onTranscript: (text: string, isFinal: boolean, interrupted?: boolean) => void;
+  /**
+   * The composer is going away while a dictation is listening or finishing.
+   * Returns where the rest of it reports, which keeps the run going instead of
+   * ending it; null ends it as it always did. A listening run is then told Done.
+   */
+  onDetach?: () => TranscriptSink | null;
   /** Injected for tests. */
   factory?: SttSocketFactory;
   recorderFactory?: (handlers: RecorderHandlers) => VoiceRecorder;
@@ -69,6 +78,7 @@ const sleep = (ms: number): Promise<void> =>
 export function useVoice({
   enabled,
   onTranscript,
+  onDetach,
   factory,
   recorderFactory,
 }: Options): VoiceController {
@@ -89,11 +99,13 @@ export function useVoice({
   /** Bumped by every start and every end, so a stale loop or reply is ignored. */
   const runId = useRef(0);
   const onTranscriptRef = useRef(onTranscript);
+  const onDetachRef = useRef(onDetach);
   const stateRef = useRef<VoiceState>('idle');
 
   useEffect(() => {
     onTranscriptRef.current = onTranscript;
-  }, [onTranscript]);
+    onDetachRef.current = onDetach;
+  }, [onTranscript, onDetach]);
 
   const move = useCallback((next: VoiceState) => {
     stateRef.current = next;
@@ -137,7 +149,7 @@ export function useVoice({
     (message: string) => {
       // A failed dictation keeps whatever was recognised: those words are
       // already in the field, and losing them helps no one.
-      onTranscriptRef.current(segments.current.joined, true);
+      onTranscriptRef.current(segments.current.joined, true, true);
       reset();
       setError(message);
       move('error');
@@ -146,8 +158,8 @@ export function useVoice({
   );
 
   const publish = useCallback(
-    (isFinal: boolean) => {
-      onTranscriptRef.current(segments.current.joined, isFinal);
+    (isFinal: boolean, interrupted = false) => {
+      onTranscriptRef.current(segments.current.joined, isFinal, interrupted);
       if (isFinal) {
         reset();
         move('idle');
@@ -305,7 +317,7 @@ export function useVoice({
     // A gateway that never answers must not leave the composer waiting: keep
     // what was recognised instead.
     finalTimer.current = window.setTimeout(() => {
-      if (run === runId.current) publish(true);
+      if (run === runId.current) publish(true, true);
     }, FINAL_TIMEOUT_MS);
   }, [move, publish]);
 
@@ -336,7 +348,25 @@ export function useVoice({
     cancel();
   }, [enabled, cancel]);
 
-  useEffect(() => () => teardown(), [teardown]);
+  /**
+   * Leaving the session is not the end of a dictation that has begun: it is
+   * Done, and the words keep coming to whoever took them over. One that is only
+   * connecting, or has failed, ends here.
+   */
+  useEffect(
+    () => () => {
+      const live = stateRef.current === 'listening' || stateRef.current === 'finishing';
+      const sink = live ? (onDetachRef.current?.() ?? null) : null;
+      if (!sink) {
+        teardown();
+        return;
+      }
+      sink.bindCancel(teardown);
+      onTranscriptRef.current = sink;
+      done();
+    },
+    [teardown, done],
+  );
 
   return { state, level, elapsedMs, error, start, done, cancel, dismissError };
 }

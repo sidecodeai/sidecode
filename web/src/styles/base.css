@@ -103,3 +103,12 @@ samp {
 .scroll-thin::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* The session row's trailing note about a dictation that kept going. */
+.dictation-label {
+  flex: none;
+  font-size: var(--fs-12);
+  line-height: 1.45;
+  color: var(--ink-secondary);
+  white-space: nowrap;
+}

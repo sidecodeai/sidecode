@@ -5,7 +5,8 @@ import { StatusDot } from '../../components/StatusDot';
 import { UnseenDot } from '../../components/UnseenDot';
 import { relativeTime, tildePath } from '../../lib/format';
 import { agentLabel, sessionOriginLabel, sessionTitle, strings } from '../../strings';
-import { showsUnseenDot } from '../../stores/sessions';
+import { keyOf, showsUnseenDot } from '../../stores/sessions';
+import { DictationRowLabel } from '../voice/DictationRowLabel';
 import type { Session } from '../../protocol/types';
 import { SessionCloseButton } from './SessionCloseButton';
 
@@ -54,6 +55,7 @@ export function SessionRow({ session, online, onOpen }: Props) {
             <StatusDot state={session.state} control={session.control} online={online} />
             {word}
           </span>
+          <DictationRowLabel sessionKey={keyOf(session)} />
         </span>
         <span className="session-cwd">
           <Folder className="session-folder" strokeWidth={1.5} aria-hidden />

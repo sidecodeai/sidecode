@@ -10,7 +10,6 @@ import {
 } from 'react';
 import { ArrowUp, ChevronRight, Mic, Paperclip, X, Zap } from 'lucide-react';
 import { Menu, Popover } from '../../components/Popover';
-import { api } from '../../lib/api';
 import { errorText, refusalText } from '../../lib/errors';
 import { bytes } from '../../lib/format';
 import { cx } from '../../lib/cx';
@@ -29,20 +28,15 @@ import type {
   SharedSettingKey,
 } from '../../protocol/types';
 import { draftOf as answerDraftOf, useAnswers } from '../../stores/answers';
+import { jobOf, useDictationJobs, type PolishPlan } from '../../stores/dictationJobs';
 import { draftOf, useDrafts } from '../../stores/drafts';
 import { useImeGuard } from './useImeGuard';
 import { sessionKey } from '../../stores/sessions';
 import { VoiceControls } from '../voice/VoiceControls';
 import { WorkingPill } from '../voice/WorkingPill';
 import { mergeDraft } from '../voice/draft';
-import { primarySlot } from '../voice/primarySlot';
-import {
-  applyPolished,
-  canPolish,
-  polishRequest,
-  undoPolished,
-  type PolishSpan,
-} from '../voice/polish';
+import { primarySlot, type PolishPhase } from '../voice/primarySlot';
+import { canPolish, undoPolished, type PolishSpan } from '../voice/polish';
 import { useVoice } from '../voice/useVoice';
 import { composeAnswer } from './answering';
 import { attachHint, canAttachShared, canInterruptShared, canSetShared, canSteer } from './attach';
@@ -94,19 +88,6 @@ interface Props {
 }
 
 const NO_COMMANDS: Command[] = [];
-
-/**
- * A29 — where a dictation is between the recogniser and the model: nowhere,
- * waiting for the answer, holding one that can still be undone, or told that the
- * request failed and the words were left alone.
- */
-type PolishState =
-  | { phase: 'idle' }
-  | { phase: 'polishing' }
-  | { phase: 'polished'; span: PolishSpan; text: string }
-  | { phase: 'failed' };
-
-const POLISH_IDLE: PolishState = { phase: 'idle' };
 
 /** How long the one line about a failed polish stays before it goes away. */
 const POLISH_FAILED_MS = 5_000;
@@ -197,18 +178,23 @@ export function Composer({
   const clearAnswer = useAnswers((s) => s.clear);
 
   /**
-   * A29: the polish run, and the counter that ends one. A send, an edit or a
-   * new dictation bumps it, and an answer whose run is no longer current is
-   * dropped — the words on screen are the person's, not a late model's.
+   * A29: the polish run, which `useDictationJobs` owns so that it survives this
+   * component. A send, an edit or a new dictation drops it, and an answer that
+   * finds the draft changed is dropped — the words on screen are the person's,
+   * not a late model's. The same job is what reopening the session shows.
    */
-  const [polish, setPolish] = useState<PolishState>(POLISH_IDLE);
-  const polishRun = useRef(0);
+  const jobs = useDictationJobs;
+  const job = useDictationJobs(jobOf(key));
   const polishReady = polishEnabled && polishChosen && polishModel.length > 0;
 
-  const dropPolish = useCallback(() => {
-    polishRun.current += 1;
-    setPolish((current) => (current.phase === 'idle' ? current : POLISH_IDLE));
-  }, []);
+  const dropPolish = useCallback(() => jobs.getState().drop(key), [jobs, key]);
+
+  // This composer is the session's open one while it is mounted: a result that
+  // lands now is seen, and one that landed before is seen from here on.
+  useEffect(() => {
+    jobs.getState().open(key);
+    return () => jobs.getState().leave(key);
+  }, [jobs, key]);
 
   const terminalControlled = session.control === 'terminal';
   // A10: a shared session is a live CLI the device is attached to. Everything
@@ -385,41 +371,26 @@ export function Composer({
    * conversation the page already shows, and come back said cleanly. Only the
    * dictated span is ever replaced, and only while the field still holds it.
    */
+  const polishPlan = useCallback(
+    (): PolishPlan | null =>
+      polishReady
+        ? { model: polishModel, strength: polishStrength, context: polishContext?.() ?? [] }
+        : null,
+    [polishReady, polishModel, polishStrength, polishContext],
+  );
+
   const startPolish = useCallback(
     (span: PolishSpan) => {
-      if (!polishReady || !canPolish(span.dictated)) return;
-      polishRun.current += 1;
-      const run = polishRun.current;
-      setPolish({ phase: 'polishing' });
-      const body = polishRequest(
-        span,
-        { model: polishModel, strength: polishStrength },
-        polishContext?.() ?? [],
-      );
-      api
-        .polish(body)
-        .then((result) => {
-          if (run !== polishRun.current) return;
-          const next = applyPolished(textRef.current, span, result.text);
-          if (next === null) {
-            setPolish(POLISH_IDLE);
-            return;
-          }
-          setDraft(next);
-          setPolish({ phase: 'polished', span, text: result.text.trim() });
-        })
-        .catch(() => {
-          if (run !== polishRun.current) return;
-          setPolish({ phase: 'failed' });
-        });
+      const plan = polishPlan();
+      if (plan && canPolish(span.dictated)) jobs.getState().polish(key, span, plan);
     },
-    [polishReady, polishModel, polishStrength, polishContext, setDraft],
+    [polishPlan, jobs, key],
   );
 
   /** Put the dictated words back, and take the note away with them. */
   const undoPolish = () => {
-    if (polish.phase !== 'polished') return;
-    const back = undoPolished(textRef.current, polish.span, polish.text);
+    if (!job?.note) return;
+    const back = undoPolished(textRef.current, job.note.span, job.note.text);
     if (back !== null) setDraft(back);
     dropPolish();
   };
@@ -427,10 +398,10 @@ export function Composer({
   // The one line about a failed polish says what happened and then goes away;
   // the words it is about are in the field, where they always were.
   useEffect(() => {
-    if (polish.phase !== 'failed') return;
-    const timer = window.setTimeout(() => setPolish(POLISH_IDLE), POLISH_FAILED_MS);
+    if (!job?.failed) return;
+    const timer = window.setTimeout(dropPolish, POLISH_FAILED_MS);
     return () => window.clearTimeout(timer);
-  }, [polish.phase]);
+  }, [job, dropPolish]);
 
   /**
    * Dictation writes into this field and nothing else: no utterance is sent by
@@ -439,6 +410,14 @@ export function Composer({
    */
   const voice = useVoice({
     enabled: sttEnabled && !disabled,
+    // Leaving mid-dictation hands the rest of it to the job store, which
+    // finishes the transcript and the polish into this session's draft.
+    onDetach: () => {
+      const run = dictation.current;
+      if (!run) return null;
+      dictation.current = null;
+      return jobs.getState().handoff(key, { ...run, plan: polishPlan() });
+    },
     onTranscript: (transcript, isFinal) => {
       const run = dictation.current;
       if (!run || textRef.current !== run.applied) return;
@@ -467,7 +446,16 @@ export function Composer({
    * reads this and nothing else. A put-back still out is the app's move, like
    * a polish still out (A43).
    */
-  const voiceSlot = primarySlot(voice.state, polish.phase);
+  const jobPhase = job?.phase;
+  const polishPhase: PolishPhase =
+    jobPhase === 'polishing' || jobPhase === 'finishing'
+      ? 'polishing'
+      : job?.note
+        ? 'polished'
+        : job?.failed
+          ? 'failed'
+          : 'idle';
+  const voiceSlot = primarySlot(voice.state, polishPhase);
   const slot = returning && voiceSlot === 'send' ? 'working' : voiceSlot;
 
   const startVoice = () => {
@@ -648,7 +636,7 @@ export function Composer({
         </div>
       ) : null}
 
-      {voiceBusy || polish.phase === 'polishing' ? (
+      {voiceBusy || polishPhase === 'polishing' ? (
         <p className="voice-status hint">
           {voiceBusy
             ? voice.state === 'starting'
@@ -656,7 +644,9 @@ export function Composer({
               : voice.state === 'finishing'
                 ? strings.voice.finishing
                 : strings.voice.transcribing
-            : strings.voice.polishing}
+            : jobPhase === 'finishing'
+              ? strings.voice.finishing
+              : strings.voice.polishing}
         </p>
       ) : null}
 
@@ -807,14 +797,22 @@ export function Composer({
               // Dictation is over and the model has the words, or an edited
               // message is on its way back into the line (A43): the slot waits
               // where Send was, and takes no click while it does.
-              <WorkingPill label={returning ? strings.chat.sending : strings.voice.polishing} />
+              <WorkingPill
+                label={
+                  returning
+                    ? strings.chat.sending
+                    : jobPhase === 'finishing'
+                      ? strings.voice.finishing
+                      : strings.voice.polishing
+                }
+              />
             )}
             </div>
           )}
         </div>
       </div>
 
-      {polish.phase === 'polished' ? (
+      {polishPhase === 'polished' ? (
         <p className="polish-note hint">
           <span>{strings.voice.polished}</span>
           <span aria-hidden>·</span>
@@ -822,7 +820,7 @@ export function Composer({
             {strings.voice.undo}
           </button>
         </p>
-      ) : polish.phase === 'failed' ? (
+      ) : polishPhase === 'failed' ? (
         <p className="polish-note hint" role="status">
           {strings.voice.polishFailed}
         </p>

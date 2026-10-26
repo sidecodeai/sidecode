@@ -388,8 +388,8 @@ export function ChatPage() {
           `docs/DESIGN.md` § "The composer" — **A draft belongs to its
           session**. The route keeps one `ChatPage` across a switch, so the key
           is what remounts the composer: a dictation running in the session
-          being left ends there (`useVoice` tears down on unmount) and its words
-          stay in that session's draft, which the store kept.
+          being left is handed to the job store (`useVoice` detaches on unmount)
+          and finishes into that session's draft, which `useDrafts` kept.
         */}
         <Composer
           key={key}

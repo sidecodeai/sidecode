@@ -213,6 +213,39 @@ write — every partial, and the final one that lands as the run ends — now se
 in view by setting `scrollTop`, never animating it. Typing sets nothing, because a caret keeps
 itself visible, and neither does a polished answer or an Undo: those are the person's draft again.
 
+## Background dictation
+
+A dictation that has had Done tapped belongs to `useDictationJobs` (`src/stores/dictationJobs.ts`),
+not to the composer, which `ChatPage` remounts per session (`key={key}`). The ruling is
+`docs/DESIGN.md` § "The composer", **Dictation keeps going when you leave**; this is the web side:
+
+- `useVoice` takes an `onDetach` option. When the composer unmounts while the controller is
+  listening or finishing, it asks `onDetach` for a sink, tells a listening run Done (implicit Done)
+  and keeps its sockets, timers and segments alive; the sink replaces `onTranscript`. With no sink
+  the run is torn down as before. `onTranscript` and the sink also get `interrupted`, true for a
+  failed socket or a gateway that never answered within 30 s.
+- `Composer` hands over `handoff(key, { base, applied, plan })`: the partial words leave the draft
+  if it still equals `applied`, the job is `finishing`, and the final transcript is appended to the
+  stored draft with `mergeDraft` before polish starts (`useDrafts.setText`, the store the draft
+  already lives in). The model plan (model, strength, context) is frozen at that moment.
+- Polish runs through the store for every dictation, in the open composer too. The store reads the
+  draft when the answer arrives, never a component's ref, and applies it with `applyPolished`, so an
+  answer that finds the draft changed is dropped and a late one can never overwrite newer typing.
+  The request carries an `AbortController`: `drop` (an edit, a send, a new dictation) and sign-out
+  abort it. This fixes the stale-closure bug where an unmounted composer's `textRef` was compared.
+- The composer reads its job: "Finishing the transcript" / "Polishing…" in the status line and the
+  spinner in Send's slot while one runs, and the Polished · Undo or failure note once it is ready.
+  A new dictation is not offered while a job of that session is finishing or polishing.
+- `DictationRowLabel` draws the session row's trailing label in `SidebarItem` and `SessionRow`
+  (`voice.rowTranscribing`, `rowPolishing`, `rowReady`, `rowInterrupted`; English and zh-Hans).
+  Opening the session clears a finished job's label.
+- Jobs are keyed by session key alone, not by account: the store is emptied on sign-out
+  (`signOut`), which aborts polish runs, closes the sockets of handed-over runs and makes any sink
+  handed out before it inert, so a late transcript writes into no one's draft.
+- The store holds no audio, never retries a transcription and has no send path. The gateway's
+  per-account speech stream cap is 8, usually enough for the overlap; switching quickly across more
+  than four long dictations can still hit it. Tests: `tests/dictation-jobs.test.tsx`.
+
 ## Dictation polish (A29)
 
 A finished dictation can go through the model the gateway operator configured before the person

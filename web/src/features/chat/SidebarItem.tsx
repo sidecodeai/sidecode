@@ -4,6 +4,8 @@ import { UnseenDot } from '../../components/UnseenDot';
 import { cx } from '../../lib/cx';
 import { baseName, relativeTime } from '../../lib/format';
 import { sessionTitle } from '../../strings';
+import { keyOf } from '../../stores/sessions';
+import { DictationRowLabel } from '../voice/DictationRowLabel';
 import type { Session } from '../../protocol/types';
 
 interface Props {
@@ -38,6 +40,7 @@ export function SidebarItem({ session, online, active, unseen, onOpen }: Props) 
           <span className="sidebar-sub">
             {`${baseName(session.cwd)} · ${relativeTime(session.updated_at)}`}
           </span>
+          <DictationRowLabel sessionKey={keyOf(session)} />
         </span>
       </button>
     </li>
