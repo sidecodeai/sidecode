@@ -19,7 +19,6 @@ from rc_gateway.polish import (
     PolishError,
 )
 from rc_gateway.polish_prompt import (
-    DICTATION_PREFIX,
     ContextMessage,
     build_messages,
     clean_answer,
@@ -119,19 +118,25 @@ def test_moderate_keeps_the_words_and_strong_may_restructure() -> None:
     moderate = system_text("moderate")
     strong = system_text("strong")
     for text in (moderate, strong):
-        assert "fillers" in text and "false starts" in text and "punctuate" in text
-        assert "Return the polished text only" in text
+        assert text.startswith("You are a text editor, not an assistant.")
+        assert "<dictation>" in text and "<reference_only>" in text
+        assert "Output only the edited text" in text
         assert "language the text was spoken in" in text
-    assert "keep the speaker's words and their order" in moderate
-    assert "restructure" not in moderate
-    assert "restructure for clarity and precision" in strong
-    assert "resolve vague references" in strong
-    assert "adding no request the speaker did not make" in strong
+        assert text.endswith(
+            "Output: Can you check why the build is failing on CI? Is it the lockfile?"
+        )
+        assert "登录接口为什么会报 500？" in text  # noqa: RUF001
+    assert "Level: light." in moderate and "Level: strong." not in moderate
+    assert "Level: strong." in strong and "Level: light." not in strong
+    assert "If the speaker only asked a question" in strong
     assert "The speaker chose the language en." in system_text("strong", "en")
     assert "chose the language" not in system_text("strong", "auto")
+    before, examples = system_text("moderate", "en").split("\n\nExamples", 1)
+    assert before.endswith("\n\nThe speaker chose the language en.")
+    assert examples.startswith(" (the output")
 
 
-def test_the_dictation_is_the_last_message_and_the_conversation_comes_first() -> None:
+def test_the_prompt_is_one_system_and_one_user_message() -> None:
     request = fixture("polish.request.json")
     context = [ContextMessage(role=item["role"], text=item["text"]) for item in request["context"]]
     messages = build_messages(
@@ -140,13 +145,17 @@ def test_the_dictation_is_the_last_message_and_the_conversation_comes_first() ->
         language=request["language"],
         context=context,
     )
-    assert messages[0]["role"] == "system"
-    assert [item["role"] for item in messages[1:-1]] == ["user", "assistant"]
-    assert messages[1]["content"] == request["context"][0]["text"]
-    assert messages[2]["content"] == request["context"][1]["text"]
-    last = messages[-1]
-    assert last["role"] == "user"
-    assert last["content"] == f"{DICTATION_PREFIX}\n{request['text']}"
+    assert [item["role"] for item in messages] == ["system", "user"]
+    first, second = request["context"][0]["text"], request["context"][1]["text"]
+    assert messages[1]["content"] == (
+        f"<reference_only>\n[developer] {first}\n[agent] {second}\n</reference_only>\n\n"
+        f"<dictation>\n{request['text']}\n</dictation>"
+    )
+
+
+def test_no_context_omits_the_reference_block() -> None:
+    messages = build_messages("hello", strength="moderate")
+    assert messages[1]["content"] == "<dictation>\nhello\n</dictation>"
 
 
 def test_the_prompt_trims_to_the_schema_limits() -> None:
@@ -154,12 +163,14 @@ def test_the_prompt_trims_to_the_schema_limits() -> None:
     context.append(ContextMessage(role="assistant", text="x" * 5000))
     context.append(ContextMessage(role="assistant", text="   "))
     messages = build_messages("a" * 9000, strength="moderate", context=context)
-    # The last twenty items are taken first, then the blank one is dropped: 19 turns remain.
-    turns = messages[1:-1]
-    assert len(turns) == 19
-    assert turns[0]["content"] == "turn 12"
-    assert len(turns[-1]["content"]) == 4000
-    assert len(messages[-1]["content"]) == 8192 + len(DICTATION_PREFIX) + 1
+    # The last twenty items are taken first, then the blank one is dropped: 19 lines remain.
+    content = messages[1]["content"]
+    reference, dictation = content.split("\n</reference_only>\n\n")
+    lines = reference.removeprefix("<reference_only>\n").split("\n")
+    assert len(lines) == 19
+    assert lines[0] == "[developer] turn 12"
+    assert lines[-1] == "[agent] " + "x" * 800
+    assert dictation == f"<dictation>\n{'a' * 8192}\n</dictation>"
 
 
 def test_an_answer_loses_one_surrounding_quote_pair() -> None:
@@ -257,7 +268,11 @@ async def test_a_completion_carries_the_prompt_and_returns_the_text() -> None:
     assert body["temperature"] == 0.2
     assert body["stream"] is False
     assert 0 < body["max_tokens"] <= MAX_OUTPUT_TOKENS
-    assert body["messages"][-1]["content"].startswith(DICTATION_PREFIX)
+    assert [item["role"] for item in body["messages"]] == ["system", "user"]
+    assert body["messages"][1]["content"].startswith("<reference_only>\n[developer] Make the dot")
+    assert body["messages"][1]["content"].endswith(
+        "<dictation>\num the green blinking thing\n</dictation>"
+    )
 
 
 @pytest.mark.asyncio
