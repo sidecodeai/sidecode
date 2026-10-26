@@ -631,9 +631,14 @@ async def test_a_pump_that_dies_mid_turn_does_not_drain_into_a_dead_connection(
         ended.append("end")
 
     class DeadClient:
-        async def receive_messages(self) -> Any:
+        def receive_messages(self) -> Any:
+            return self
+
+        def __aiter__(self) -> Any:
+            return self
+
+        async def __anext__(self) -> Any:
             raise RuntimeError("gone")
-            yield
 
     driven.runner._on_turn_end = on_turn_end
     driven.runner._client = DeadClient()  # type: ignore[assignment]
