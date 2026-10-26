@@ -249,7 +249,7 @@ async def test_a_cleared_mark_is_not_brought_back_by_the_next_summary(tmp_path: 
     assert "unseen" not in again.summary
 
 
-async def test_the_count_is_the_unarchived_marked_sessions_of_the_devices(tmp_path: Path) -> None:
+async def test_the_count_is_the_open_held_marked_sessions_of_the_devices(tmp_path: Path) -> None:
     index = SessionIndex(tmp_path / "sessions.sqlite3")
     for session_id, device_id in (("s1", "d1"), ("s2", "d1"), ("s3", "d2")):
         await index.upsert(session_summary(session_id, device_id, state="running"))
