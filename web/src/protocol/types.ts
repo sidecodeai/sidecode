@@ -501,6 +501,10 @@ export interface ApprovalEvent extends EventBase {
   input?: Record<string, unknown>;
   diff?: DiffInfo;
   options: ApprovalOption[];
+  /** A54: a plan to approve; the Markdown plan is `input.plan`. */
+  approval_kind?: 'plan';
+  /** A54: `input.plan` was cut to fit the frame, so only "keep planning" and "shorter" are offered. */
+  plan_truncated?: boolean;
   status: 'pending' | 'resolved' | 'expired';
   decision?: { option_id: string; by: 'remote' | 'terminal' | 'policy' };
 }

@@ -1,0 +1,28 @@
+{
+  "seq": 33,
+  "ts": 1788944600000,
+  "kind": "approval",
+  "block_id": "2a9f6d51-3b0e-4f0a-a5c9-6b7d8e1f4c33",
+  "request_id": "9d0b4e27-71c6-4d58-8a3f-5c1e2b7a6d44",
+  "tool": "ExitPlanMode",
+  "tool_kind": "other",
+  "title": "Plan ready: Rewrite the gateway client",
+  "approval_kind": "plan",
+  "plan_truncated": true,
+  "input": {
+    "plan": "# Rewrite the gateway client\n\n## Steps\n\n1. Split the transport from the retry policy.\n2. Move every call site onto the new interface.\n\n…[truncated]"
+  },
+  "options": [
+    {
+      "id": "plan_shorten",
+      "label": "Ask for a shorter plan",
+      "style": "primary"
+    },
+    {
+      "id": "plan_keep",
+      "label": "No, keep planning",
+      "style": "danger"
+    }
+  ],
+  "status": "pending"
+}

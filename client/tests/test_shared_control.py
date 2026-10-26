@@ -779,6 +779,24 @@ async def test_the_hook_going_away_expires_the_question(harness: Harness) -> Non
     assert state.question is None
 
 
+async def test_a_message_held_behind_a_question_goes_in_when_the_hook_goes_away(
+    harness: Harness,
+) -> None:
+    """The transcript ended the turn while the dialog was open: nothing else will drain."""
+    entry = await harness.attach()
+    await tick(harness.hub, entry, running=True)
+    hook = FakeHookQuestion()
+    await harness.hub.attach_question(hook)
+    await harness.hub.send({"id": SEND_REQUEST, "session_id": "sess-1", "text": "later"})
+    await tick(harness.hub, entry, running=False)
+    assert harness.events("user_message") == []
+
+    await harness.hub.attach_question_closed(hook)
+    await drained(entry)
+
+    assert [bubble["block_id"] for bubble in harness.events("user_message")] == [SEND_REQUEST]
+
+
 async def test_a_second_question_expires_the_one_still_open(harness: Harness) -> None:
     await harness.attach()
     first = FakeHookQuestion()
@@ -1292,3 +1310,191 @@ async def test_a_message_the_bridge_refuses_on_sending_keeps_no_files(harness: H
     await tick(harness.hub, entry, running=False)
     [written] = message_folders()
     assert harness.attachment.injected[0][1].endswith(f"- shot.png: {written / 'shot.png'}")
+
+
+# ------------------------------------------------- A54: a plan from the hook
+
+PLAN_TEXT = "# Add retries\n\n- wrap the client\n"
+
+
+class FakePlanHook(HookQuestion):
+    def __init__(self, truncated: bool = False) -> None:
+        super().__init__(
+            session_id="sess-1",
+            cwd="/repo",
+            tool="ExitPlanMode",
+            input={"plan": PLAN_TEXT, "plan_truncated": truncated},
+        )
+        self.replies: list[dict[str, Any] | None] = []
+
+    async def answer(self, answers: dict[str, Any] | None) -> bool:
+        self.replies.append(answers)
+        return True
+
+
+async def test_a_plan_from_the_hook_is_raised_as_a_plan_card(harness: Harness) -> None:
+    entry = await harness.attach()
+    await harness.hub.attach_question(FakePlanHook())
+
+    approval = harness.events("approval")[-1]
+    assert approval["status"] == "pending"
+    assert approval["approval_kind"] == "plan"
+    assert approval["input"] == {"plan": PLAN_TEXT}
+    assert approval["title"] == "Plan ready: Add retries"
+    assert [option["id"] for option in approval["options"]] == [
+        "plan_accept_edits",
+        "plan_manual",
+        "plan_keep",
+    ]
+    assert entry.session.state == "needs_approval"
+
+
+async def test_approving_a_plan_answers_the_hook_with_the_mode(harness: Harness) -> None:
+    entry = await harness.attach()
+    hook = FakePlanHook()
+    await harness.hub.attach_question(hook)
+    approval = harness.events("approval")[-1]
+
+    await harness.hub.approve(
+        {
+            "session_id": "sess-1",
+            "request_id": approval["request_id"],
+            "option_id": "plan_accept_edits",
+        }
+    )
+
+    assert hook.replies == [{"behavior": "allow", "mode": "acceptEdits"}]
+    resolved = harness.events("approval")[-1]
+    assert resolved["status"] == "resolved"
+    assert resolved["decision"] == {"option_id": "plan_accept_edits", "by": "remote"}
+    assert resolved["approval_kind"] == "plan"
+    assert entry.session.state != "needs_approval"
+
+
+async def test_keeping_on_planning_carries_the_feedback_to_the_hook(harness: Harness) -> None:
+    await harness.attach()
+    hook = FakePlanHook()
+    await harness.hub.attach_question(hook)
+    approval = harness.events("approval")[-1]
+
+    await harness.hub.approve(
+        {
+            "session_id": "sess-1",
+            "request_id": approval["request_id"],
+            "option_id": "plan_keep",
+            "message": "use a queue",
+        }
+    )
+
+    [reply] = hook.replies
+    assert reply is not None
+    assert reply["behavior"] == "deny"
+    assert "use a queue" in reply["message"]
+    assert reply["interrupt"] is False
+
+
+async def test_a_plan_card_refuses_an_option_it_never_offered(harness: Harness) -> None:
+    await harness.attach()
+    hook = FakePlanHook()
+    await harness.hub.attach_question(hook)
+    approval = harness.events("approval")[-1]
+
+    with pytest.raises(RcError) as raised:
+        await harness.hub.approve(
+            {"session_id": "sess-1", "request_id": approval["request_id"], "option_id": "allow"}
+        )
+    assert raised.value.code == "bad_request"
+    assert hook.replies == []
+
+
+async def test_a_plan_too_big_to_show_whole_offers_no_approval(harness: Harness) -> None:
+    await harness.attach()
+    hook = FakePlanHook(truncated=True)
+    await harness.hub.attach_question(hook)
+    approval = harness.events("approval")[-1]
+
+    assert approval["plan_truncated"] is True
+    assert [option["id"] for option in approval["options"]] == ["plan_shorten", "plan_keep"]
+    with pytest.raises(RcError):
+        await harness.hub.approve(
+            {
+                "session_id": "sess-1",
+                "request_id": approval["request_id"],
+                "option_id": "plan_accept_edits",
+            }
+        )
+
+
+async def test_a_plan_the_terminal_answered_resolves_from_the_transcript(
+    harness: Harness,
+) -> None:
+    entry = await harness.attach()
+    hook = FakePlanHook()
+    await harness.hub.attach_question(hook)
+    await harness.hub.attach_question_closed(hook)
+
+    assert harness.events("approval")[-1]["status"] == "pending"
+    await harness.hub.shared.tool_finished(entry, "ExitPlanMode", failed=False)
+
+    resolved = harness.events("approval")[-1]
+    assert resolved["status"] == "resolved"
+    assert resolved["decision"] == {"option_id": "elsewhere", "by": "terminal"}
+
+
+async def test_answering_a_plan_the_hook_already_left_changes_nothing(harness: Harness) -> None:
+    await harness.attach()
+    hook = FakePlanHook()
+    await harness.hub.attach_question(hook)
+    approval = harness.events("approval")[-1]
+    await harness.hub.attach_question_closed(hook)
+
+    before = len(harness.events("approval"))
+    result = await harness.hub.approve(
+        {
+            "session_id": "sess-1",
+            "request_id": approval["request_id"],
+            "option_id": "plan_manual",
+        }
+    )
+    assert result == {}
+    assert len(harness.events("approval")) == before
+    assert hook.replies == []
+
+
+async def test_a_plan_with_no_text_steps_aside(harness: Harness) -> None:
+    await harness.attach()
+    hook = FakePlanHook()
+    hook.input = {"plan": ""}
+    await harness.hub.attach_question(hook)
+    assert harness.events("approval") == []
+    assert hook.replies == [None]
+
+
+async def test_a_choice_the_hook_can_no_longer_take_is_not_resolved(harness: Harness) -> None:
+    await harness.attach()
+
+    class GoneHook(FakePlanHook):
+        async def answer(self, answers: dict[str, Any] | None) -> bool:
+            return False
+
+    await harness.hub.attach_question(GoneHook())
+    approval = harness.events("approval")[-1]
+    before = len(harness.events("approval"))
+
+    await harness.hub.approve(
+        {"session_id": "sess-1", "request_id": approval["request_id"], "option_id": "plan_manual"}
+    )
+
+    assert len(harness.events("approval")) == before
+
+
+async def test_a_plan_from_the_hook_is_fitted_to_the_frame_again(harness: Harness) -> None:
+    await harness.attach()
+    hook = FakePlanHook()
+    hook.input = {"plan": "word " * 40000, "plan_truncated": False}
+    await harness.hub.attach_question(hook)
+
+    approval = harness.events("approval")[-1]
+    assert approval["plan_truncated"] is True
+    assert len(json.dumps(approval["input"]["plan"]).encode("utf-8")) <= 48 * 1024
+    assert [option["id"] for option in approval["options"]] == ["plan_shorten", "plan_keep"]

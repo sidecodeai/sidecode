@@ -64,6 +64,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 from .. import attachments
+from ..agents.claude.plans import PLAN_TOOL, fit_plan, plan_fields, verdict
 from ..agents.claude.questions import answers_for_tool, answers_from_tool
 from ..agents.claude.subagents import SUBAGENT_STALE_S
 from ..agents.claude.tools import reads_session_file, tool_kind, tool_title
@@ -130,6 +131,8 @@ QUOTE_CHARS = 60
 ALLOW = "allow"
 DENY = "deny"
 BEHAVIORS = (ALLOW, DENY)
+# A11: the id of a request somebody else settled; it is never one of the options.
+ELSEWHERE = "elsewhere"
 
 # Session-scoped grants are not available through the relay, so the two options
 # below are the whole vocabulary of a shared approval.
@@ -164,6 +167,8 @@ class SharedApproval:
     tool: str
     title: str
     input: dict[str, Any]
+    plan: dict[str, Any] | None = None
+    hook: HookQuestion | None = None
 
 
 @dataclass(slots=True)
@@ -895,7 +900,10 @@ class SharedControl:
             if approval.tool != tool:
                 continue
             self._forget(state, request_id)
-            await self._resolve(entry, approval, DENY if failed else ALLOW, "terminal")
+            # A plan has no allow or deny of its own to name, so it says only
+            # that the terminal answered (A11's reserved id).
+            option_id = ELSEWHERE if approval.plan is not None else DENY if failed else ALLOW
+            await self._resolve(entry, approval, option_id, "terminal")
             return
 
     # ----------------------------------------------------------- turn hooks
@@ -1457,13 +1465,17 @@ class SharedControl:
         await self._emit_approval(entry, approval, status="pending")
         await self._settle(entry)
 
-    async def approve(self, entry: SessionEntry, request_id: str, option_id: str) -> dict[str, Any]:
+    async def approve(
+        self, entry: SessionEntry, request_id: str, option_id: str, message: str | None = None
+    ) -> dict[str, Any]:
         state = entry.shared
         if state is None:
             raise RcError("conflict", "the session is no longer attached")
+        approval = state.approvals.get(request_id)
+        if approval is not None and approval.plan is not None:
+            return await self._approve_plan(entry, state, approval, option_id, message)
         if option_id not in BEHAVIORS:
             raise RcError("bad_request", "a shared session accepts only allow or deny")
-        approval = state.approvals.get(request_id)
         if approval is None:
             # Answered in the terminal, or from another app first. Claude Code
             # drops unknown ids silently, so this is a no-op either way.
@@ -1479,6 +1491,55 @@ class SharedControl:
         if approval is not None:
             state.by_channel.pop(approval.channel_id, None)
 
+    async def _approve_plan(
+        self,
+        entry: SessionEntry,
+        state: SharedState,
+        approval: SharedApproval,
+        option_id: str,
+        message: str | None,
+    ) -> dict[str, Any]:
+        """An app's choice on a plan card, handed to the hook that waits for it (A54)."""
+        assert approval.plan is not None
+        truncated = approval.plan.get("plan_truncated") is True
+        if option_id not in {option["id"] for option in approval.plan["options"]}:
+            raise RcError("bad_request", "that is not an option this plan offers")
+        hook, approval.hook = approval.hook, None
+        if hook is None:
+            # The CLI stopped waiting on us, so the terminal's dialog has the
+            # last word and the transcript will say how it ended.
+            return {}
+        if not await hook.answer(verdict(option_id, message, truncated)):
+            # The hook has gone, so nothing took this choice.
+            return {}
+        self._forget(state, approval.request_id)
+        await self._resolve(entry, approval, option_id, "remote")
+        return {}
+
+    async def plan_request(self, entry: SessionEntry, hook: HookQuestion) -> None:
+        """Raise the plan the CLI is asking about as a block an app can answer (A54)."""
+        state = entry.shared
+        plan = hook.input.get("plan")
+        if state is None or not isinstance(plan, str) or not plan:
+            await hook.answer(None)
+            return
+        fitted, cut = fit_plan(plan)
+        fields = plan_fields(fitted, cut or hook.input.get("plan_truncated") is True)
+        approval = SharedApproval(
+            request_id=str(uuid.uuid4()),
+            channel_id=f"plan:{uuid.uuid4()}",
+            block_id=str(uuid.uuid4()),
+            tool=PLAN_TOOL,
+            title=fields["title"],
+            input=fields["input"],
+            plan=fields,
+            hook=hook,
+        )
+        state.approvals[approval.request_id] = approval
+        state.by_channel[approval.channel_id] = approval.request_id
+        await self._emit_approval(entry, approval, status="pending")
+        await self._settle(entry)
+
     async def _resolve(
         self, entry: SessionEntry, approval: SharedApproval, option_id: str, by: str
     ) -> None:
@@ -1491,6 +1552,9 @@ class SharedControl:
 
     async def question(self, entry: SessionEntry, hook: HookQuestion) -> None:
         """Raise the CLI's own question as a block an app can answer (A20)."""
+        if hook.tool == PLAN_TOOL:
+            await self.plan_request(entry, hook)
+            return
         state = entry.shared
         if state is None:
             await hook.answer(None)
@@ -1546,10 +1610,17 @@ class SharedControl:
     async def question_closed(self, entry: SessionEntry, hook: HookQuestion) -> None:
         """Claude Code stopped the hook, so nobody can answer this block now."""
         state = entry.shared
-        if state is None or state.question is None or state.question.hook is not hook:
+        if state is None:
+            return
+        for approval in state.approvals.values():
+            if approval.hook is hook:
+                approval.hook = None
+        if state.question is None or state.question.hook is not hook:
             return
         await self._expire_question(entry, state)
         await self._settle(entry)
+        if state.injectable and (entry.queue or state.steers):
+            self.hub.schedule_drain(entry)
 
     async def _expire_question(self, entry: SessionEntry, state: SharedState) -> None:
         question, state.question = state.question, None
@@ -1589,6 +1660,8 @@ class SharedControl:
             "options": [dict(option) for option in APPROVAL_OPTIONS],
             "status": status,
         }
+        if approval.plan is not None:
+            fields.update(approval.plan)
         if decision is not None:
             fields["decision"] = decision
         await entry.channel.emit("approval", **fields)

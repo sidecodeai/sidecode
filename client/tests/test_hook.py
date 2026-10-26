@@ -251,7 +251,7 @@ def test_the_hook_entry_is_one_command_with_a_timeout() -> None:
 def test_the_question_hook_is_matched_to_the_tool_and_waits_a_day() -> None:
     entries = settings()["hooks"]["PermissionRequest"]
     assert len(entries) == 1
-    assert entries[0]["matcher"] == "AskUserQuestion"
+    assert entries[0]["matcher"] == "AskUserQuestion|ExitPlanMode"
     entry = entries[0]["hooks"][0]
     assert entry["type"] == "command"
     assert entry["timeout"] == QUESTION_TIMEOUT == 86400
@@ -333,3 +333,120 @@ def test_a_question_payload_this_device_cannot_raise_sends_nothing(
     assert run_hook(payload, monkeypatch, hook.PERMISSION_REQUEST) == 0
     assert received(listener, timeout=0.2) is None
     assert capsys.readouterr().out == ""
+
+
+# ------------------------------------------- the plan the CLI wants approved (A54)
+
+PLAN = "# Add retries\n\n- wrap the client\n"
+PLAN_INPUT = {"plan": PLAN, "planFilePath": "/Users/me/.claude/plans/bold-fox.md"}
+PLAN_PAYLOAD = {**QUESTION_PAYLOAD, "tool_name": "ExitPlanMode", "tool_input": PLAN_INPUT}
+
+
+def test_a_plan_hook_sends_only_the_plan_and_prints_the_approval(
+    listener: socket.socket, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reply = wire.answers({"behavior": "allow", "mode": "acceptEdits"})
+    thread, seen = serve_once(listener, reply)
+    assert run_hook(PLAN_PAYLOAD, monkeypatch, hook.PERMISSION_REQUEST) == 0
+    thread.join(timeout=2)
+
+    assert seen == [
+        {
+            "type": "question",
+            "session_id": PAYLOAD["session_id"],
+            "cwd": "/tmp/proj",
+            "tool": "ExitPlanMode",
+            "input": {"plan": PLAN, "plan_truncated": False},
+        }
+    ]
+    decision = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["decision"]
+    assert decision == {
+        "behavior": "allow",
+        "updatedInput": PLAN_INPUT,
+        "updatedPermissions": [
+            {"type": "setMode", "mode": "acceptEdits", "destination": "session"}
+        ],
+    }
+
+
+def test_a_plan_hook_prints_the_refusal_and_whether_to_interrupt(
+    listener: socket.socket, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reply = wire.answers({"behavior": "deny", "message": "split it", "interrupt": True})
+    thread, _ = serve_once(listener, reply)
+    assert run_hook(PLAN_PAYLOAD, monkeypatch, hook.PERMISSION_REQUEST) == 0
+    thread.join(timeout=2)
+    decision = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["decision"]
+    assert decision == {"behavior": "deny", "message": "split it", "interrupt": True}
+
+
+def test_a_plan_the_terminal_answered_first_prints_nothing(
+    listener: socket.socket, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    thread, _ = serve_once(listener, wire.answers(None))
+    assert run_hook(PLAN_PAYLOAD, monkeypatch, hook.PERMISSION_REQUEST) == 0
+    thread.join(timeout=2)
+    assert capsys.readouterr().out == ""
+
+
+def test_a_plan_the_input_lacks_is_read_from_its_file_inside_the_plans_directory(
+    listener: socket.socket,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    config = tmp_path / "claude-config"
+    (config / "plans").mkdir(parents=True)
+    (config / "plans" / "bold-fox.md").write_text(PLAN, encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+    named = {**PLAN_PAYLOAD, "tool_input": {"planFilePath": str(config / "plans" / "bold-fox.md")}}
+    thread, seen = serve_once(listener, None)
+    assert run_hook(named, monkeypatch, hook.PERMISSION_REQUEST) == 0
+    thread.join(timeout=2)
+    assert seen[0]["input"]["plan"] == PLAN  # type: ignore[index]
+
+
+def test_a_plan_found_nowhere_sends_nothing(
+    listener: socket.socket, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "empty"))
+    outside = tmp_path / "other.md"
+    outside.write_text("not a plan", encoding="utf-8")
+    for tool_input in ({}, {"planFilePath": str(outside)}):
+        payload = {**PLAN_PAYLOAD, "tool_input": tool_input}
+        assert run_hook(payload, monkeypatch, hook.PERMISSION_REQUEST) == 0
+        assert received(listener, timeout=0.2) is None
+
+
+def test_a_plan_file_that_links_out_of_the_plans_directory_sends_nothing(
+    listener: socket.socket, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    config = tmp_path / "claude-config"
+    (config / "plans").mkdir(parents=True)
+    secret = tmp_path / "secret.md"
+    secret.write_text("hunter2", encoding="utf-8")
+    link = config / "plans" / "sneaky.md"
+    link.symlink_to(secret)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+    payload = {**PLAN_PAYLOAD, "tool_input": {"planFilePath": str(link)}}
+    assert run_hook(payload, monkeypatch, hook.PERMISSION_REQUEST) == 0
+    assert received(listener, timeout=0.2) is None
+
+
+def test_a_payload_past_the_limit_is_ignored(
+    listener: socket.socket, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    big = {**PLAN_PAYLOAD, "tool_input": {"plan": "x" * (hook.MAX_PERMISSION_STDIN_BYTES + 1)}}
+    assert run_hook(big, monkeypatch, hook.PERMISSION_REQUEST) == 0
+    assert received(listener, timeout=0.2) is None
+
+
+def test_the_other_hooks_keep_the_small_limit() -> None:
+    session = {**PAYLOAD, "padding": "x" * hook.MAX_STDIN_BYTES}
+    assert hook.read_payload(io.BytesIO(json.dumps(session).encode("utf-8"))) is None
+    assert hook.read_payload(io.BytesIO(json.dumps(PAYLOAD).encode("utf-8"))) == PAYLOAD
+    assert (
+        hook.read_payload(
+            io.BytesIO(json.dumps(session).encode("utf-8")), hook.MAX_PERMISSION_STDIN_BYTES
+        )
+        == session
+    )

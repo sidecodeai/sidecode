@@ -638,6 +638,12 @@
         "diff": {
           "$ref": "#/$defs/Diff"
         },
+        "approval_kind": {
+          "const": "plan"
+        },
+        "plan_truncated": {
+          "type": "boolean"
+        },
         "options": {
           "type": "array",
           "items": {

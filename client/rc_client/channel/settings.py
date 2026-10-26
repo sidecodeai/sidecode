@@ -8,8 +8,9 @@ session id Claude Code picked at startup and nothing else, and `/resume` and
 hook fires on each of those, which is what keeps the attachment pointed at the
 session the person is actually typing into.
 
-A `PermissionRequest` hook on `AskUserQuestion` raises the CLI's own question
-with the daemon (amendment A20). Claude Code races the hook against the dialog
+A `PermissionRequest` hook on `AskUserQuestion` and `ExitPlanMode` raises the
+CLI's own question, or the plan it wants approved, with the daemon (amendments
+A20 and A54). Claude Code races the hook against the dialog
 it shows in the terminal and takes whichever answers first, so the hook waits
 as long as the dialog does — a day, which is far longer than anyone leaves a
 question open and short enough that nothing waits for ever.
@@ -33,6 +34,8 @@ import shlex
 from pathlib import Path
 from typing import Any
 
+from ..agents.claude.plans import PLAN_TOOL
+from ..agents.claude.questions import QUESTION_TOOL
 from ..config import client_home, write_atomic
 from . import paths
 
@@ -78,7 +81,7 @@ def settings(
     *,
     tool_batch: bool = True,
 ) -> dict[str, Any]:
-    """Every session start, `AskUserQuestion`, and where each turn stands (A51).
+    """Every session start, `AskUserQuestion`, `ExitPlanMode`, and where each turn stands (A51).
 
     `tool_batch` is whether the CLI runs `PostToolBatch` hooks at all.
     """
@@ -93,7 +96,7 @@ def settings(
             "SessionStart": [_entry(command, START_TIMEOUT)],
             "PermissionRequest": [
                 {
-                    "matcher": "AskUserQuestion",
+                    "matcher": f"{QUESTION_TOOL}|{PLAN_TOOL}",
                     **_entry(question_command or paths.question_hook_command(), QUESTION_TIMEOUT),
                 }
             ],

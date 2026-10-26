@@ -5,12 +5,12 @@ it on startup and again on `/resume`, `/clear` and a compaction. It writes one
 `session_start` frame and leaves; the daemon answers nothing.
 
 `hook permission-request` is the one Claude Code runs beside its own
-`AskUserQuestion` dialog (amendment A20). It writes one `question` frame and
-then waits, for hours if that is how long the person takes, for the daemon to
-say whether an app answered first. Claude Code races the hook against its own
-dialog and takes whichever resolves first, so printing a decision is how the
-device answers the question from a phone, and printing nothing is how it steps
-aside when the terminal got there first.
+`AskUserQuestion` and `ExitPlanMode` dialogs (amendments A20 and A54). It writes
+one `question` frame and then waits, for hours if that is how long the person
+takes, for the daemon to say whether an app answered first. Claude Code races
+the hook against its own dialog and takes whichever resolves first, so printing
+a decision is how the device answers from a phone, and printing nothing is how
+it steps aside when the terminal got there first.
 
 Two rules shape the whole module. **Anything a hook prints on stdout that is
 not a decision is appended to the model's context**, so nothing else is ever
@@ -33,10 +33,13 @@ import time
 from collections.abc import Callable
 from typing import IO, Any
 
+from ..agents.claude.plans import PLAN_TOOL, fit_plan, plan_from_file, plan_text
 from ..agents.claude.questions import QUESTION_TOOL
 from . import paths, wire
 
 MAX_STDIN_BYTES = 64 * 1024
+# A plan is the whole of an `ExitPlanMode` input, which Claude Code writes unabridged.
+MAX_PERMISSION_STDIN_BYTES = 1024 * 1024
 SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,80}\Z")
 
 SESSION_START = "session-start"
@@ -107,12 +110,16 @@ def claude_pid(runner: PsRunner | None = None) -> int:
     return parent
 
 
-def read_payload(stream: IO[bytes] | None = None) -> dict[str, Any] | None:
-    """The single JSON object Claude Code writes on stdin, capped."""
+def read_payload(
+    stream: IO[bytes] | None = None, limit: int = MAX_STDIN_BYTES
+) -> dict[str, Any] | None:
+    """The single JSON object Claude Code writes on stdin, capped; None for one past the cap."""
     source = stream if stream is not None else sys.stdin.buffer
     try:
-        raw = source.read(MAX_STDIN_BYTES)
+        raw = source.read(limit + 1)
     except (OSError, ValueError):
+        return None
+    if len(raw) > limit:
         return None
     try:
         parsed = json.loads(raw)
@@ -162,12 +169,18 @@ def question_frame(payload: dict[str, Any]) -> dict[str, Any] | None:
     session_id = str(payload.get("session_id") or "")
     if not SESSION_ID.match(session_id):
         return None
-    if str(payload.get("tool_name") or "") != QUESTION_TOOL:
-        return None
+    tool = str(payload.get("tool_name") or "")
     tool_input = payload.get("tool_input")
-    if not isinstance(tool_input, dict):
+    if tool not in {QUESTION_TOOL, PLAN_TOOL} or not isinstance(tool_input, dict):
         return None
-    return wire.question(session_id, str(payload.get("cwd") or ""), QUESTION_TOOL, tool_input)
+    cwd = str(payload.get("cwd") or "")
+    if tool == QUESTION_TOOL:
+        return wire.question(session_id, cwd, tool, tool_input)
+    plan = plan_text(tool_input) or plan_from_file(tool_input)
+    if plan is None:
+        return None
+    fitted, truncated = fit_plan(plan)
+    return wire.question(session_id, cwd, tool, {"plan": fitted, "plan_truncated": truncated})
 
 
 def decision(tool_input: dict[str, Any], answers: dict[str, str]) -> dict[str, Any]:
@@ -186,6 +199,33 @@ def decision(tool_input: dict[str, Any], answers: dict[str, str]) -> dict[str, A
             },
         }
     }
+
+
+def plan_decision(tool_input: dict[str, Any], verdict: dict[str, Any]) -> dict[str, Any] | None:
+    """The hook output for a plan an app answered, or None for a verdict it cannot read.
+
+    Approving carries the input back, which Claude Code needs to honour an allow
+    for a tool that asks the person, and the mode the session goes on in. A
+    refusal is the message Claude is told, and whether the turn stops.
+    """
+    behavior = verdict.get("behavior")
+    if behavior == "allow" and isinstance(verdict.get("mode"), str):
+        decision: dict[str, Any] = {
+            "behavior": "allow",
+            "updatedInput": tool_input,
+            "updatedPermissions": [
+                {"type": "setMode", "mode": verdict["mode"], "destination": "session"}
+            ],
+        }
+    elif behavior == "deny":
+        decision = {
+            "behavior": "deny",
+            "message": str(verdict.get("message") or ""),
+            "interrupt": verdict.get("interrupt") is True,
+        }
+    else:
+        return None
+    return {"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": decision}}
 
 
 def ask(message: dict[str, Any]) -> dict[str, Any] | None:
@@ -220,7 +260,7 @@ def _reply(client: socket.socket) -> dict[str, Any] | None:
 
 def relay_question() -> None:
     """Raise the question with the daemon and print whatever an app answered."""
-    payload = read_payload()
+    payload = read_payload(limit=MAX_PERMISSION_STDIN_BYTES)
     if payload is None:
         return
     message = question_frame(payload)
@@ -231,8 +271,12 @@ def relay_question() -> None:
     if not isinstance(answers, dict) or not answers:
         # Answered in the terminal, or nowhere at all: the CLI's dialog stands.
         return
-    tool_input = message["input"]
-    sys.stdout.write(json.dumps(decision(tool_input, answers)))
+    if message["tool"] == PLAN_TOOL:
+        output = plan_decision(payload["tool_input"], answers)
+    else:
+        output = decision(message["input"], answers)
+    if output is not None:
+        sys.stdout.write(json.dumps(output))
 
 
 def _quit(_signum: int, _frame: Any) -> None:

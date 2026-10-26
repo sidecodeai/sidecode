@@ -35,8 +35,9 @@ from ..base import Emit
 from ..questions import answers_by_prompt, normalise_questions
 from . import subagents, transcripts
 from .commands import COMMANDS, COMPACT
+from .plans import KEEP, PLAN_TOOL, fit_plan, plan_fields, plan_from_file, plan_text, verdict
 from .questions import QUESTION_TOOL
-from .tools import reads_session_file
+from .tools import reads_session_file, tool_kind
 from .translate import ClaudeTranslator
 
 log = logger("rc_client.claude")
@@ -302,6 +303,9 @@ class ClaudeRunner:
             str(completion["stop_reason"]), duration, usage or None, limit=limit
         )
         self._turn_done.set()
+        await self._notify_turn_end()
+
+    async def _notify_turn_end(self) -> None:
         if self._on_turn_end is not None:
             await self._on_turn_end()
 
@@ -426,6 +430,7 @@ class ClaudeRunner:
         self._turn_done.set()
         if self.channel.session.turn is not None:
             await self.channel.end_turn(stop_reason, max(0, now_ms() - self._turn_started_at))
+        await self._notify_turn_end()
 
     async def interrupt(self) -> bool:
         client = self._client
@@ -462,6 +467,7 @@ class ClaudeRunner:
             await self._reconnect()
             self._turn_done.set()
             await self.channel.end_turn("interrupted", max(0, now_ms() - self._turn_started_at))
+            await self._notify_turn_end()
         return True
 
     async def commands(self) -> list[Command]:
@@ -506,6 +512,8 @@ class ClaudeRunner:
     ) -> PermissionResultAllow | PermissionResultDeny:
         if tool_name == QUESTION_TOOL:
             return await self._ask_question(tool_input)
+        if tool_name == PLAN_TOOL:
+            return await self._ask_plan(tool_name, tool_input, context)
         if reads_session_file(self.channel.session.session_id, tool_name, tool_input):
             # A49: an attachment the prompt named, which is the session's own.
             return PermissionResultAllow()
@@ -534,19 +542,70 @@ class ClaudeRunner:
     async def _ask_approval(
         self, tool_name: str, tool_input: dict[str, Any], context: ToolPermissionContext
     ) -> PermissionResultAllow | PermissionResultDeny:
-        from .tools import tool_kind, tool_title
+        from .tools import tool_title
 
-        request_id = str(uuid.uuid4())
-        block_id = f"approval:{request_id}"
         base: dict[str, Any] = {
-            "block_id": block_id,
-            "request_id": request_id,
             "tool": tool_name,
             "tool_kind": tool_kind(tool_name),
             "title": context.title or tool_title(tool_name, tool_input, self._cwd),
             "input": tool_input,
             "options": _approval_options(),
         }
+        decision = await self._decide(base, "deny")
+        if decision is None:
+            return PermissionResultDeny(message="No response from the remote user; denied.")
+        option_id, message = decision
+        if option_id == "deny":
+            return PermissionResultDeny(message=message or "Denied remotely.")
+        if option_id == "allow_session":
+            return PermissionResultAllow(
+                updated_permissions=[
+                    PermissionUpdate(
+                        type="addRules",
+                        rules=[PermissionRuleValue(tool_name=tool_name)],
+                        behavior="allow",
+                        destination="session",
+                    )
+                ]
+            )
+        return PermissionResultAllow()
+
+    async def _ask_plan(
+        self, tool_name: str, tool_input: dict[str, Any], context: ToolPermissionContext
+    ) -> PermissionResultAllow | PermissionResultDeny:
+        """A plan to approve (A54): the card Claude Code's own dialog has, on the phone."""
+        source = plan_text(tool_input) or plan_from_file(tool_input)
+        if source is None:
+            return await self._ask_approval(tool_name, tool_input, context)
+        plan, truncated = fit_plan(source)
+        base = {
+            "tool": tool_name,
+            "tool_kind": tool_kind(tool_name),
+            **plan_fields(plan, truncated),
+        }
+        decision = await self._decide(base, KEEP)
+        if decision is None:
+            return PermissionResultDeny(message="No response from the remote user; denied.")
+        option_id, message = decision
+        outcome = verdict(option_id, message, truncated)
+        if outcome["behavior"] == "deny":
+            return PermissionResultDeny(message=outcome["message"], interrupt=outcome["interrupt"])
+        mode = outcome["mode"]
+        self._permission_mode = mode
+        await self.channel.set_meta(permission_mode=mode)
+        return PermissionResultAllow(
+            updated_permissions=[PermissionUpdate(type="setMode", mode=mode, destination="session")]
+        )
+
+    async def _decide(self, base: dict[str, Any], fallback: str) -> tuple[str, str | None] | None:
+        """Raise an approval block and wait for the person's choice.
+
+        None when nobody answered. An option id the block never offered is read
+        as `fallback`, the refusal, and never as consent; so is the refusal
+        `_cancel_pending` hands over, whatever the block calls its own.
+        """
+        request_id = str(uuid.uuid4())
+        base = {"block_id": f"approval:{request_id}", "request_id": request_id, **base}
         await self.channel.emit("approval", status="pending", **base)
         await self.channel.set_state("needs_approval")
         decision = await self._wait_for(request_id, APPROVAL_TIMEOUT)
@@ -560,12 +619,11 @@ class ClaudeRunner:
                     "this machine answered the permission request before you could; "
                     "check the Claude settings on the device",
                 )
-            return PermissionResultDeny(message="No response from the remote user; denied.")
-        option_id = str(decision.get("option_id") or "deny")
-        if option_id not in {option["id"] for option in _approval_options()}:
-            # An id we never advertised must never be read as consent.
-            log.warning("unknown approval option; denying", tool=tool_name)
-            option_id = "deny"
+            return None
+        option_id = str(decision.get("option_id") or fallback)
+        if option_id not in {option["id"] for option in base["options"]}:
+            log.warning("unknown approval option; refusing", tool=base["tool"])
+            option_id = fallback
         await self.channel.emit(
             "approval",
             status="resolved",
@@ -573,20 +631,8 @@ class ClaudeRunner:
             **base,
         )
         await self.channel.set_state("running")
-        if option_id == "deny":
-            return PermissionResultDeny(message=str(decision.get("message") or "Denied remotely."))
-        if option_id == "allow_session":
-            return PermissionResultAllow(
-                updated_permissions=[
-                    PermissionUpdate(
-                        type="addRules",
-                        rules=[PermissionRuleValue(tool_name=tool_name)],
-                        behavior="allow",
-                        destination="session",
-                    )
-                ]
-            )
-        return PermissionResultAllow()
+        message = decision.get("message")
+        return option_id, str(message) if message else None
 
     async def _ask_question(
         self, tool_input: dict[str, Any]

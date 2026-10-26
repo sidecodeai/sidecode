@@ -4,17 +4,23 @@ import { deciderLabel, strings } from '../../../strings';
 import type { ApprovalEvent } from '../../../protocol/types';
 import { DiffView } from './DiffView';
 import { OutputBox } from './OutputBox';
+import { PlanCard } from './PlanCard';
 import { ToolIcon } from './toolIcons';
 import { toolCategory } from './toolCategory';
 
 interface Props {
   event: ApprovalEvent;
-  onDecide: (requestId: string, optionId: string) => Promise<void>;
+  onDecide: (requestId: string, optionId: string, message?: string) => Promise<void>;
 }
 
 const ORDER: Record<string, number> = { primary: 0, secondary: 1, danger: 2 };
 
 export function ApprovalCard({ event, onDecide }: Props) {
+  if (event.approval_kind === 'plan') return <PlanCard event={event} onDecide={onDecide} />;
+  return <ToolApprovalCard event={event} onDecide={onDecide} />;
+}
+
+function ToolApprovalCard({ event, onDecide }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const pending = event.status === 'pending';
   const options = [...event.options].sort(

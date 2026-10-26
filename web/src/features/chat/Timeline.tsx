@@ -28,7 +28,7 @@ import { useScrollFollow } from './useScrollFollow';
 
 export interface TimelineHandlers {
   onOpenFull: (blockId: string) => Promise<void>;
-  onApprove: (requestId: string, optionId: string) => Promise<void>;
+  onApprove: (requestId: string, optionId: string, message?: string) => Promise<void>;
   onAnswer: (requestId: string, answers: QuestionAnswers) => Promise<void>;
   onLoadOlder: () => void;
 }

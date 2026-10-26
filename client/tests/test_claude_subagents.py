@@ -607,6 +607,67 @@ async def test_interrupting_a_held_turn_ends_it_as_interrupted(
     assert driven.client.interrupts == 0
 
 
+async def test_an_abandoned_turn_asks_for_the_queue_to_drain(driven: DrivenHarness) -> None:
+    ended: list[str] = []
+
+    async def on_turn_end() -> None:
+        ended.append("end")
+
+    driven.runner._on_turn_end = on_turn_end
+    await driven.open_turn()
+
+    await driven.runner._abandon_turn("error")
+
+    assert driven.events("turn_completed")[-1]["stop_reason"] == "error"
+    assert ended == ["end"]
+
+
+async def test_a_pump_that_dies_mid_turn_does_not_drain_into_a_dead_connection(
+    driven: DrivenHarness,
+) -> None:
+    ended: list[str] = []
+
+    async def on_turn_end() -> None:
+        ended.append("end")
+
+    class DeadClient:
+        async def receive_messages(self) -> Any:
+            raise RuntimeError("gone")
+            yield
+
+    driven.runner._on_turn_end = on_turn_end
+    driven.runner._client = DeadClient()  # type: ignore[assignment]
+    await driven.open_turn()
+
+    await driven.runner._pump_loop()
+
+    assert driven.runner.busy is False
+    assert ended == []
+    assert driven.channel.session.state == "error"
+
+
+async def test_an_interrupt_that_times_out_asks_for_the_queue_to_drain(
+    driven: DrivenHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ended: list[str] = []
+
+    async def on_turn_end() -> None:
+        ended.append("end")
+
+    async def reconnect() -> None:
+        return None
+
+    monkeypatch.setattr(claude_adapter, "DRAIN_TIMEOUT", 0.01)
+    monkeypatch.setattr(driven.runner, "_reconnect", reconnect)
+    driven.runner._on_turn_end = on_turn_end
+    await driven.open_turn()
+
+    assert await driven.runner.interrupt() is True
+
+    assert driven.events("turn_completed")[-1]["stop_reason"] == "interrupted"
+    assert ended == ["end"]
+
+
 async def test_a_turn_the_person_interrupted_is_never_held(driven: DrivenHarness) -> None:
     """They said stop, and `interrupt` is already waiting on the drain."""
     driven.subagent("agent-1", [assistant("tool_use")])

@@ -236,7 +236,7 @@ def test_the_settings_file_holds_both_hooks_and_stays_private() -> None:
 
     questions = hooks["PermissionRequest"]
     assert len(questions) == 1
-    assert questions[0]["matcher"] == "AskUserQuestion"
+    assert questions[0]["matcher"] == "AskUserQuestion|ExitPlanMode"
     assert questions[0]["hooks"][0]["command"].endswith(
         "/opt/rc/bin/rc-client hook permission-request"
     )

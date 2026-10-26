@@ -1099,7 +1099,7 @@ a failing hook would interrupt your session over a feature you did not ask for.
 Its second hook is what lets a question be answered from a phone. Claude Code never relays
 `AskUserQuestion` through a channel — the CLI relays only tools that need no person — but it does
 run `PermissionRequest` hooks beside its own dialog and takes whichever answers first. So the
-settings file carries `rc-client hook permission-request`, matched to `AskUserQuestion`, with a
+settings file carries `rc-client hook permission-request`, matched to `AskUserQuestion|ExitPlanMode`, with a
 timeout of a day. That hook sends the tool's questions to the daemon and then **waits** on the
 socket: the daemon raises a `question` block the apps can answer, and the first answer to arrive
 wins. An answer from an app comes back down the socket, the hook prints it as the tool's own
@@ -1180,6 +1180,38 @@ become `expired`, and the session moves to `terminal` if the CLI process is stil
 if it exited. Messages still held in the queue stay there and go out through the ordinary resume
 path, and so do messages steered into the turn and not yet handed over (A51); their files are deleted
 now and written again by whatever delivers them (A49).
+
+### Plan approval (A54)
+
+Claude Code's `ExitPlanMode` is the other tool that needs the person, so it too is raised through
+the `PermissionRequest` hook (the matcher above) and never through the channel relay. The device
+turns it into one `approval` block with `approval_kind: "plan"`: the plan in `input.plan`, and
+Claude Code's own choices as options, `plan_accept_edits`, `plan_manual` and `plan_keep`
+(`agents/claude/plans.py`). The plan is the tool's `plan` input; when the input lacks it, the hook
+reads the file `planFilePath` names, but only a regular `.md` file under the `plans` directory of
+the Claude config (`CLAUDE_CONFIG_DIR`, else `~/.claude`). The file is opened without following a
+link or waiting on a pipe, and one over 1 MiB is not a plan. With no plan the hook sends nothing and
+the terminal's dialog stands. A plan whose JSON encoding exceeds 48 KiB is cut to fit one event
+frame, by the hook and again by the daemon, and offers only `plan_shorten` and `plan_keep`. This
+hook reads up to 1 MiB of stdin; the others keep 64 KiB.
+
+On a session this device drives, `can_use_tool` answers the same block: an approval is an allow with
+a `setMode` update (`acceptEdits` or `default`, destination `session`), which the CLI applies before
+the tool runs, so its own restore of the pre-plan mode no longer fires; the session's
+`permission_mode` is published at once. `plan_keep` is a deny, with the person's feedback as the
+message and the turn left running, or with no feedback an interrupting deny, as Escape is in the
+CLI's own dialog. On an attached session the hook prints the same two shapes. An allow carries the
+input back unchanged, because Claude Code ignores an allow for a tool that needs the person unless
+it comes with the input to run it with.
+
+The terminal's dialog stays open beside the card. When it is answered first the hook is stopped, the
+block stays pending until the transcript shows the tool finished, and it then resolves with
+`decision: {option_id: "elsewhere", by: "terminal"}` (A11's reserved id, since a plan has no allow
+or deny to name); an app's reply in that gap is a no-op, as is one the hook can no longer take. Not
+offered: clearing the context first, continuing in auto or bypass mode, refining in the cloud.
+Approving from a session that planned out of `bypassPermissions` or `auto` continues in
+`acceptEdits` or `default`. A Claude Code that still relays `ExitPlanMode` through the channel shows
+the ordinary Allow and Deny block, without `approval_kind`.
 
 ### The device types into the terminal (A40)
 
@@ -1272,8 +1304,8 @@ device answers `conflict` until the CLI is started again.
 
 ## Codex on the shared daemon
 
-Codex 0.153 and later run **every bare `codex` TUI inside one local app-server daemon**, whose
-control socket is `$CODEX_HOME/app-server-control/app-server-control.sock`. The device connects to
+Codex 0.153 and later run **every bare `codex` TUI inside one local app-server daemon** (from 0.157
+the TUI starts it itself, see "When there is no daemon"), whose control socket is `$CODEX_HOME/app-server-control/app-server-control.sock`. The device connects to
 that socket as a second client, so a Codex session started in a terminal is `control: "shared"`
 rather than `control: "terminal"`, and the apps drive it in place: no take over, no SIGTERM, no lost
 sub-agents or background commands.
@@ -1580,10 +1612,13 @@ foreign work never appears on either path.
 
 ### When there is no daemon
 
-**Nothing else on the machine ever starts the shared daemon.** A bare `codex` TUI does not: with the
-socket absent it runs its app-server embedded and never touches the control socket, verified by
-watching a TUI reach its prompt and exit with the socket still absent throughout. So a device whose
-daemon is not running would stay on rollout mirroring for ever — every terminal Codex
+**On Codex 0.153 to 0.156 nothing else on the machine starts the shared daemon.** A bare `codex` TUI
+does not: with the socket absent it runs its app-server embedded and never touches the control
+socket. From rust-v0.157.0 `daemon_auto_start` is Stable and on by default, so the TUI starts the
+daemon itself and connects to the same socket; it still runs embedded for `--no-daemon`, `--oss`,
+`--profile`, `-c`, `--enable`, `--disable`, `--search`, `--strict-config`, WSL DrvFS and a Windows
+administrator. The device's own idempotent start (`agents/codex/daemon/control.py`) therefore stays,
+for the older versions and the excluded launches. So a device whose daemon is not running would stay on rollout mirroring for ever — every terminal Codex
 `control: "terminal"`, takeover only — and nothing the person did in the terminal would change it.
 That is the same defect behind all three reports it came from: a machine where Codex was installed
 with npm (no standalone, so `daemon start` exits 1 and `codex setup` never left a daemon behind), a

@@ -1,0 +1,32 @@
+{
+  "seq": 31,
+  "ts": 1788944519800,
+  "kind": "approval",
+  "block_id": "7e1c6f0a-5a4d-4a37-9d0e-2f4d3b8a91c2",
+  "request_id": "c4a1d8b3-6e0f-4b7a-8f55-0a6d2e9b7f13",
+  "tool": "ExitPlanMode",
+  "tool_kind": "other",
+  "title": "Plan ready: Add retries to the gateway client",
+  "approval_kind": "plan",
+  "input": {
+    "plan": "# Add retries to the gateway client\n\n## Steps\n\n1. Wrap `GatewayClient.request` in a retry loop with jittered backoff.\n2. Cap the delay at 30 seconds and the attempts at five.\n3. Add tests for a flaky socket and for a permanent failure.\n"
+  },
+  "options": [
+    {
+      "id": "plan_accept_edits",
+      "label": "Yes, auto-accept edits",
+      "style": "primary"
+    },
+    {
+      "id": "plan_manual",
+      "label": "Yes, manually approve edits",
+      "style": "secondary"
+    },
+    {
+      "id": "plan_keep",
+      "label": "No, keep planning",
+      "style": "danger"
+    }
+  ],
+  "status": "pending"
+}

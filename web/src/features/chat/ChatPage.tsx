@@ -195,10 +195,10 @@ export function ChatPage() {
   }, [stopTurn, key]);
 
   const onApprove = useCallback(
-    async (requestId: string, optionId: string) => {
+    async (requestId: string, optionId: string, message?: string) => {
       setActionError(null);
       try {
-        await approveRequest(key, requestId, optionId);
+        await approveRequest(key, requestId, optionId, message);
       } catch (err) {
         setActionError(errorText(err, strings.errors.approveFailed));
       }

@@ -697,8 +697,12 @@ class SessionHub:
     async def approve(self, params: dict[str, Any]) -> dict[str, Any]:
         entry = self.entry(str(params.get("session_id") or ""))
         if entry.shared is not None:
+            message = params.get("message")
             return await self.shared.approve(
-                entry, str(params.get("request_id") or ""), str(params.get("option_id") or "")
+                entry,
+                str(params.get("request_id") or ""),
+                str(params.get("option_id") or ""),
+                message if isinstance(message, str) else None,
             )
         if entry.runner is None:
             raise RcError("conflict", "the session is not running")

@@ -677,6 +677,27 @@
   font-size: var(--fs-12);
 }
 
+.plan-body {
+  font-size: var(--fs-14);
+}
+
+.plan-body.folded {
+  max-height: 16rem;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent);
+  mask-image: linear-gradient(to bottom, #000 70%, transparent);
+}
+
+.plan-toggle {
+  align-self: flex-start;
+}
+
+.plan-feedback {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
 .question-item {
   display: flex;
   flex-direction: column;

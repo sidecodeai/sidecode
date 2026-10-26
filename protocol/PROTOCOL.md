@@ -1619,6 +1619,8 @@ A snapshot that replaces the previous list. It carries no `block_id`.
 | `input` | object | no | |
 | `diff` | see 5.5 | no | Present for edit and write approvals |
 | `options` | `{id, label, style}[]` | yes | `style` is `primary`, `secondary` or `danger` |
+| `approval_kind` | `"plan"` | no | Present on a plan to approve (A54); absent on every other approval |
+| `plan_truncated` | boolean | no | `true` on a plan block whose `input.plan` was cut to fit the frame (A54) |
 | `status` | `pending` \| `resolved` \| `expired` | yes | |
 | `decision` | `{option_id, by}` | no | `by` is `remote`, `terminal` or `policy` |
 
@@ -1659,6 +1661,28 @@ been resolved, it resolves the block with `decision: {option_id: "elsewhere", by
 `elsewhere` is an ordinary option id that never appears in `options`; an app renders it as "answered
 in the terminal" and never sends it back. `fixtures/events/approval.codex-shared-pending.json` and
 `fixtures/events/approval.codex-elsewhere.json` are the worked pair.
+
+**A plan to approve (A54).** When Claude Code leaves plan mode it calls `ExitPlanMode` with the plan
+it wrote, and the device raises that call as an `approval` with `approval_kind: "plan"`, `tool:
+"ExitPlanMode"`, `tool_kind: "other"` and a `title` of `Plan ready: ` and the plan's first line. The
+plan is Markdown, carried once, in `input.plan`; an app that does not know `approval_kind` shows the
+title, the input and the options like any other approval. The options are Claude Code's own plan
+choices, and the ids are the device's: `plan_accept_edits` ("Yes, auto-accept edits", `primary`) and
+`plan_manual` ("Yes, manually approve edits", `secondary`) approve the plan and set the session's
+permission mode to `acceptEdits` or `default`; `plan_keep` ("No, keep planning", `danger`) refuses
+it and stays in plan mode. `session.approve` for `plan_keep` may carry `message`, at most 4 000
+characters, what Claude should change; the device tells Claude so and the turn goes on. Without a
+`message` the refusal interrupts the turn, which is what Escape does in the terminal's own dialog,
+and the person's next message continues the session in plan mode. An approval sets the mode for the
+session only: a session that was in `bypassPermissions` or `auto` before it planned goes on in
+`acceptEdits` or `default`, never in what it left. A plan whose JSON encoding would not fit one
+event frame (48 KiB) is cut, carries `plan_truncated: true` and offers only `plan_shorten` ("Ask for
+a shorter plan", `primary`), which refuses it with a request for a shorter one, and `plan_keep`. On
+a `shared` session the plan comes from the CLI's `PermissionRequest` hook, the same way an
+`AskUserQuestion` does (A20), and the terminal's dialog stays open beside the card; the first answer
+wins, and when the terminal's was it the block resolves with `decision: {option_id: "elsewhere", by:
+"terminal"}` (A11). `fixtures/events/approval.plan-pending.json`, `approval.plan-resolved.json` and
+`approval.plan-truncated.json` are the worked set.
 
 `fixtures/events/approval.pending.json`
 
@@ -2775,7 +2799,7 @@ are never listed either: they change a terminal the app cannot see.
 | Request | Behaviour |
 | --- | --- |
 | `session.send` | Accepted whatever `mode` says. When the CLI's own turn is idle — whatever its subagents and background workflows are doing (A51) — the device injects at once, replies `accepted: "sent"` and emits `user_message {delivery: "delivered"}` — at once when the CLI holds no earlier message, otherwise when the terminal shows the message's own row, so the bubbles keep the order they were sent in (A51). While a turn runs, `mode: "auto"` is steered when the session's CLI runs the device's turn hooks and was started with `PostToolBatch` among them, which the terminal proxy gives a CLI only when its version can load it: the device replies `accepted: "steered"`, hands the message to the model at the turn's next batch of tool calls — or, when the turn has none left, writes it into the channel as the turn ends, so that it starts the next turn — and emits the block when it does (A14, A51). Steering is thus decided per session, not by `shared_steer` (4.2), which the device reports by the version of the `claude` it detects; `accepted` says which way a message went. `mode: "queue"` and `mode: "interrupt"`, and `mode: "auto"` on a session whose CLI started without that hook, are held locally: the device replies `accepted: "queued"` with a `queued_id` and emits a `queue` event listing it — no `user_message` yet (A19) — then injects the oldest held message as the turn ends, one per turn, and emits the block with `delivery: "delivered"`. `session.queue_remove` works on held items. A message the CLI absorbs, removes from its queue without running it, or goes past without its own row (a later turn hook ran, and neither its row nor the CLI's queue showed it; time alone never counts) goes in again — an `auto` one at the running turn's next batch of tool calls when the session steers, any other at the next turn's end — at most three times, and is then reported with an `error` under its bubble's `block_id` (A51). One written at a turn's end and absorbed by that turn going on is sent again outside those three: at the turn's next batch of tool calls whatever its `mode`, uncounted, when the session steers, and when it cannot, at the next turn's end, at most ten times before the same `error`. One the person pulls back into the terminal's input box is theirs and is not sent again. Attachments are delivered as files the words name (4.8, A49), held, steered or not, when the agent reports `shared_attachments: true`, and are refused with `unsupported` ("attachments cannot be delivered to a terminal session") when it does not. |
-| `session.approve` | Relays the option the block offered. An `option_id` the block did not offer, `elsewhere` included, is `bad_request`. Replying to a request the terminal already answered is a no-op returning `{}`. |
+| `session.approve` | Relays the option the block offered. An `option_id` the block did not offer, `elsewhere` included, is `bad_request`. Replying to a request the terminal already answered is a no-op returning `{}`. A plan card (A54) offers its own options and takes `message` for `plan_keep`. |
 | `session.answer` | Supported for a `question` block the device raised through its `PermissionRequest` hook (A20): the answer goes to the CLI as the tool's own answers and the block resolves with `by: "remote"`. Answering a question the terminal already answered is a no-op returning `{}`. A question the device did not raise has no block to answer. |
 | `session.stop` | `unsupported` unless the agent lists capability `interrupt` **and** reports `shared_interrupt: true`. Message: "stop it in the terminal". Claude reports it since A42: the device types Escape into the CLI's terminal while a turn runs; with an approval or a question on screen it answers `conflict` ("answer the prompt first"), and with no turn running it returns `{}` and types nothing. |
 | `session.set` | `unsupported` for `model`, `permission_mode`, `effort` and `speed` ("change it in the terminal"). `title` works. |
@@ -4750,3 +4774,19 @@ the read, so Grok's quota is read only in leader mode (`rc-client grok setup`), 
 shows: while the device is still joining the leader, `limits_error` says so in one line. With leader
 mode off, `limits` stays absent with no `limits_error`, as before. Nothing changes on the wire. See
 4.2 and 7.2.
+
+**2026-10-26 A54 — Plan approval.** Claude Code's `ExitPlanMode` was an `approval` titled with the
+tool's name and a JSON input, which the apps showed as that bare title, so nobody
+saw the plan, and which offered Allow and Deny: a deny refused the one call and Claude asked again.
+It is now an `approval` with `approval_kind: "plan"`, the plan in `input.plan`, and Claude Code's
+own choices as options: approve with auto-accept edits, approve with manual edits, or keep
+planning, with feedback in `session.approve`'s existing `message` (5.7). `plan_truncated: true`
+marks a plan cut to the 48 KiB an event frame can carry; its options are `plan_shorten` and
+`plan_keep`. The block stays an `approval` with ordinary `options`, so an app released before A54
+renders the title, the plan as JSON where it shows an approval's input, and three buttons, and
+answers with the option id alone, which for `plan_keep` means the turn is interrupted. On a session
+a terminal shares the plan is raised from the `PermissionRequest` hook, whose matcher is now
+`AskUserQuestion|ExitPlanMode`; the settings file is rewritten when the daemon starts, so a CLI
+started before the update keeps the old matcher and shows nothing in the apps. Known limits: a
+choice to clear the context first, to continue in auto or bypass mode, or to refine in the cloud is
+not offered, and an approval never restores a mode the session planned from. See 5.7 and 8.

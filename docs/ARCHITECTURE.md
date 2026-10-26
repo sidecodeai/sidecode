@@ -413,10 +413,14 @@ If the socket is missing or does not answer, the device falls back to what it di
 `codex app-server` process per session, spawned by the device, with terminal Codex sessions mirrored
 from their rollout files and left at `control: "terminal"`. The agent keeps reporting
 `attach: "daemon"` with `attach_ready: false`, which is what the apps' hint is for. But the device
-does not wait for somebody else to bring the daemon up, because nobody else ever does: a bare Codex
-TUI runs its app-server embedded and joins the shared daemon only if it is already there. So on the
-same ten-second scan the device runs `codex app-server daemon start` itself
-whenever the standalone build is installed and the socket is not answering — idempotent, a third of
+does not wait for somebody else to bring the daemon up. Since openai/codex rust-v0.157.0
+`daemon_auto_start` is Stable and on by default: a bare TUI starts the daemon itself
+(`tui/src/startup_orchestration.rs`) and connects to the same socket, falling back to an embedded
+app-server for `--no-daemon`, `--oss`, `--profile`, `-c`, `--enable`, `--disable`, `--search`,
+`--strict-config`, WSL DrvFS and a Windows administrator. Codex 0.153 to 0.156 never starts it (a
+bare TUI runs embedded and joins only a daemon that already exists), and the excluded launches never
+do on any version, so on the same ten-second scan the device runs `codex app-server daemon start`
+itself whenever the standalone build is installed and the socket is not answering — idempotent, a third of
 a second, rate-limited, never downloading — installs its supervision once if the machine has none,
 and connects the moment the socket answers, publishing `agents.updated` so the apps drop the hint.
 The one thing it never does from the background is install Codex: that stays in

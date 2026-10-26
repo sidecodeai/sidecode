@@ -130,7 +130,7 @@ interface ChatState {
   /** A27: run one slash command; the row appears under the request's own id. */
   runCommand: (key: string, name: string, argument?: string) => Promise<void>;
   stop: (key: string) => Promise<void>;
-  approve: (key: string, requestId: string, optionId: string) => Promise<void>;
+  approve: (key: string, requestId: string, optionId: string, message?: string) => Promise<void>;
   answer: (key: string, requestId: string, answers: QuestionAnswers) => Promise<void>;
   removeQueued: (key: string, queuedId: string) => Promise<void>;
   /** Sign-out: nothing of the previous account stays in the tab (`signOut`). */
@@ -450,10 +450,15 @@ export const useChat = create<ChatState>((set, get) => ({
     await rpc('session.stop', { session_id: chat.sessionId });
   },
 
-  approve: async (key, request_id, option_id) => {
+  approve: async (key, request_id, option_id, message) => {
     const chat = get().sessions[key];
     if (!chat) return;
-    await rpc('session.approve', { session_id: chat.sessionId, request_id, option_id });
+    await rpc('session.approve', {
+      session_id: chat.sessionId,
+      request_id,
+      option_id,
+      ...(message ? { message } : {}),
+    });
   },
 
   answer: async (key, request_id, answers) => {

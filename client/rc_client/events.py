@@ -96,7 +96,8 @@ def bound_event(event: dict[str, Any]) -> dict[str, Any]:
     """Return the wire copy of `event` with §4 bounds applied."""
     bounded = dict(event)
     raw_input = bounded.get("input")
-    if isinstance(raw_input, dict):
+    if isinstance(raw_input, dict) and bounded.get("approval_kind") != "plan":
+        # A plan was already fitted to the frame when its block was raised (A54).
         value, truncated = bound_object(raw_input, MAX_INPUT_BYTES)
         bounded["input"] = value
         if truncated:
