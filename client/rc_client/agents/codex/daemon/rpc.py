@@ -20,6 +20,7 @@ from websockets.exceptions import ConnectionClosed
 
 from ....errors import RcError
 from ....logging_setup import logger
+from ..errors import CodexError
 from ..provenance import DAEMON_CLIENT_NAME
 from .transport import open_connection
 
@@ -253,7 +254,7 @@ class DaemonClient:
         if "error" in message:
             error = message.get("error") or {}
             future.set_exception(
-                RcError("agent_unavailable", str(error.get("message") or "codex daemon error"))
+                CodexError(str(error.get("message") or "codex daemon error"), error.get("code"))
             )
             return
         result = message.get("result")

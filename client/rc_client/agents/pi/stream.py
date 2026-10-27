@@ -17,6 +17,7 @@ from typing import Any
 
 from ...logging_setup import logger
 from ...models import now_ms
+from ...sessions import titles
 from ...sessions.channel import SessionChannel
 from ..base import Emit
 from .translate import QUEUE, PiTranslator
@@ -109,7 +110,11 @@ class PiStream:
         """One of pi's agent events, verbatim."""
         if self._own_failure(event):
             return
-        if str(event.get("type") or "") == "agent_start":
+        kind = str(event.get("type") or "")
+        if kind == "session_info_changed":
+            await self._renamed(event)
+            return
+        if kind == "agent_start":
             # A turn somebody else started — a prompt typed in the terminal, a
             # retry pi began on its own — still opens one here.
             await self.begin(self.trigger)
@@ -124,6 +129,16 @@ class PiStream:
             await self._apply(emit)
         if completion is not None:
             await self.finish(completion)
+
+    async def _renamed(self, event: dict[str, Any]) -> None:
+        """The session's name changed in pi, by whoever changed it.
+
+        pi has no titling of its own, so a name it reports is a person's (A55). A
+        name that was cleared arrives as no name at all, which names nothing.
+        """
+        name = event.get("name")
+        if isinstance(name, str):
+            await titles.from_user(self.channel, name)
 
     def _own_failure(self, event: dict[str, Any]) -> bool:
         """True for the failure of a compaction this device asked for.

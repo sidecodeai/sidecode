@@ -25,6 +25,7 @@
  * | `send` | `pi.sendUserMessage`. `expand` dispatches extension commands and expands skill commands and prompt templates; `echo: false` drops the `input` frame for that injection, because the device has already drawn its bubble |
  * | `abort` | `ctx.abort()` |
  * | `set_model`, `set_thinking`, `set_permission_mode` | live setting changes |
+ * | `set_name` | `pi.setSessionName`, which is what `/name` ends in, answered with the name the session now holds (A55). An extension without it answers `unknown command set_name`, which is how the device knows to ask for a restart of pi |
  * | `stats` | the session's totals, summed from the branch |
  * | `commands` | `pi.getCommands()`: the extension commands, prompt templates and skills this session offers (A27) |
  * | `compact` | `ctx.compact()`, answered when the compaction finishes or fails |
@@ -304,6 +305,15 @@ export default function (pi: ExtensionAPI): void {
 		}
 	};
 
+	/** The name the session holds now, or the one just set when the context has gone stale. */
+	const heldName = (ctx: ExtensionContext, fallback: string): string => {
+		try {
+			return ctx.sessionManager.getSessionName() ?? fallback;
+		} catch {
+			return fallback;
+		}
+	};
+
 	const helloFrame = (ctx: ExtensionContext): Json => {
 		let base: Json = { session_id: "", session_file: null, cwd: "", name: null, entries: [] };
 		try {
@@ -530,6 +540,12 @@ export default function (pi: ExtensionAPI): void {
 			mode = String(frame.mode ?? "never");
 			granted.clear();
 			return null;
+		}
+		if (command === "set_name") {
+			const name = String(frame.name ?? "").trim();
+			if (!name) throw new Error("the name is empty");
+			pi.setSessionName(name);
+			return { name: heldName(ctx, name) };
 		}
 		if (command === "stats") return totals(ctx);
 		throw new Error(`unknown command ${command}`);

@@ -18,6 +18,7 @@ from rc_client.errors import RcError
 from rc_client.models import AgentInfo, Choice, Session
 from rc_client.procscan import OpenPaths, Proc, Scan
 from rc_client.registry import Registry
+from rc_client.sessions import titles
 from rc_client.sessions.hub import SessionEntry, SessionHub
 from tests.fake_codex_daemon import FakeDaemon, FakeTerminals
 from tests.helpers import drained
@@ -1288,15 +1289,18 @@ async def test_the_name_codex_gives_a_thread_becomes_the_session_title(
     assert updates[-1] == "Fix the web typecheck"
 
 
-async def test_a_title_the_user_set_survives_a_rename(harness: Harness) -> None:
+async def test_a_name_codex_announces_replaces_a_title_an_app_set(harness: Harness) -> None:
+    """A55: Codex's own record is the truth, and a rename is not activity."""
     await started(harness, loaded=[THREAD])
-    await harness.hub.set_options({"session_id": THREAD, "title": "Ledger migration"})
+    entry = harness.hub.entry(THREAD)
+    entry.session.updated_at = 1_000
+    await titles.from_user(entry.channel, "Ledger migration")
 
     await harness.daemon.notify(
         "thread/name/updated", {"threadId": THREAD, "threadName": "Fix the web typecheck"}
     )
-    await asyncio.sleep(0.1)
-    assert harness.hub.entry(THREAD).session.title == "Ledger migration"
+    await settle(lambda: entry.session.title == "Fix the web typecheck")
+    assert entry.session.updated_at == 1_000
 
 
 async def test_a_named_thread_in_history_is_titled_by_its_name(harness: Harness) -> None:

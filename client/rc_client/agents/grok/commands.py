@@ -59,6 +59,11 @@ EXCLUDED: dict[str, str] = {
     "context": "renders in the terminal's pager and sends nothing over ACP",
     # Configures the Grok Build status line, a terminal surface no app draws.
     "statusline": "configures the terminal status line, which an app never shows",
+    # Naming a session is `session.set` (A55), so listing `/rename` and its
+    # `/title` alias would give a phone two controls for one thing. Grok Build
+    # 1.0.30 did not advertise them; they are excluded ahead of a build that does.
+    "rename": "a session's name is a session setting, not a command",
+    "title": "an alias of /rename",
 }
 
 

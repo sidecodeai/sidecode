@@ -17,6 +17,7 @@ from ...child_env import sanitized_child_env
 from ...errors import RcError
 from ...logging_setup import logger
 from ...models import UNSET, Command, SpeedSetting
+from ...sessions import titles
 from ...sessions.channel import SessionChannel
 from . import catalog as catalogue
 from . import install, paths, slash
@@ -131,6 +132,10 @@ class PiRunner:
             self._session_id = session_id
             if self._on_session_id:
                 await self._on_session_id(session_id)
+        name = state.get("sessionName")
+        if isinstance(name, str):
+            # pi has no titling of its own, so a name it holds is a person's (A55).
+            await titles.from_user(self.channel, name)
 
     async def close(self) -> None:
         process = self._process
@@ -167,6 +172,12 @@ class PiRunner:
         return usage_from_stats(stats, self._context_window)
 
     # --------------------------------------------------------------- driving
+
+    @property
+    def alive(self) -> bool:
+        """Whether the `pi --mode rpc` child this session owns is still running."""
+        process = self._process
+        return process is not None and process.alive
 
     @property
     def busy(self) -> bool:
@@ -307,6 +318,11 @@ class PiRunner:
             await self.channel.set_meta(effort=effort)
         if permission_mode is not None:
             await self._set_permission_mode(permission_mode)
+
+    async def set_name(self, name: str) -> str:
+        """pi's `set_session_name`, which appends the entry and reports it as an event (A55)."""
+        await self._require_process().command("set_session_name", name=name)
+        return name
 
     async def _set_permission_mode(self, mode: str) -> None:
         """The mode is the extension's to enforce, so it is told first."""

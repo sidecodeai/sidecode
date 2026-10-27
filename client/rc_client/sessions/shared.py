@@ -91,7 +91,15 @@ from .prompt_calls import (
 )
 from .ptys import PtyLink
 from .queue import hold, release
-from .typist import COMPACT_COMMAND, TypedCommand, Typist
+from .typist import (
+    COMPACT_COMMAND,
+    NOT_TYPEABLE,
+    RENAME_COMMAND,
+    RENAME_GRACE,
+    TypedCommand,
+    Typist,
+    Unconfirmed,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - imported for types only
     from .hub import SessionEntry, SessionHub
@@ -234,6 +242,13 @@ class SharedState:
     question: SharedQuestion | None = None
     # The command the device is typing into the terminal right now (A40).
     typed: TypedCommand | None = None
+    # While a rename the device typed is under way, and for a moment after it, the
+    # rows it leaves in the transcript are the rename's and move nothing (A55).
+    renaming_until: float = 0.0
+    # Set when a typed rename was not confirmed and may have left its text in the
+    # prompt box: nothing is typed until the person has used the terminal, a turn
+    # starts or the attachment ends, which is when this state goes (A55).
+    unconfirmed: Unconfirmed | None = None
     hooked: bool = False
     prompted_at: float | None = None
     command_at: float | None = None
@@ -676,6 +691,9 @@ class SharedControl:
         if state is None:
             return
         state.working = working
+        if running:
+            # A turn started, so whatever was in the prompt box went in.
+            state.unconfirmed = None
         if running and not state.running and not state.waiting:
             state.trigger = trigger
         if not running:
@@ -1159,6 +1177,8 @@ class SharedControl:
         what runs, and stay.
         """
         now = time.monotonic()
+        # Enter reached the CLI, so the prompt box was emptied.
+        state.unconfirmed = None
         if hook.prompt_kind == "ours" and hook.message_id:
             state.held_by_cli.pop(hook.message_id, None)
             state.queue_seen_at = now
@@ -1525,10 +1545,14 @@ class SharedControl:
 
     # ---------------------------------------------------------------- typing
 
+    def link_for(self, entry: SessionEntry) -> PtyLink | None:
+        """The pseudo-terminal this session's CLI runs in, if the device owns one (A40)."""
+        state = entry.shared
+        return self.hub.ptys.get(state.attachment.pid) if state is not None else None
+
     def terminal(self, entry: SessionEntry) -> PtyLink:
         """The pseudo-terminal this session's CLI runs in, or the refusal (A40)."""
-        state = entry.shared
-        link = self.hub.ptys.get(state.attachment.pid) if state is not None else None
+        link = self.link_for(entry)
         if link is None:
             raise RcError(
                 "conflict", "this terminal cannot be typed into; start it again to attach"
@@ -1542,15 +1566,22 @@ class SharedControl:
         if pending is not None:
             pending.resolve(None)
 
-    def expect(self, entry: SessionEntry, command: str, confirms: str = "") -> TypedCommand:
-        """Claim the transcript rows the command about to be typed will leave."""
+    def expect(
+        self, entry: SessionEntry, command: str, confirms: str = "", *, by_title: bool = False
+    ) -> TypedCommand:
+        """Claim the transcript rows the command about to be typed will leave.
+
+        A rename is `by_title`: the CLI's `custom-title` row, not its wording,
+        is what it waits for (A55).
+        """
         state = entry.shared
         if state is None:
             raise RcError("conflict", "the session is no longer attached")
         pending = TypedCommand(
             command=command,
             confirms=confirms,
-            done=asyncio.get_running_loop().create_future() if confirms else None,
+            done=asyncio.get_running_loop().create_future() if confirms or by_title else None,
+            by_title=by_title,
         )
         state.typed = pending
         return pending
@@ -1630,11 +1661,12 @@ class SharedControl:
         state = entry.shared
         pending = state.typed if state is not None else None
         if pending is None or pending.expired:
-            return False
+            # A rename's `custom-title` row may be read before the command's own.
+            return self.renaming(entry) and text.split(" ", 1)[0] == RENAME_COMMAND
         if text.split(" ", 1)[0] != pending.command:
             return False
         pending.seen = True
-        if not pending.confirms and state is not None:
+        if not pending.confirms and not pending.by_title and state is not None:
             state.typed = None
         return True
 
@@ -1648,6 +1680,43 @@ class SharedControl:
             state.typed = None
         said = text.lower()
         pending.resolve(said if pending.confirms in said else None)
+
+    async def rename(self, entry: SessionEntry, name: str) -> str:
+        """Type `/rename <name>` into the terminal and return the name the CLI took (A55).
+
+        The caller holds `entry.lock`, which is what keeps a person's message
+        from being injected between the keystrokes. A terminal the device does
+        not own the keyboard of is not one it can reach.
+        """
+        link = self.link_for(entry)
+        if link is None:
+            raise RcError("unsupported", NOT_TYPEABLE)
+        return await Typist(entry, link, self).rename(name)
+
+    def quiet_for(self, entry: SessionEntry, seconds: float) -> None:
+        """Take the rows the transcript gets for this long as a rename's (A55)."""
+        state = entry.shared
+        if state is not None:
+            state.renaming_until = time.monotonic() + seconds
+
+    def renaming(self, entry: SessionEntry) -> bool:
+        """Whether a rename the device typed is under way, or has only just been done."""
+        state = entry.shared
+        return state is not None and time.monotonic() < state.renaming_until
+
+    async def title_seen(self, entry: SessionEntry, text: str) -> None:
+        """A `custom-title` row: the CLI's own word on what the session is now called.
+
+        The next one after a rename's keystrokes is its confirmation, whoever
+        wrote it, and the name it carries is the one the session has (A55).
+        """
+        state = entry.shared
+        pending = state.typed if state is not None else None
+        if state is None or pending is None or not pending.by_title:
+            return
+        state.typed = None
+        state.renaming_until = time.monotonic() + RENAME_GRACE
+        pending.resolve(text)
 
     # ------------------------------------------------------------- approvals
 

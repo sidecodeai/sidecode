@@ -720,15 +720,18 @@ says nothing, stays where it was.
 
 A session has three possible names, in order of precedence:
 
-1. **A title the user set**, through `session.create`, `session.set`, or `/rename` in a Claude Code
-   terminal, which writes a `custom-title` row into the transcript. It sticks: nothing an agent
-   produces replaces it, whichever way it was set. Which sessions were named this way is
-   device-local state, kept in the registry rather than on the wire.
+1. **A name the user chose**: `session.create`, a rename from an app (`session.set`, A55) or
+   `/rename` in a terminal. It sticks: nothing an agent *generates* replaces it. The agent's own
+   record is the truth, though, so a name an agent reports as the user's replaces whatever the
+   user's earlier name was, wherever that was set: Claude Code's `custom-title` row, every name
+   Codex announces with `thread/name/updated` or gives in its thread list, a title Grok marks manual
+   (`title_is_manual`), a name set in pi. Which sessions were named this way is device-local state, kept in the registry rather
+   than on the wire.
 2. **The agent's own summary of the conversation**, which replaces a first-prompt title whenever it
    arrives and again whenever it changes. Claude Code generates one shortly after the first turn and
-   writes it as an `ai-title` row, then writes another when a plan is accepted; Codex names a thread
-   and announces it with `thread/name/updated`. The device reads the Claude rows in all three places
-   a transcript is read: a session it drives itself, an attached session and a mirrored terminal one.
+   writes it as an `ai-title` row, then writes another when a plan is accepted; Grok generates
+   titles for its own sessions. The device reads the Claude rows in all three places a transcript is
+   read: a session it drives itself, an attached session and a mirrored terminal one.
 3. **The first line of the first message**, which is what a session is called until something better
    shows up. A first message of files and no words names the session after the files
    (`shot.png, notes.txt`), and then the agent's summary is not taken until the person has said
@@ -736,13 +739,133 @@ A session has three possible names, in order of precedence:
    of words from those paths (A49). A typed slash command does not count as saying something.
 
 Every source is capped at 60 characters. A change is published as a `meta` event and a republished
-session summary, so the sidebars follow it live.
+session summary, so the sidebars follow it live. **A name the user chose never moves the session up
+the list.** `updated_at` stays where it was, whether the name came from an app or an agent reported
+it (`titles.from_user`, `SessionChannel.set_title`), while a generated title moves it as before. The
+mirror is as quiet, whoever typed the rename, the person in their terminal or the device for an app.
+A rename's own rows are its command row, what the CLI printed back, the hidden note it leaves for the
+model, and the two naming rows `custom-title` and `agent-name`; a pass that reads nothing else leaves
+the session where it is (`NameRows`, `TranscriptTailer.only_names`). The answer and the note are told
+by where they stand, touching a rename's command row on either side and in the passes that follow it
+for ten seconds, because nothing in them says what command they belong to and the CLI's wording is not
+read. Any other row in the pass moves the session, as it always did, and so does the answer to some
+other command. Every pass while the device types a `/rename`, and for three seconds after, is quiet
+whatever it holds.
 
-Both transcript rows are internal to Claude Code and documented as liable to change, so they are
+The transcript rows are internal to Claude Code and documented as liable to change, so they are
 parsed defensively: a row of an unknown shape, or one whose title field is missing, empty or not a
 string, is read as "not a title" and never as an error. Nothing about the tail depends on them, so a
 format change costs the titles and nothing else. When several titles arrive in one read they are
 applied in order, which is what stops a generated title that lands after a rename from winning.
+
+### Renaming a session (A55)
+
+`session.set` with a `title` renames the session inside its agent, as `/rename` (Claude Code, Codex,
+Grok Build) or `/name` (pi) would, so a terminal that opens or resumes the session shows the same
+name. Until A55 it was a name only the device kept. An agent lists the `rename` capability when the
+device can do it, Grok only while its leader is ready, and an app offers Rename on that word alone.
+The device is the authority on the name and on what the agent now holds it as, and keeps no name the
+agent does not.
+
+- **The name** is normalised by `sessions/rename.py`: every character of Unicode category Cc, Cf, Zl
+  or Zp becomes a space, and so does a lone surrogate, which UTF-8 cannot carry; runs of white space
+  collapse and the ends are trimmed. Two format characters are kept, the zero-width joiner (U+200D)
+  and non-joiner (U+200C), so that an emoji sequence such as the woman technologist (U+1F469 U+200D
+  U+1F4BB) and the joined words of Persian and the Indic scripts survive; a name of nothing but them
+  is still empty. There is no NFKC rewrite.
+  Empty after that is `bad_request` ("title must not be empty"), and more than 60 code points, each
+  piece of a sequence counted, is `bad_request` ("title is too long (max 60 characters)"). A refused
+  name applies nothing of its frame. A frame that also carries settings applies them first and
+  renames last.
+- **One pipeline for every agent.** A name the session already holds as the user's is answered at
+  once. Otherwise the hub takes the session's lock and calls the plugin's `rename` hook
+  (`agents/registry.py`: a `RenameSpec` in, the name the agent now holds out), then pins and
+  publishes that name and replies with the `Session`. The lock keeps a message from being injected
+  between the keystrokes of a typed rename, and a second request for the same name waits on it and
+  finds the name taken instead of renaming twice. Nothing is pinned or published until the agent has
+  taken the name, so a refusal leaves the title as it was. A session deleted while its rename waited
+  for the lock, or while the agent worked, stays deleted: the delete does not take the lock, so the
+  pipeline looks again before it asks and before it publishes, answers `not_found` and publishes
+  nothing, which is what keeps a title from bringing the row back in the registry and in every app.
+  The name in the reply is the agent's own and can differ from the request: Claude Code suffixes a
+  name another live session on the machine holds. The apps draw the reply's name and never the one
+  they asked for.
+- **Refusals** are the usual `error` reply. `conflict` means only that the terminal is busy and
+  nothing was typed. `unsupported` means this agent, or this state of it, cannot be renamed from
+  here: a live Claude the device cannot type into, Grok without its leader, an archived or missing
+  Codex thread, an old pi extension in a running pi, a session with no transcript or file to hold
+  the name. `agent_unavailable` means the agent's program is missing or will not start, or, for Codex,
+  that its app-server answered with an error the device has no better word for; `timeout` that a
+  typed rename was not confirmed, `bad_request` the normaliser's, or the agent's own refusal of a
+  name that passed it, and `not_found` a session deleted while it was being renamed.
+- **A rename is never a slash command.** It is `session.set`, so no agent lists `/rename` or `/name`
+  with `session.commands`, and Claude's `command` answers `not_found` for both.
+
+#### Claude Code
+
+| The session is | What the device does | What reaches the transcript |
+| --- | --- | --- |
+| driven (`control: remote`) | sends the CLI the SDK's `rename_session` control request, 10 seconds to answer, then reads the name back | the CLI's own routine: `custom-title` and `agent-name`, and its record of the name |
+| driven, the request fails, is not there to send, or leaves no row | writes the row itself | `custom-title` only |
+| attached to a terminal the device types into | types `/rename <name>` under A40's gate and waits up to eight seconds for the CLI's `custom-title` row | the CLI's own routine, and a hidden note for the model |
+| attached, the name has an `@` or ends in `\` | types nothing and writes the row itself, even while the terminal is busy | `custom-title` only |
+| attached, but not through the shim's terminal proxy, or open in a terminal nothing is attached to | refuses with `unsupported` | nothing |
+| held by nothing (`control: none`) | writes the rows | `custom-title`, then `agent-name`, in one write |
+
+The **driven** route sends `{"subtype": "rename_session", "title": …, "source": "host", "session_id":
+…}` through `ClaudeSDKClient._query._send_control_request`, which the Python SDK does not expose, so
+a missing attribute or a refusal is an answer and not an error and the row is written instead
+(`ClaudeRunner.rename_session`, `agents/claude/renaming.py`). The CLI is asked about the session id
+it reported, so it refuses if it has since moved to another one. The name is then read back from the
+`custom-title` row written after the request (up to two seconds, since the row lands a moment after
+the answer), which is how a suffixed name reaches the reply. A request the CLI took that left no row
+is written by the device: a name nobody can find in the agent's own record is not held. A session
+that has not written a transcript yet is left to the CLI, which keeps the name until its first write.
+`tests/test_rename_claude_sdk.py` pins the SDK version this was checked against, so an upgrade is a
+re-check and not a bump.
+
+The **attached** route is the A40 script for `/rename`, the one command typed with its argument (see
+"The device types into the terminal (A40)"). Busy is `conflict` and nothing is typed. What decides it
+is the transcript: the next `custom-title` row, whoever wrote it, is the confirmation, and the name
+it carries is the answer, read by the mirror (`SharedControl.title_seen`) and asked for every 0.4
+seconds rather than at the two-second tail. The codes say what is known. A busy terminal is
+`conflict` and nothing is typed. A terminal that is gone before anything is typed, or whose keys never
+left, is `unsupported`; a proxy that does not answer before anything is typed is `timeout`. No row
+within eight seconds is `timeout`, as is a proxy that goes quiet after the keys, because they may have
+landed. No Escape follows, since no dialog was opened. What does follow a timeout is a look at the
+screen, which types nothing: if the typed text may still be in the prompt box, because Enter did not
+submit it, or the screen cannot be read, the terminal is marked unconfirmed and the log says so once.
+Every script the device then types, `/model`, `/effort`, `/compact` and another `/rename`, is refused
+with `conflict` until the person has used the terminal (a key since the mark: the proxy counts only
+theirs, never the device's own, and its quiet time says so), a turn has started, a prompt has reached
+the CLI, or the attachment has ended; Stop, which types no line, is not refused. The text is looked
+for by its first words with the spaces left out, so a wrapped line and the box's borders do not hide
+it, and the command's own echo in the conversation counts as well, which costs the person one key.
+The rows the command leaves are the device's own: its command row draws no bubble, its
+hidden note for the model starts no turn, and none of them moves the session up the list. A name with
+an `@`, which opens the prompt box's file completion, or ending in a backslash, which turns Enter
+into a newline, is never typed: only the `custom-title` row is written, as Claude Code's own
+`/resume` picker writes it. The CLI absorbs it when it next reads the end of its transcript, but its
+prompt bar keeps the old name until the next resume, since an `agent-name` written under a running
+CLI would be overwritten by the one it has cached.
+
+The **stored** route appends the two rows the way the SDK's `rename_session` helper appends
+`custom-title`: opened `O_APPEND` and never `O_CREAT`, so a transcript that is not there is a session
+that never started and is refused, as is an empty one; one write for both rows; a newline first if
+the file does not end with one, as the CLI repairs its own transcript. That repair is only for a
+transcript nothing holds: under a running CLI, which is where the `custom-title`-only rows go, the
+tail is the CLI's own and a line it may be writing is not ours to cut, so the row goes on the end as
+it stands. A failure to write is `unsupported` and says nothing of the file.
+
+**Unverified:** what a typed `/rename` writes, in what order, and whether the note for the model
+carries `isMeta` (the reader never opens a turn for it either way, but a note that is not hidden would
+show as a bubble); that `@` and a trailing backslash misbehave in the prompt box, which is assumed and
+costs only the prompt bar's name when it is wrong; that a `custom-title` written under a running CLI
+is the name `/resume` and `claude --resume <name>` then show, and what the prompt bar shows after each
+of the three writes; that a `/rename` Enter did not submit really stays on the screen's bottom lines
+as `/rename <name>`, which the look for leftover text assumes, and that the proxy's quiet time moves
+with the person's own keys and no others; and the control request's reply, which is never read, only
+the row it leaves.
 
 ## Slash commands
 
@@ -754,7 +877,9 @@ remembers the request id so a retry is not run twice. The runner echoes the comm
 `user_message` under the request's id and reports what happened as ordinary events. A session with
 no live process answers `session.commands` from the plugin's `commands(session)` — what the agent's
 files say without starting anything — or with an empty list when the plugin has none. The commands
-each agent offers, and how its runner carries them out, are in that agent's section below.
+each agent offers, and how its runner carries them out, are in that agent's section below. A command
+that only sets something — `/model`, `/permissions`, `/fast`, `/thinking`, and `/rename` or `/name`
+(A55) — is `session.set` and is never listed.
 
 ## Usage limits, and resuming after one
 
@@ -1227,7 +1352,7 @@ This table is the Claude channel. Codex on the shared daemon does more; see the 
 | Change model or effort | Yes since A40, typed into the terminal through its pickers, this session only; `conflict` while the terminal is busy, and the reply waits for the transcript to confirm; a model whose effort is capped takes the nearest level it has, which the reply reports |
 | Change permission mode | No, `unsupported`: change it in the terminal. The value is shown, read from the transcript (A17) |
 | `/compact` | Yes since A40, typed into the terminal; other commands are `unsupported` |
-| Rename | Yes |
+| Rename | Yes since A55, typed into the terminal as `/rename <name>` and confirmed by the CLI's `custom-title` row; `conflict` while the terminal is busy or may still hold the text of an earlier rename nobody confirmed, `timeout` when no row comes or the proxy goes quiet; a name with an `@` or a trailing backslash is written as that row instead and never typed; `unsupported` when the session is not attached through the shim's terminal proxy or the terminal is gone |
 | Take over | No, `conflict`: the session is already attached |
 | Attachments | Yes since A49: the device writes the files and the words it injects end with their paths, which the CLI opens with `Read`; the bubble names the files and shows no path |
 
@@ -1312,7 +1437,7 @@ the ordinary Allow and Deny block, without `approval_kind`.
 A channel carries user text and nothing else, so a `shared` Claude session used to refuse every
 settings change. The shim now starts the CLI inside a pseudo-terminal the device owns, and the
 device types into it what you would type yourself: `/model` and `/effort` through their pickers,
-and `/compact`.
+`/compact`, and `/rename <name>` (A55).
 
 ```
 your terminal → rc-client pty proxy → claude → rc-client channel bridge
@@ -1348,9 +1473,11 @@ else's terminal:
 
 - **Only into an idle terminal.** No turn, no dialog, an empty draft, and a keyboard still for two
   seconds. Anything else is `conflict` ("the terminal is busy; try again in a moment") and
-  **nothing is queued**.
-- **Never the argument form.** `/model opus` and `/effort low` apply at once and save the choice as
-  the person's default. The scripts walk the pickers — `/model` by row, `/effort` all the way left
+  **nothing is queued**. A terminal that may still hold the text of a rename nobody confirmed is
+  `conflict` as well, until the person has used it (see "Renaming a session (A55)").
+- **Never the argument form**, except for `/rename`. `/model opus` and `/effort low` apply at once and
+  save the choice as the person's default; `/rename <name>` saves nothing but the session's own name,
+  so it is typed with its argument (see "Renaming a session (A55)"). The scripts walk the pickers — `/model` by row, `/effort` all the way left
   and then right to the level — and press `s`, which is this session only and writes no settings
   file.
   On a conversation with cached history the CLI asks once more after `s` — "Switch model? Your
@@ -1481,7 +1608,7 @@ remote `/review` would put a paragraph beginning "Review the current code change
 the user had sent it.
 
 Settings, lifecycle and terminal ergonomics are never listed, as A27 requires: `/model`, `/fast`,
-`/permissions` and `/name` are `session.set`; `/new`, `/archive`, `/delete` and `/resume` are frames
+`/permissions` and `/rename` are `session.set` (A55); `/new`, `/archive`, `/delete` and `/resume` are frames
 of their own; and `/vim`, `/theme`, `/keymap`, `/copy`, `/pets`, `/raw`, `/cd` and `/pwd` change a
 terminal the apps cannot see. Codex's `/goal`, `/plan`, `/fork`, `/memories`, `/experimental` and
 `/ps` all have methods behind them and could be added, but each wants a surface of its own rather
@@ -1644,7 +1771,9 @@ carries `originator: "codex-tui"` and `source: "vscode"`. On top of the connecti
   that has never appeared on an echo of ours is a TUI sharing the thread, which is what turns a
   `remote` thread `shared`.
 - `thread/name/updated` carries `{threadId, threadName}` and reaches every subscriber, so a thread
-  named in a terminal renames itself in the apps. It never overrides a title the user set.
+  named in a terminal renames itself in the apps. Every name Codex announces was set explicitly, by a
+  person or by the TUI naming an unnamed thread, so it is the user's and replaces a title an app set
+  (A55; "Renaming a session").
 - Approvals arrive as JSON-RPC requests that fan out to every subscriber. The options come from the
   daemon's own `availableDecisions` for that prompt, mapped onto `allow`, `allow_session`,
   `allow_always` and `deny`. Whoever answers first wins; when somebody else answers,
@@ -1669,6 +1798,64 @@ carries `originator: "codex-tui"` and `source: "vscode"`. On top of the connecti
   is replayed on attach.
 - The connection reconnects with backoff. On every reconnect each followed thread is resumed again
   and backfilled from the last item we published, so a daemon restart loses nothing.
+
+### Renaming a session (A55)
+
+A rename is `thread/name/set {threadId, name}` on whichever app-server serves the thread
+(`agents/codex/naming.py`). Codex appends the name to `session_index.jsonl` and writes its state store, which
+is why the device never writes the index file itself, and it then sends `thread/name/updated` to every
+connection, so a TUI on the shared daemon redraws. The method is stable and exists from 0.145.0. A thread
+nothing has loaded is served straight from the store, and a loaded one, mid-turn included, is ordered with its
+rollout writes (from the source at rust-v0.164.0). Codex trims the name and has no maximum, so the 60 code points
+the device allows are the whole limit, and the name Codex holds is the one asked for.
+
+| The thread is | The call goes to |
+| --- | --- |
+| held by a daemon session (`control: remote` or `shared`) | the shared daemon |
+| held by nothing (`control: none`), or open in a terminal the device is not in | the shared daemon, which names a cold thread without loading it |
+| held by a runner built while the daemon was not up (`CodexRunner`, its own app-server child) | that child, while it runs; once it has exited, the shared daemon |
+
+Refusals, in the device's words rather than Codex's, because Codex's own words name the thread and, for a
+failure inside it, a path. The transports raise `CodexError`, an `RcError` that carries the JSON-RPC code, so the
+code and not the wording decides:
+
+| What happened | Reply |
+| --- | --- |
+| `-32600`: Codex cannot name the thread. It answers "thread not found" for one the device archived with A39's close, one deleted, and an ephemeral one, because the rename does not look at archived threads (from the source) | `unsupported`, "the codex thread is archived or no longer exists". The device does not unarchive, rename and archive again: that churns the rollout and notifies every TUI |
+| `-32601`: an app-server without the method (it is in 0.145.0; earlier builds were not read) | `unsupported`, "this codex version cannot rename a thread" |
+| any other answer from Codex | `agent_unavailable`, "codex could not rename the thread" |
+| no daemon and no runner of its own | `unsupported`, "the codex daemon is not connected; run rc-client codex setup", or `agent_unavailable` ("codex is not installed on this device") when there is no Codex at all |
+| no answer within 15 seconds, on either transport | `timeout` |
+
+Nothing about the thread is pinned or published until Codex has taken the name, so a refusal leaves the title
+as it was.
+
+The call waits 15 seconds (`naming.TIMEOUT`, passed to the daemon connection and to a runner's own connection
+alike) and not the transports' 60. The hub holds the session's lock for as long, which stops a message and the
+queue behind it, and the gateway answers the app `timeout` after 60 seconds, so waiting as long as the transports
+do by default would keep the lock after the app has given up.
+
+Names come back three ways, and all three are the user's (`titles.from_user`), because Codex cannot tell a name
+a person gave from one the TUI generated for an unnamed thread, and its own record is the truth. None of them
+moves the session up the list.
+
+- `thread/name/updated` always applies, past a pin.
+- The `name` of a `thread/list` or `thread/read` row is followed only when it **changes**
+  (`CodexDaemonService._follow_index`). The service remembers the name the index last gave each thread, and a
+  row that repeats it is ignored. That is the guard against a list answer computed before a rename of ours or a
+  `thread/name/updated` and read after it: such an answer carries the name that was just replaced, and taking
+  it would put the old name back until the next scan. The first sight of a named thread applies it once. It
+  also keeps a scan from rewriting a pin for every thread on the page.
+- A rename made in a TUI that runs its own app-server sends the daemon nothing, so the index is the only place
+  it shows up, and it is followed from there at the next scan.
+
+`/rename` is `session.set`, so it is never in the command table (see "Slash commands").
+
+**Unverified:** that a TUI with an app-server of its own shows a name persisted by
+the daemon when it next reads the thread, and, the other way round, that the daemon's `thread/list` shows
+a name another app-server wrote, which following a rename made in such a TUI rests on; that a name written
+mid-turn is ordered as the source says; and how the name is stored when the TUI is generating one at the same
+moment (a small window, since the TUI names only a thread that has no name).
 
 ### Work another application owns
 
@@ -1841,13 +2028,14 @@ request id, and the turn that follows is an ordinary turn.
 | `input.hint` | `argument`, capped at 80 characters the same way |
 | `_meta` | `group`: no `_meta` at all is `Built-in`, `workflowSource` is `Workflows`, `pluginName` is `Plugins`, and a bare `scope` is `Skills` |
 
-Three advertised names are never listed, each for a reason the protocol already gives:
+Five advertised names are never listed, each for a reason the protocol already gives:
 
 | Name | Why not |
 | --- | --- |
 | `always-approve` | Toggles "skip all permission prompts". Permission modes are `session.set`, and A27 says a device never gives a phone two controls for one thing — least of all one tap from approving everything |
 | `context` | Verified against the real agent: the turn ends in 10 ms having emitted no update at all, because the TUI renders it in its own pager. `/session-info` is the one that does answer over ACP, and it is listed |
 | `statusline` | Configures the Grok Build status line, a terminal surface no app draws |
+| `rename`, `title` | Naming a session is `session.set` (A55), so listing `/rename` and its `/title` alias would give a phone two controls for one thing. Grok Build 1.0.30, whose advertisement is recorded in the tests, did not advertise either; they are excluded ahead of a build that does. A stored list that carries them loses them on the way out |
 
 The last list is kept in `~/.rc-client/state/grok-commands.json` and rewritten only when it changes,
 so the plugin's module-level `commands(session)` can answer `session.commands` for a session with no
@@ -1917,7 +2105,9 @@ entry otherwise, at which point the mirror drops its tail (`_grok_is_leaders`) �
 `session/load`, publishes `control: "shared"`, the holder pid, and the model and effort the load
 result's `configOptions` name; `{}` means a `grok` running its own agent, and the mirror keeps it as
 `terminal`. Titles come from `_x.ai/sessions/changed` (`upserted[].title`), from the leader's
-`_x.ai/session/list`, or from `summary.json`'s `generated_title`.
+`_x.ai/session/list`, or from `summary.json`'s `generated_title`, and each says whether a person chose it:
+`titleIsManual` in the two leader messages, `title_is_manual` in the file. A manual one is the user's,
+anything else is Grok's own summary.
 
 `agents/grok/control.py` is the A28 table of PROTOCOL.md 4.4 as one pure function: registered and
 held here → `shared`; registered and not held → `terminal`; not registered and held → `remote`
@@ -1956,6 +2146,70 @@ After `grok update` the leader keeps serving the build it started with; `_meta.a
 drives is running, the service runs `agent leader kill` once per fifteen minutes and reconnects,
 which starts a fresh leader; each attached session gets one notice. With a terminal registered the
 drift is left alone, because a restart would take that terminal's session down with it.
+
+### Renaming a session (A55)
+
+Grok Build's own `/rename <title>` (alias `/title`, and `/rename --auto` to hand the title back to its
+automatic titling) writes the title into `summary.json` marked `title_is_manual`, which stops Grok from ever
+regenerating it. A client does the same through an extension method that only the leader serves, so a session is
+renamed through the leader or not from here. `agents/grok/naming.py` holds everything the device knows about it,
+in one place:
+
+- the wire name `_x.ai/session/rename`, spelled as `_x.ai/session/info` and `_x.ai/session/list` are where the
+  binary has `x.ai/session/info` and `x.ai/session/list`;
+- the request `{"sessionId", "title", "cwd"}`. Grok's `SessionRenameRequest` has five fields, four of them
+  visible in the binary's strings: `sessionId`, `title`, `cwd` and `resetToAuto`. `resetToAuto` is never sent,
+  since clearing a name is not part of A55, and the fifth field is not known;
+- no part of the answer is read. The name Grok holds is taken to be the one it was given, and the title it then
+  announces in `_x.ai/sessions/changed` is read like any other;
+- 15 seconds to answer, because a rename is a quick question and the leader's request has no deadline unless it
+  is given one.
+
+`GrokLeaderService.rename` asks the leader whoever holds the session: a session a terminal is in (`shared`), one
+no terminal is in that the leader still holds (`none`), and one the device drives (`remote`) are all the
+leader's. It never joins or starts a leader for the purpose. `rename` is listed in `AgentInfo.capabilities` only
+while `leader.config_ready()` is true (`[cli] use_leader` on, no sandbox profile), which is also `attach_ready`;
+the service is asked again at call time whether the leader is connected, because the list can be a scan old.
+
+| What happened | Reply |
+| --- | --- |
+| the leader is not connected, was lost before the call, or died during it | `unsupported`, "grok can only be renamed through its leader, which is not connected" |
+| the leader answers that it has no such method (`-32601`), or refuses for any other reason: a session it does not hold, such as a `grok` running its own agent that the mirror keeps, or a failure inside it, even one whose words mention the title | `unsupported`, "grok did not take the new name; rename it in the terminal" |
+| the leader clearly rejects the name: JSON-RPC `-32602`, or words that say the title is blank or too long ("title must not be blank", "title too long (max N characters …)", "title too large") | `bad_request`, "grok does not accept this name" |
+| no answer in 15 seconds | `timeout` |
+
+The leader's own words are kept out of the reply: an extension method answers `Internal error` and says what
+went wrong only in `data`, and either can name a session or a path.
+
+Only `-32602` and the three phrases of `REJECTED` in `agents/grok/naming.py` make a refusal the name's. Everything
+else, an internal write error that merely mentions a title included, is `unsupported`, so a failure of Grok's own
+is never put to the person as a fault of the name they typed.
+
+Names come back as the user's when Grok says a person chose them, and as the agent's own summary otherwise
+(`titles.from_user` and `titles.from_agent`; `agents/grok/sessions.py` `Title`):
+
+- `summary.json` carries `title_is_manual`. `discover()` reads it into `GrokSessionInfo.title_is_manual`, which
+  the mirror turns into `from_user` when it adopts a terminal session, and the leader service reads it when it
+  joins one. Only a `true` that sits beside a title counts.
+- `_x.ai/sessions/changed` rows (`upserted[]`) and the entries of `_x.ai/session/list` mark a manual title
+  `titleIsManual`, going by the strings of Grok Build 1.0.70. A row that does not say is not read as manual, so
+  the worst a wrong guess costs is today's behaviour: a title the user set is not replaced by the leader's.
+- A rename the leader took is remembered as the session's manual title (`GrokLeaderService._titles`) as soon as
+  it is answered, whether or not Grok announces one. An older manual title remembered from
+  `_x.ai/sessions/changed` would otherwise be put back the next time the session is adopted or re-joined.
+- A manual title never moves the session up the list (`titles.from_user`); a title Grok generated does, as it
+  always did (`titles.from_agent`). `/rename --auto` in a terminal is not followed, since a name cannot be
+  cleared from here either.
+
+**Unverified:** everything above that is read from the binary rather than seen. A check on a
+throwaway session with leader mode on would turn it into fact: send
+`_x.ai/session/rename` with `{sessionId, title, cwd}` to a loaded and to an unloaded session and look at the
+answer; whether `summary.json` then says `title_is_manual: true` and the leader announces the title with
+`titleIsManual`; that a manual title is kept in `generated_title`, which is where the device reads it from
+(Grok's own documentation of `summary.json` names `title_is_manual` and no other key for it); what the fifth
+field is; the maximum length Grok accepts (the apps cap a name at 60); and whether an unloaded session can be
+renamed at all, and with which JSON-RPC code it is refused (`-32602` reads as `bad_request`, anything else as
+`unsupported`).
 
 ### What Grok asks a person (A52)
 
@@ -2017,7 +2271,8 @@ that needs no attachment and no change to anybody's configuration, `control: "te
 apps' hint saying what to run.
 
 - `summary.json` is the session row: `info.cwd`, `generated_title` (Grok titles its own sessions, so
-  there is no first-prompt guessing), `current_model_id` and `reasoning_effort`, which are published
+  there is no first-prompt guessing), `title_is_manual` (true when a person renamed the session, which the
+  mirror takes as the user's name, A55), `current_model_id` and `reasoning_effort`, which are published
   as `meta` the moment the session is adopted.
 - A turn is over at the `turn_completed` row; the session reads `running` while a prompt's updates are
   flowing and `readonly` once that row lands.
@@ -2142,6 +2397,7 @@ JSONL, LF only, one object per line. Both ends are ours, so the vocabulary is cl
 | `command` `send` | text, `block_id`, optional `images`, optional `deliver: "steer"`, optional `expand` and `echo`. `expand` lets pi dispatch an extension command and expand a skill command or a prompt template before the turn; `echo: false` drops the `input` frame for that one injection, because the device has already drawn its bubble (A27) |
 | `command` `abort` | `ctx.abort()` |
 | `command` `set_model`, `set_thinking`, `set_permission_mode` | live setting changes |
+| `command` `set_name` | `pi.setSessionName(name)`, answered with the name the session now holds (A55). An extension without it answers `unknown command set_name` |
 | `command` `commands` | `pi.getCommands()`: the extension commands, prompt templates and skills this session offers (A27) |
 | `command` `compact` | `ctx.compact()`, answered when the compaction finishes or when pi refuses it (A27) |
 | `command` `stats` | the session's totals, summed from the branch, in the shape `get_session_stats` returns |
@@ -2188,7 +2444,7 @@ and `Skills`.
 Running one takes one of two paths. `compact` is pi's own call — the `compact` command on an RPC
 child, `ctx.compact()` through the extension on an attached one — and its refusal is the app's
 error: "Nothing to compact (session too small)" comes back as `bad_request` carrying pi's words.
-Everything else is sent as the text of a turn, `/name argument` exactly as it was typed, and pi
+Everything else is sent as the text of a turn, `/<command> <arguments>` exactly as it was typed, and pi
 expands it: a prompt template becomes its body with the arguments substituted, a skill command loads
 the skill, an extension command runs outright without any turn at all. That last case is why the
 device draws the bubble itself and opens no turn: pi raises no `input` event for an extension
@@ -2227,6 +2483,69 @@ directory, which reopens the same conversation with its history intact. `/new`, 
 `/fork` in the TUI are a `session_shutdown` and then a `hello` under another id: two sessions, not a
 rename. A terminal pi started before the daemon came up still appears, because the extension retries
 the socket with backoff and sends its `hello` when it connects.
+
+### Renaming a session (A55)
+
+pi names a session with a `session_info` entry in its file and tells its extensions and RPC clients with
+`session_info_changed {name}`. Who may write the entry depends on who holds the session
+(`agents/pi/naming.py`):
+
+| The session is | The device |
+| --- | --- |
+| an RPC child it started (`control: remote`, the child running) | sends `{"type": "set_session_name", "name"}`, which pi answers once the entry is appended |
+| a pi in a terminal, attached through the extension (`control: shared`) | sends the extension the command `set_name`, which calls `pi.setSessionName(name)`, the call `/name` ends in, and answers with the name the session now holds |
+| held by nothing (`control: none`), or an RPC child that has exited | appends a `session_info` entry to the session's file |
+| `control: terminal`, a terminal the device cannot reach (a state the device does not produce for pi today) | refuses with `unsupported`, "rename it in the terminal", and writes nothing |
+
+**`set_name`** is a command of the socket (see the table of commands under "The socket", and the header of
+`extension/sidecode.ts`). The extension refuses an empty name and answers `{"name": …}` with what
+`getSessionName()` returns, falling back to the name it was given when the context has gone stale. The
+extension carries no version the device can read: "current" is the installed file being byte-equal to the
+bundled one, and a running pi keeps the copy it loaded when it started. A pi started before the update still
+runs the old copy, which answers `set_name` as `unknown command set_name`, and that exact reply is how the
+device tells a stale copy from one that refused the name: `unsupported`, "restart pi to rename it". Any other
+refusal, from the extension or from an RPC child, is `bad_request`, "pi does not accept this name", with pi's
+own words left out of the reply. A link that drops during the command is `agent_unavailable`, and a command that
+gets no reply in 30 seconds is `timeout`.
+
+**The file** is `~/.pi/agent/sessions/--<cwd>--/<timestamp>_<id>.jsonl` (`agents/pi/session_file.py`, run in
+`asyncio.to_thread`). The device finds it by id (`*/*_<id>.jsonl`, an id that is not pi's own shape finds nothing)
+and trusts only a file whose header says it is this session, the newest if two do. The header has to say
+`version: 3`: pi migrates an older file when it loads it, and an entry added before that would not survive, so
+an older one is `unsupported` ("the pi session file is in an older format; open it in pi to rename it"). The
+entry is
+`{"type":"session_info","id":<8 hex>,"parentId":<last entry's id>,"timestamp":<ISO, milliseconds, Z>,"name"}`:
+`parentId` is the id of the last entry that parses, in file order, which is where pi puts its own leaf when it
+loads the file, and the id is one the file does not already have. The file is opened `O_WRONLY | O_APPEND` and
+never created, so a session that has not written its file yet (pi writes it with the first assistant message)
+is `unsupported` ("the pi session file was not found"), and the row goes out in one `write`. A last line a
+crash left unfinished gets its newline first, as pi does itself when it loads such a file, and stays a line pi
+skips. A file the device cannot read or write is `unsupported` and says nothing of its path.
+
+The file is written only when nothing holds the session. A running pi keeps its leaf in memory, and one that
+holds the file would take an entry appended behind its back for a side branch (inferred from the
+source), which is why a live pi is renamed through the process. After a device restart a pi that is running
+shows as `control: none` until its extension dials back in, which can take up to 30 seconds of backoff, and a
+rename in that window is appended to the file.
+
+**Names come back as the user's**, since pi has no titling of its own and every name it holds is a person's:
+`session_info_changed` on both paths (the RPC child's stdout and the extension's forwarded event) through
+`PiStream`; the `name` of a terminal pi's `hello`; and `sessionName` in an RPC child's `get_state`, which is how
+a name set in a terminal while the device was not attached reaches a session it resumes. Each replaces whatever
+was pinned, and none moves the session up the list. A name that was cleared arrives as no name, which names
+nothing: clearing is not part of A55.
+
+`/name` is `session.set`, so it is not a command. pi's own TUI commands are not in `get_commands` or
+`pi.getCommands()`, and `command` answers `not_found` for `/name` as it does for anything a session does not
+offer.
+
+**Unverified:** the TypeScript half of the terminal route is exercised only against
+a fake pi API (`pi.setSessionName` and `getSessionName` stand in for the real ones) and against pi 0.85.1's
+type definitions; typing `/name` in a pi on a running terminal and renaming it from an app, then
+restarting pi on the stale extension to see the refusal, would confirm it. Also unverified: that an entry
+appended to the file of a session no process holds is read by pi as its name when the session is next
+opened, which is what pi's own `/resume` selector relies on and the source says; and the side-branch
+claim above.
 
 ### Steering
 
@@ -2297,6 +2616,9 @@ is sent anything; a held message meets the same refusal, as an `error`, when it 
   project the person trusted does list them, and running one from an app works.
 - **A second device on the same machine** would install the same extension at the same path and
   both would be dialled, one socket each. Nothing shares a session between them.
+- **A pi started before the extension was updated cannot be renamed from an app** until it is restarted: its
+  copy of the extension does not know `set_name`, and the device says so (`unsupported`, "restart pi to rename
+  it"). A session nothing holds is renamed in its file, which needs the file to exist and to be at version 3.
 
 ## Attachments
 

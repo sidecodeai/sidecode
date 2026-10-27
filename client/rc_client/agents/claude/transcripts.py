@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -93,6 +94,10 @@ AI_TITLE_ROW = "ai-title"
 CUSTOM_TITLE_ROW = "custom-title"
 TITLE = "session_title"
 _TITLE_ROWS = {AI_TITLE_ROW: ("aiTitle", False), CUSTOM_TITLE_ROW: ("customTitle", True)}
+# `/rename` writes the name the prompt bar shows after a resume as a row of its
+# own (A55). Read by nobody here: the two rows together are a rename.
+AGENT_NAME_ROW = "agent-name"
+_NAME_ROWS = frozenset({CUSTOM_TITLE_ROW, AGENT_NAME_ROW})
 _SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
 
 # Amendment A17: a session the terminal holds takes no settings from an app, so
@@ -221,6 +226,73 @@ def find_info(session_id: str) -> TranscriptInfo | None:
         return _info(path, path.stat().st_mtime)
     except OSError:
         return None
+
+
+def is_name_row(row: dict[str, Any]) -> bool:
+    """Whether the row only records a name the user gave the session (A55)."""
+    return row.get("type") in _NAME_ROWS
+
+
+# How long the rows that follow a rename's command row still count as its own
+# when they are read in a later pass than the command's.
+NAME_ROWS_WINDOW = 10.0
+
+
+@dataclass(slots=True)
+class NameRows:
+    """Tells the rows a rename leaves from every other row, across reads (A55).
+
+    A rename is not activity, whoever typed it, so a batch of nothing but its own
+    rows does not move the session up the list. Its own rows are the two naming
+    rows, `custom-title` and `agent-name`; its command row; and the hidden rows
+    that come with the command: what the CLI printed back, and the note it
+    leaves for the model. Those two are told by where they stand — touching a
+    rename's command row, on either side — because nothing in them says what
+    command they belong to, and the CLI's wording is not something to read. Any
+    other row in the batch is activity, as it always was.
+    """
+
+    until: float = 0.0
+
+    def only(self, rows: Sequence[dict[str, Any]], now: float | None = None) -> bool:
+        """Whether every row is a rename's own; what follows a command carries over."""
+        now = time.monotonic() if now is None else now
+        kinds = [_row_kind(row) for row in rows]
+        own = [kind in ("name", "command") for kind in kinds]
+        attached = now < self.until
+        for index, kind in enumerate(kinds):
+            if kind == "command":
+                attached = True
+            elif kind in ("hidden", "output"):
+                own[index] = own[index] or attached
+            elif kind != "name":
+                attached = False
+        self.until = now + NAME_ROWS_WINDOW if attached else 0.0
+        following = False
+        for index in reversed(range(len(kinds))):
+            kind = kinds[index]
+            if kind == "command":
+                following = True
+            elif kind in ("hidden", "output"):
+                own[index] = own[index] or following
+            elif kind != "name":
+                following = False
+        return all(own)
+
+
+def _row_kind(row: dict[str, Any]) -> str:
+    """`name`, `command` (a typed rename), `hidden`, `output` (a command's answer) or `other`."""
+    if is_name_row(row):
+        return "name"
+    if row.get("type") != "user":
+        return "other"
+    if row.get("isMeta"):
+        return "hidden"
+    message = row.get("message")
+    text = _text_of(message.get("content")) if isinstance(message, dict) else ""
+    if markers.is_rename(text):
+        return "command"
+    return "output" if markers.is_command_output(text) else "other"
 
 
 @dataclass(slots=True, frozen=True)
@@ -403,6 +475,8 @@ class TranscriptTailer:
     # A slash command was just typed: the hidden row that follows it, if any,
     # is what the command expands to, and the turn it starts (A51).
     expanding: bool = field(default=False, init=False)
+    # Which of the rows read were only a rename's own (A55).
+    names: NameRows = field(default_factory=NameRows, init=False)
 
     def __post_init__(self) -> None:
         self.tail = FileTail(path=self.path)
@@ -425,6 +499,10 @@ class TranscriptTailer:
 
     def read_new(self) -> list[dict[str, Any]]:
         return self.tail.read_new()
+
+    def only_names(self, rows: Sequence[dict[str, Any]]) -> bool:
+        """Whether the rows read are nothing but a rename's own, which is not activity (A55)."""
+        return bool(rows) and self.names.only(rows)
 
     def translate(self, row: dict[str, Any]) -> list[Emit]:
         settings = read_settings(row)
@@ -571,7 +649,9 @@ class TranscriptTailer:
         """
         expanding, self.expanding = self.expanding, False
         if not row.get("isMeta") and _COMMAND_ROW.search(text):
-            self.expanding = True
+            # What a command expands to is a turn, but the note a rename leaves
+            # for the model is not: nothing answers it (A55).
+            self.expanding = not markers.is_rename(text)
         if _is_meta(row, text):
             return self._hidden_turn(row, text, expanding)
         said = strip_reminders(text)

@@ -174,7 +174,8 @@ class PiExtensionService:
         if fields:
             await entry.channel.set_meta(**fields)
         if hello.name:
-            await titles.from_agent(entry.channel, hello.name)
+            # pi has no titling of its own, so a name it holds is a person's (A55).
+            await titles.from_user(entry.channel, hello.name)
         else:
             await titles.from_prompt(entry.channel, _first_prompt(link))
         await entry.channel.publish_summary()

@@ -512,10 +512,6 @@ async def test_only_the_settings_the_agent_lists_are_the_devices_to_change(
         await harness.hub.set_options({"session_id": "sess-1", "permission_mode": "plan"})
     assert (caught.value.code, caught.value.message) == ("unsupported", "change it in the terminal")
     assert harness.terminal.typed == []
-    # A rename is device-local and never went near the terminal.
-    await harness.hub.set_options({"session_id": "sess-1", "title": "Reindex"})
-    assert harness.hub.entry("sess-1").session.title == "Reindex"
-    assert harness.terminal.typed == []
 
 
 # ------------------------------------------------------------------ commands

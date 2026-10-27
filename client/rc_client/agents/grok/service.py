@@ -21,8 +21,9 @@ from ...logging_setup import logger
 from ...models import Session, now_ms
 from ...sessions import titles
 from . import catalog as catalogue
-from . import control, leader, quota, runtime
+from . import control, leader, naming, quota, runtime
 from . import sessions as grok_sessions
+from .acp import GrokError
 from .adapter import GrokRunner
 
 if TYPE_CHECKING:  # pragma: no cover - imported for types only
@@ -50,7 +51,7 @@ class GrokLeaderService:
         # Sessions a live TUI has registered, as of the last scan.
         self._registered: set[str] = set()
         # Titles the leader has announced, kept for sessions not yet adopted.
-        self._titles: dict[str, str] = {}
+        self._titles: dict[str, grok_sessions.Title] = {}
         self._binary: str | None = None
         self._drifted_at = 0.0
         # When the scan may next try to join, and how long it waited last.
@@ -202,14 +203,19 @@ class GrokLeaderService:
         session_id = entry.session.session_id
         title = self._titles.get(session_id)
         client = self._client
-        if not title and client is not None and client.connected:
+        if title is None and client is not None and client.connected:
             listed = await client.titles(entry.session.cwd)
             self._titles.update(listed)
             title = listed.get(session_id)
-        if not title:
+        if title is None:
             title = await asyncio.to_thread(grok_sessions.title_for, session_id, entry.session.cwd)
-        if title:
-            await titles.from_agent(entry.channel, title)
+        if title.text:
+            await self._apply_title(entry, title)
+
+    async def _apply_title(self, entry: SessionEntry, title: grok_sessions.Title) -> None:
+        """A title a person chose with `/rename` is the user's; Grok's own is its summary (A55)."""
+        named = titles.from_user if title.manual else titles.from_agent
+        await named(entry.channel, title.text)
 
     async def _refresh_control(self) -> None:
         for session_id in sorted(self._known):
@@ -238,6 +244,32 @@ class GrokLeaderService:
             if entry.session.state == "readonly":
                 await entry.channel.set_state("idle")
             await entry.channel.publish_summary()
+
+    # ---------------------------------------------------------------- naming
+
+    async def rename(self, session_id: str, cwd: str, title: str) -> None:
+        """Name a session through the leader, whoever holds it (A55).
+
+        Nothing is joined or started for it: without the leader the rename belongs
+        to the terminal. A rename the leader took is the session's manual title
+        from then on, whether or not it announces one: an older title remembered
+        from `_x.ai/sessions/changed` would otherwise be put back when the
+        session is next adopted.
+        """
+        client = self._client
+        if client is None or not client.connected:
+            raise RcError("unsupported", naming.NOT_JOINED)
+        try:
+            await client.request(
+                naming.METHOD, naming.params(session_id, cwd, title), timeout=naming.TIMEOUT
+            )
+        except GrokError as exc:
+            raise naming.refusal(exc) from exc
+        except RcError as exc:
+            if exc.code == "agent_unavailable":
+                raise RcError("unsupported", naming.NOT_JOINED) from exc
+            raise
+        self._titles[session_id] = grok_sessions.Title(title, manual=True)
 
     # --------------------------------------------------------------- runners
 
@@ -339,13 +371,14 @@ class GrokLeaderService:
             if not isinstance(row, dict):
                 continue
             session_id = row.get("sessionId")
-            title = row.get("title")
-            if not isinstance(session_id, str) or not isinstance(title, str) or not title.strip():
+            text = row.get("title")
+            if not isinstance(session_id, str) or not isinstance(text, str) or not text.strip():
                 continue
-            self._titles[session_id] = title.strip()
+            title = leader.titled(text, row)
+            self._titles[session_id] = title
             entry = self.hub.entries.get(session_id)
             if entry is not None:
-                await titles.from_agent(entry.channel, title.strip())
+                await self._apply_title(entry, title)
 
     # ----------------------------------------------------------------- drift
 

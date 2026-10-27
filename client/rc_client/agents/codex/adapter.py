@@ -21,7 +21,7 @@ from .echoes import Echo, EchoLog
 from .models import ModelCatalog, tier_id
 from .prompts import answers_payload, question_blocks
 from .reports import ThreadFacts
-from .rpc import CodexAppServer
+from .rpc import REQUEST_TIMEOUT, CodexAppServer
 from .translate import CodexTranslator, item_type, text_of
 
 log = logger("rc_client.codex")
@@ -243,6 +243,12 @@ class CodexRunner:
     # --------------------------------------------------------------- driving
 
     @property
+    def connected(self) -> bool:
+        """Whether the app-server child this session owns is still running."""
+        server = self._server
+        return server is not None and server.alive
+
+    @property
     def busy(self) -> bool:
         return self._turn_id is not None
 
@@ -411,11 +417,13 @@ class CodexRunner:
             usage=dict(self._translator.usage),
         )
 
-    async def call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    async def call(
+        self, method: str, params: dict[str, Any], timeout: float = REQUEST_TIMEOUT
+    ) -> dict[str, Any]:
         server = self._server
         if server is None:
             raise RcError("agent_unavailable", "the Codex session is not connected")
-        return await server.request(method, params)
+        return await server.request(method, params, timeout=timeout)
 
     async def commands(self) -> list[Command]:
         return slash.listing()

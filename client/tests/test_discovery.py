@@ -15,6 +15,7 @@ from rc_client.agents.codex.plugin import detect as detect_codex
 from rc_client.agents.registry import AGENT_IDS, DetectContext, detect_all
 from rc_client.channel import paths
 from rc_client.channel.shim import MARKER, real_claude
+from tests import agent_guard
 
 
 def fake_binary(directory: Path, name: str, version: str) -> Path:
@@ -74,6 +75,7 @@ async def test_claude_detection_reads_the_version_and_advertises_capabilities(
         "worktree",
         # A40: `/compact`, and nothing else Claude Code offers.
         "commands",
+        "rename",
     }
 
 
@@ -148,6 +150,7 @@ async def test_codex_detection_without_a_reachable_app_server(
         "attachments",
         "effort",
         "commands",
+        "rename",
     }
 
 
@@ -160,6 +163,7 @@ async def _fail_catalog(binary: str) -> object:
 async def test_detect_all_returns_every_agent_in_registry_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    agent_guard.hide_agents(monkeypatch)
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setattr("rc_client.agents.codex.plugin.catalog_cache.get", _fail_catalog)
@@ -167,9 +171,8 @@ async def test_detect_all_returns_every_agent_in_registry_order(
     monkeypatch.delenv("RC_CODEX_BIN", raising=False)
     agents = await detect_all()
     assert [info.agent for info in agents] == list(AGENT_IDS)
-    # Absolute fallback locations are not controlled by PATH, so only assert on
-    # the agent this test can actually hide.
-    assert agents[0].available is False
+    # Every agent is hidden, so none of the ones installed on this machine is run.
+    assert [info.available for info in agents] == [False] * len(AGENT_IDS)
     assert all(info.capabilities for info in agents)
 
 

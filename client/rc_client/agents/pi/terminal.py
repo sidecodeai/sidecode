@@ -255,6 +255,12 @@ class PiTerminalSession:
             self._permission_mode = permission_mode
             await self.channel.set_meta(permission_mode=permission_mode)
 
+    async def set_name(self, name: str) -> str:
+        """The extension's `set_name` (A55), answered with the name pi holds."""
+        data = await self.link.command(frames.SET_NAME, name=name)
+        held = data.get("name")
+        return held if isinstance(held, str) and held.strip() else name
+
     async def approve(self, request_id: str, option_id: str, message: str | None) -> bool:
         answered = await self.approvals.approve(request_id, option_id)
         if answered:

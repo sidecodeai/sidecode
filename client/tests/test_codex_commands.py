@@ -517,7 +517,9 @@ class FakeServer:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.replies = replies or {}
 
-    async def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    async def request(
+        self, method: str, params: dict[str, Any], timeout: float = 60.0
+    ) -> dict[str, Any]:
         self.calls.append((method, params))
         return dict(self.replies.get(method, {}))
 

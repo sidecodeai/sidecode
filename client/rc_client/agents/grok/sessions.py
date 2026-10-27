@@ -28,12 +28,26 @@ UPDATES = "updates.jsonl"
 SUMMARY = "summary.json"
 
 
+@dataclass(slots=True, frozen=True)
+class Title:
+    """A session's title as Grok holds it, and whether a person chose it (A55).
+
+    `manual` is Grok's `title_is_manual`: the title was set by `/rename`, so its
+    own titling never replaces it.
+    """
+
+    text: str = ""
+    manual: bool = False
+
+
 @dataclass(slots=True)
 class GrokSessionInfo:
     session_id: str
     path: str
     cwd: str
     title: str = ""
+    # `title` was set by a manual `/rename`, which Grok never regenerates (A55).
+    title_is_manual: bool = False
     model: str | None = None
     effort: str | None = None
     size: int = 0
@@ -83,14 +97,20 @@ def title_of(summary: dict[str, Any]) -> str:
     return ""
 
 
+def title_in(summary: dict[str, Any]) -> Title:
+    """The title in one `summary.json`, and whether a person chose it."""
+    text = title_of(summary)
+    return Title(text, bool(text) and summary.get("title_is_manual") is True)
+
+
 def session_dir(session_id: str, cwd: str) -> Path:
     """Where Grok keeps one session: the working directory, percent-encoded."""
     return runtime.sessions_dir() / urllib.parse.quote(cwd, safe="") / session_id
 
 
-def title_for(session_id: str, cwd: str) -> str:
-    """The title Grok wrote for one session, without walking the whole tree."""
-    return title_of(_summary(session_dir(session_id, cwd)))
+def title_for(session_id: str, cwd: str) -> Title:
+    """The title Grok holds for one session, without walking the whole tree."""
+    return title_in(_summary(session_dir(session_id, cwd)))
 
 
 def discover(limit: int = MAX_SESSIONS, max_age_days: int = MAX_AGE_DAYS) -> list[GrokSessionInfo]:
@@ -115,12 +135,14 @@ def discover(limit: int = MAX_SESSIONS, max_age_days: int = MAX_AGE_DAYS) -> lis
         summary = _summary(directory)
         effort = summary.get("reasoning_effort")
         model = summary.get("current_model_id")
+        title = title_in(summary)
         found.append(
             GrokSessionInfo(
                 session_id=directory.name,
                 path=str(path),
                 cwd=_cwd_of(directory, summary),
-                title=title_of(summary),
+                title=title.text,
+                title_is_manual=title.manual,
                 model=model if isinstance(model, str) and model else None,
                 effort=effort if isinstance(effort, str) and effort else None,
                 size=os.path.getsize(path),

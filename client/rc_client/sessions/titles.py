@@ -2,11 +2,14 @@
 
 Three sources, in order of precedence:
 
-1. a title the user set through `session.create` or `session.set`, which is
-   sticky and is never overwritten by anything an agent produces;
+1. a title the user set — through `session.create`, an app's rename (A55), or
+   a name an agent reports as the user's: Claude Code's `custom-title` row,
+   every Codex name, Grok's manual ones, pi's — which is sticky and is never
+   overwritten by anything an agent generates. The agent's own record is the
+   truth, so a name it reports replaces whatever the user's earlier one was;
 2. the agent's own summary of the conversation — Claude Code writes an
-   `ai-title` row into its transcript, Codex names a thread — which replaces a
-   first-prompt title whenever it arrives or changes;
+   `ai-title` row into its transcript, Grok generates a title — which replaces
+   a first-prompt title whenever it arrives or changes;
 3. the first line of the first message, until something better shows up. A
    first message of files and no words is named after the files, and the
    agent's summary waits until the person has said something: all it had to go
@@ -69,10 +72,22 @@ def rekey(registry: Registry, old_id: str, new_id: str) -> None:
         registry.set_kv(_files_key(new_id), "1")
 
 
-async def from_user(channel: SessionChannel, title: str) -> bool:
-    """Apply a title the user typed, and make it stick."""
-    pin(channel.registry, channel.session.session_id)
-    return await _apply(channel, title)
+async def from_user(channel: SessionChannel, text: str) -> bool:
+    """Apply a name the user chose, wherever they chose it, and make it stick.
+
+    An app's rename, a `/rename` in a terminal, and a name an agent reports as
+    the user's all come here (A55). It replaces whatever is pinned, because the
+    agent's own record is the truth, and it never moves the session up the
+    list: a rename is not activity.
+    """
+    if not _clean(text):
+        return False
+    session_id = channel.session.session_id
+    pin(channel.registry, session_id)
+    # The session is no longer named after its files.
+    if named_after_files(channel.registry, session_id):
+        channel.registry.set_kv(_files_key(session_id), "")
+    return await _apply(channel, text, touch=False)
 
 
 async def from_agent(channel: SessionChannel, title: str) -> bool:
@@ -115,10 +130,17 @@ async def _from_files(channel: SessionChannel, attachments: Files) -> bool:
     return await _apply(channel, title)
 
 
-async def _apply(channel: SessionChannel, text: str) -> bool:
+def _clean(text: str) -> str:
     # An agent's summary may quote the prompt, attachment paths and all (A49).
-    title = title_from_text(without_paths(text))
+    return title_from_text(without_paths(text))
+
+
+async def _apply(channel: SessionChannel, text: str, *, touch: bool = True) -> bool:
+    title = _clean(text)
     if not title or title == channel.session.title:
         return False
-    await channel.set_meta(title=title)
+    if touch:
+        await channel.set_meta(title=title)
+    else:
+        await channel.set_title(title)
     return True

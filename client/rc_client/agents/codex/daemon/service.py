@@ -130,6 +130,10 @@ class CodexDaemonService:
         # `updated_at` is the moment the apps last heard about the session,
         # which a title or a settings change moves for reasons of our own.
         self._used: dict[str, int] = {}
+        # The name the index last gave each thread (A55). A list answer is a
+        # snapshot that may be older than a rename this device or a terminal has
+        # just made, so a name is followed only when the index changes its mind.
+        self._indexed: dict[str, str] = {}
         # Threads a session of ours spawned a subagent in. They are never
         # sessions themselves (A18); their work is their parent's.
         self._children = ChildIndex()
@@ -394,6 +398,7 @@ class CodexDaemonService:
             self._known.discard(thread_id)
             self._loaded.discard(thread_id)
             self._used.pop(thread_id, None)
+            self._indexed.pop(thread_id, None)
             log.info("forgetting a codex thread deleted in the agent")
             await self.hub.delete({"session_id": thread_id})
 
@@ -420,6 +425,7 @@ class CodexDaemonService:
                 self._known.discard(thread_id)
                 self._loaded.discard(thread_id)
                 self._used.pop(thread_id, None)
+                self._indexed.pop(thread_id, None)
                 self._foreign.append(thread_id)
                 await self.hub.withdraw(entry)
                 dropped += 1
@@ -556,7 +562,7 @@ class CodexDaemonService:
             # Amendment A15: a TUI is sitting in this thread, so it is live again.
             await entry.channel.revive()
         if summary.name:
-            await titles.from_agent(entry.channel, summary.name)
+            await self._follow_index(entry, summary.name)
         else:
             await titles.from_prompt(entry.channel, summary.title)
         if loaded:
@@ -567,6 +573,23 @@ class CodexDaemonService:
         if terminal and isinstance(entry.runner, CodexDaemonSession):
             entry.runner.claim_terminal()
         await self.publish_control(entry)
+
+    async def _follow_index(self, entry: SessionEntry, name: str) -> None:
+        """Take the name the index gives a thread, when it is not the one it gave last.
+
+        A name Codex holds is the user's, wherever it was set, and its own record
+        is the truth (A55): a rename in a terminal that holds no connection to
+        the daemon is only ever seen here. A list answer can also be older than
+        a `thread/name/updated` or a rename of ours that has already been
+        applied, and it then repeats the name the answer before it gave. That is
+        no change, and applying it would put the old name back until the next
+        scan.
+        """
+        thread_id = entry.session.session_id
+        if self._indexed.get(thread_id) == name:
+            return
+        self._indexed[thread_id] = name
+        await titles.from_user(entry.channel, name)
 
     async def _attach(self, entry: SessionEntry) -> None:
         """Resume a loaded thread so its stream reaches the apps.
@@ -804,14 +827,16 @@ class CodexDaemonService:
             await self._adopt(summary, loaded=True, terminal=True)
 
     async def _thread_named(self, thread_id: str, name: str) -> None:
-        """Codex named the thread from its conversation; the sidebars follow it.
+        """Codex named the thread; the sidebars follow it.
 
         The name arrives for every subscriber, so a thread named in a terminal
-        renames itself in the apps too. It never overrides a title the user set.
+        renames itself in the apps too. Every name Codex announces was set
+        explicitly, by a person or by the TUI naming an unnamed thread, and its
+        own record is the truth: it replaces a title an app set (A55).
         """
         entry = self.hub.entries.get(thread_id)
         if entry is not None and name:
-            await titles.from_agent(entry.channel, name)
+            await titles.from_user(entry.channel, name)
 
     async def _thread_archived(self, thread_id: str) -> None:
         """A thread archived in Codex, by this device's close (A39) or in a terminal.
@@ -842,6 +867,7 @@ class CodexDaemonService:
         self._known.discard(thread_id)
         self._loaded.discard(thread_id)
         self._used.pop(thread_id, None)
+        self._indexed.pop(thread_id, None)
         if thread_id in self._quiet:
             self._quiet.remove(thread_id)
 

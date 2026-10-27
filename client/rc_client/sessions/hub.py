@@ -32,7 +32,7 @@ from ..models import (
     title_from_text,
 )
 from ..registry import Registry
-from . import offsets, titles
+from . import offsets, rename, titles
 from .attach import Attachment, HookQuestion, SessionStart, TurnHook
 from .channel import SessionChannel
 from .limits import LimitStop
@@ -737,7 +737,8 @@ class SessionHub:
         model = params.get("model")
         permission_mode = params.get("permission_mode")
         effort = params.get("effort")
-        title = params.get("title")
+        # A55: a name that is refused is refused before anything is applied.
+        title = rename.requested(params)
         # A `speed` of null is a session going back to the standard tier, so
         # only the key's absence means "leave it alone" (amendment A21).
         speed: SpeedSetting = params.get("speed") if "speed" in params else UNSET
@@ -750,21 +751,19 @@ class SessionHub:
                 model = effort = None
         if entry.runner is not None:
             await entry.runner.apply_settings(model, permission_mode, effort, speed)
-        if title is not None:
-            title = title_from_text(str(title))
-            if title:
-                # A title the user typed outranks anything the agent produces.
-                titles.pin(self.registry, entry.session.session_id)
         meta: dict[str, Any] = {} if speed is UNSET else {"speed": speed}
         for key, value in (
             ("model", model),
             ("permission_mode", permission_mode),
             ("effort", effort),
-            ("title", title),
         ):
             if value is not None:
                 meta[key] = value
         await entry.channel.set_meta(**meta)
+        if title is not None:
+            # A55: the name goes last. It is the agent's own, so it is asked for
+            # there, and the reply carries the name the agent now holds.
+            await rename.apply(self, entry, title)
         return {"session": entry.session.to_dict()}
 
     async def _set_shared(

@@ -143,8 +143,14 @@ class SessionChannel:
 
     # ------------------------------------------------------------ summaries
 
-    async def publish_summary(self) -> None:
-        self.session.updated_at = now_ms()
+    async def publish_summary(self, *, touch: bool = True) -> None:
+        """Publish the summary, which moves the session up the list unless `touch` is False.
+
+        A change that is not activity — a rename (A55) — keeps `updated_at`, so
+        the row stays where it was.
+        """
+        if touch:
+            self.session.updated_at = now_ms()
         self.registry.upsert_session(self.session)
         await self._publish({"type": "session.updated", "session": self.session.to_dict()})
 
@@ -189,6 +195,13 @@ class SessionChannel:
         is a value, which is how a session goes back to its agent's standard
         speed (amendment A21).
         """
+        await self._merge(fields, touch=True)
+
+    async def set_title(self, title: str) -> None:
+        """A rename (A55): the title changes, and the session keeps its place in the list."""
+        await self._merge({"title": title}, touch=False)
+
+    async def _merge(self, fields: dict[str, Any], *, touch: bool) -> None:
         changed: dict[str, Any] = {}
         for key, value in fields.items():
             if value is UNSET:
@@ -199,7 +212,7 @@ class SessionChannel:
         if not changed:
             return
         await self.emit("meta", **changed)
-        await self.publish_summary()
+        await self.publish_summary(touch=touch)
 
     async def notice(self, level: str, text: str) -> None:
         await self.emit("notice", level=level, text=text)

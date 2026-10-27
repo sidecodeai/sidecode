@@ -25,8 +25,10 @@ from .base import SessionRunner
 if TYPE_CHECKING:  # pragma: no cover - imported for types only
     from ..sessions.channel import SessionChannel
     from ..sessions.hub import SessionEntry
+    from ..sessions.shared import SharedControl
     from .codex.daemon.service import CodexDaemonService
     from .grok.service import GrokLeaderService
+    from .pi.service import PiExtensionService
 
 # Detection order, and the order `hello` reports agents in.
 AGENT_IDS = ("claude", "codex", "grok", "pi")
@@ -81,6 +83,37 @@ class RunnerSpec:
         return self.entry.session
 
 
+@dataclass(slots=True)
+class RenameSpec:
+    """Everything an adapter needs to rename one session inside its agent (A55).
+
+    `name` has been through `sessions.rename.normalise`: it is not empty, holds
+    no control or separator character, and is at most 60 code points, so it is
+    safe to type, write and send as it is. The hub holds `entry.lock` for as
+    long as the hook runs; a hook never takes it.
+    """
+
+    entry: SessionEntry
+    info: AgentInfo
+    name: str
+    shared: SharedControl
+    codex_daemon: CodexDaemonService | None = None
+    grok_leader: GrokLeaderService | None = None
+    pi_extensions: PiExtensionService | None = None
+
+    @property
+    def channel(self) -> SessionChannel:
+        return self.entry.channel
+
+    @property
+    def session(self) -> Session:
+        return self.entry.session
+
+
+# `async def rename(spec) -> str` on a plugin module, when the agent can be renamed.
+RenameHook = Callable[[RenameSpec], Awaitable[str]]
+
+
 class AgentPlugin(Protocol):
     """The shape every `rc_client/agents/<id>/plugin.py` satisfies."""
 
@@ -125,3 +158,19 @@ async def offline_commands(agent: str, session: Session) -> list[Command]:
     if offline is None:
         return []
     return list(await offline(session))
+
+
+async def rename_in_agent(agent: str, spec: RenameSpec) -> str:
+    """Rename a session inside its agent, and return the name the agent now holds (A55).
+
+    A plugin exposes `async def rename(spec: RenameSpec) -> str` and picks its
+    own route from the session's state: the process the device drives, the
+    terminal it is attached to, the agent's service, or the agent's files. The
+    name it returns is the agent's own record of it, which can differ from the
+    one asked for. A plugin without the hook cannot be renamed from here, and
+    one that lists the `rename` capability must have it.
+    """
+    hook = cast("RenameHook | None", getattr(plugin(agent), "rename", None))
+    if hook is None:
+        raise RcError("unsupported", f"{agent} sessions cannot be renamed from here")
+    return await hook(spec)

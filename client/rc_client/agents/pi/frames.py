@@ -28,15 +28,17 @@ COMMAND = "command"
 ANSWER = "answer"
 
 # The commands a device sends. `send`, `abort`, `set_model`, `set_thinking` and
-# `set_permission_mode` are the session controls; `stats` is what a turn's
-# totals come from, because the socket has no `get_session_stats` of its own;
-# `commands` and `compact` are amendment A27's two halves, the list a session
-# offers and the one command of pi's own that the device runs by name.
+# `set_permission_mode` are the session controls, and `set_name` is the
+# terminal's own `/name` (A55); `stats` is what a turn's totals come from,
+# because the socket has no `get_session_stats` of its own; `commands` and
+# `compact` are amendment A27's two halves, the list a session offers and the
+# one command of pi's own that the device runs by name.
 SEND = "send"
 ABORT = "abort"
 SET_MODEL = "set_model"
 SET_THINKING = "set_thinking"
 SET_PERMISSION_MODE = "set_permission_mode"
+SET_NAME = "set_name"
 STATS = "stats"
 COMMANDS = "commands"
 COMPACT = "compact"

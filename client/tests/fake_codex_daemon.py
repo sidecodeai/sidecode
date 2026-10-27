@@ -53,6 +53,15 @@ class FakeDaemon:
         # Methods the daemon refuses, by message. `thread/resume` is the one
         # that matters: it refuses a thread whose first turn has not run.
         self.errors: dict[str, str] = {}
+        # The JSON-RPC code a refusal carries, where it is not Codex's `-32000`.
+        self.error_codes: dict[str, int] = {}
+        # Methods it takes and never answers.
+        self.silent: set[str] = set()
+        # What `thread/name/set` recorded, by thread (A55).
+        self.names: dict[str, str] = {}
+        # Threads it cannot name, as Codex cannot an archived thread or one that is
+        # gone: it answers an invalid request.
+        self.unnameable: set[str] = set()
         self.responder: Responder | None = None
         # Requests sent right behind the next answer to `thread/resume`, the way
         # Codex replays what is pending on a thread to the connection that has
@@ -101,18 +110,22 @@ class FakeDaemon:
         params = message.get("params") or {}
         if method:
             self.calls.append((method, params))
-        if "id" not in message:
+        if "id" not in message or method in self.silent:
             return
         if method in self.errors:
+            code = self.error_codes.get(method, -32000)
             await connection.send(
                 json.dumps(
                     {
                         "jsonrpc": "2.0",
                         "id": message["id"],
-                        "error": {"code": -32000, "message": self.errors[method]},
+                        "error": {"code": code, "message": self.errors[method]},
                     }
                 )
             )
+            return
+        if method == "thread/name/set":
+            await self._name_thread(connection, message["id"], params)
             return
         if method:
             result = self._result(method, params)
@@ -123,6 +136,30 @@ class FakeDaemon:
                 await self._replay()
             return
         await self.answers.put(message)
+
+    async def _name_thread(
+        self, connection: ServerConnection, message_id: Any, params: dict[str, Any]
+    ) -> None:
+        """What the real daemon does: record the name, answer, then tell every subscriber."""
+        thread_id = str(params.get("threadId") or "")
+        name = str(params.get("name") or "")
+        if thread_id in self.unnameable:
+            error = {"code": -32600, "message": f"thread not found: {thread_id}"}
+            await connection.send(json.dumps({"jsonrpc": "2.0", "id": message_id, "error": error}))
+            return
+        self.names[thread_id] = name
+        self._rename_rows(thread_id, name)
+        await connection.send(json.dumps({"jsonrpc": "2.0", "id": message_id, "result": {}}))
+        await self.notify("thread/name/updated", {"threadId": thread_id, "threadName": name})
+
+    def _rename_rows(self, thread_id: str, name: str) -> None:
+        """Keep the index snapshots consistent with a name the daemon now holds."""
+        for reply in self.replies.values():
+            if not isinstance(reply, dict):
+                continue
+            for row in [reply.get("thread"), *(reply.get("data") or [])]:
+                if isinstance(row, dict) and row.get("id") == thread_id:
+                    row["name"] = name
 
     async def _replay(self) -> None:
         replays, self.replays = self.replays, []

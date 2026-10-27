@@ -36,6 +36,9 @@ FIXTURE = Path(__file__).resolve().parent / "fixtures" / "grok" / "available-com
 # checks the app's own id back has to send one, exactly as an app does (A12).
 BLOCK = "7f3a1c02-4d58-4e6b-9a21-5c8e0b7d4f19"
 SECOND_BLOCK = "2d9b6e14-8c37-4a52-b0fd-6e1a93c7d825"
+# What the recorded advertisement carries and the device leaves out. `rename` and
+# `title` are excluded ahead of a Grok Build that advertises them (A55).
+RECORDED_EXCLUSIONS = {"always-approve", "context", "statusline"}
 
 
 def advertisement() -> dict[str, Any]:
@@ -55,7 +58,7 @@ def test_the_real_advertisement_maps_onto_the_protocol_s_commands() -> None:
     update = advertisement()
     assert len(update["availableCommands"]) == 40
     listed = advertised(update)
-    assert len(listed) == 40 - len(EXCLUDED)
+    assert len(listed) == 40 - len(RECORDED_EXCLUSIONS)
     found = by_name(listed)
 
     assert found["compact"] == Command(
@@ -81,10 +84,30 @@ def test_the_real_advertisement_maps_onto_the_protocol_s_commands() -> None:
 def test_settings_and_terminal_only_commands_are_never_listed() -> None:
     raw = {entry["name"] for entry in advertisement()["availableCommands"]}
     offered = {command.name for command in advertised(advertisement())}
-    for name, reason in EXCLUDED.items():
+    for name in RECORDED_EXCLUSIONS:
         assert name in raw, f"{name} is no longer advertised; the exclusion is dead"
         assert name not in offered
-        assert reason
+    assert set(EXCLUDED) >= RECORDED_EXCLUSIONS
+    assert all(EXCLUDED.values())
+
+
+def test_naming_a_session_is_a_setting_and_never_a_command() -> None:
+    """A55: `session.set` carries the name, so `/rename` and its `/title` alias stay unlisted."""
+    update = {
+        "availableCommands": [
+            {"name": "rename", "description": "Rename the current session"},
+            {"name": "title", "description": "Rename the current session"},
+            {"name": "session-info", "description": "Show session details"},
+        ]
+    }
+    assert [command.name for command in advertised(update)] == ["session-info"]
+    remember(
+        [
+            Command(name="rename", description="Rename the current session"),
+            Command(name="session-info", description="Show session details"),
+        ]
+    )
+    assert [command.name for command in recall()] == ["session-info"]
 
 
 def test_a_paragraph_of_a_description_becomes_one_line() -> None:

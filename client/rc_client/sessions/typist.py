@@ -22,6 +22,11 @@ Three rules make that safe to do to somebody else's terminal.
   settings cap the effort, the CLI takes a lower level than the one asked for,
   and the session reports that one.
 
+`/rename` (amendment A55) is the one script that types an argument, because it
+saves nothing but the session's own name. It keeps the idle gate, and what
+decides it is the transcript too: the CLI's own `custom-title` row, not its
+wording. A name the prompt box would read more into than text is never typed.
+
 Stopping a turn (amendment A42) is the one script those rules do not fit. Escape
 is what the person would press, and a running turn is exactly when they want it
 pressed, so it has no idle gate and waits for no confirmation: the CLI files
@@ -40,7 +45,8 @@ from typing import TYPE_CHECKING
 
 from ..errors import RcError
 from ..logging_setup import logger
-from .ptys import PtyLink
+from .ptys import PtyLink, TerminalGone, TerminalSilent
+from .rename import normalise
 
 if TYPE_CHECKING:  # pragma: no cover - imported for types only
     from .hub import SessionEntry
@@ -50,6 +56,15 @@ log = logger("rc_client.typist")
 
 BUSY = "the terminal is busy; try again in a moment"
 REFUSED = "the terminal did not take the change"
+# What a rename that went unconfirmed says (A55): the keystrokes may have landed.
+NOT_CONFIRMED = "the terminal did not confirm the new name"
+# And what every script says after one, until the person has used the terminal.
+UNCONFIRMED = (
+    "a rename typed here was not confirmed and may still be in the prompt; use the terminal first"
+)
+# And one the device cannot type into at all: the CLI is open in a terminal whose
+# keyboard is not the device's, so there is nothing to type a rename into.
+NOT_TYPEABLE = "the session is open in a terminal this device cannot type into; rename it there"
 # What a Stop says while the CLI is waiting on the person (A42).
 ANSWER_FIRST = "answer the prompt first"
 
@@ -66,6 +81,15 @@ CONFIRM_TIMEOUT = 8.0
 # How long a typed command stays claimed, so its transcript row is known for
 # ours however late the tailer gets to it.
 ECHO_WINDOW = 30.0
+# How often a rename asks the transcript reader to look again while it waits,
+# and how long the rows it leaves are still taken for its own once it is done.
+RENAME_POLL = 0.4
+RENAME_GRACE = 3.0
+# How much later than it was, by the clocks of both ends, the person's last key has
+# to be before it counts as a key since, and how many characters of a rename's text
+# are looked for on the screen to tell whether it is still in the prompt box.
+HUMAN_SLACK = 1.0
+RESIDUE_CHARS = 12
 
 UP = "\x1b[A"
 DOWN = "\x1b[B"
@@ -78,6 +102,7 @@ THIS_SESSION = "s"
 MODEL_COMMAND = "/model"
 EFFORT_COMMAND = "/effort"
 COMPACT_COMMAND = "/compact"
+RENAME_COMMAND = "/rename"
 
 # What the CLI prints when it has taken the change, matched loosely: the rest
 # of the sentence says where it was saved, which is what we are avoiding.
@@ -132,19 +157,41 @@ PROMPT_TIMEOUT = 1.5
 
 
 @dataclass(slots=True)
+class Unconfirmed:
+    """A rename nobody confirmed, which may have left its text in the prompt box (A55).
+
+    Enter may not have submitted it, and whatever the device types next would
+    land after it. The terminal is not the device's to type into until the person
+    has used it, a turn has started or the attachment has ended; no key is sent
+    to clean up. `human_at` is when the person last touched the keyboard on the
+    monotonic clock, as far as the device could tell: the proxy counts only
+    their keys, never the device's own.
+    """
+
+    human_at: float
+
+    def moved(self, idle_for: float) -> bool:
+        """Whether the person has used the keyboard since, given how long it has been quiet."""
+        return time.monotonic() - idle_for > self.human_at + HUMAN_SLACK
+
+
+@dataclass(slots=True)
 class TypedCommand:
     """A command the device typed, waiting for the transcript to say it ran.
 
     `confirms` is what the CLI's own answer says; a command that only needs
     its row claimed — `/compact`, whose outcome is the compaction the apps hear
     about anyway — leaves it empty. `done` gets the whole answer, lower case,
-    or `None` when the CLI said something else or the script gave up.
+    or `None` when the CLI said something else or the script gave up. A rename
+    is `by_title`: what it waits for is the CLI's `custom-title` row, and `done`
+    gets the name that row carries (A55).
     """
 
     command: str
     confirms: str = ""
     done: asyncio.Future[str | None] | None = None
     seen: bool = False
+    by_title: bool = False
     expires_at: float = field(default_factory=lambda: time.monotonic() + ECHO_WINDOW)
 
     @property
@@ -196,6 +243,31 @@ def effort_taken(answer: str) -> str:
     if level is None or level not in EFFORT_ORDER:
         raise RcError("conflict", REFUSED)
     return level
+
+
+def typeable(name: str) -> bool:
+    """Whether a name can be typed after `/rename ` without the prompt box reading more into it.
+
+    `@` opens the box's file completion, where Enter may pick a suggestion
+    instead of ending the line, and a trailing backslash makes Enter insert a
+    newline. Neither has been seen on a screen here: the box is known to do
+    both, and a rename is not worth finding out. The name has been through
+    `sessions.rename.normalise`, so it holds no control character that could
+    end the line early.
+    """
+    return "@" not in name and not name.endswith("\\")
+
+
+def may_hold(screen: str, name: str) -> bool:
+    """Whether a typed `/rename <name>` may still be in the prompt box: its start is on screen.
+
+    A wrapped line and the box's own borders break the text up, so the spaces
+    are left out and only the first words are looked for. The command it echoes
+    into the conversation looks the same, and counts too: nothing says which
+    it is, and the cost of being wrong that way is a keystroke from the person.
+    """
+    first = "".join(f"{RENAME_COMMAND}{name}".split())[: len(RENAME_COMMAND) + RESIDUE_CHARS]
+    return first in "".join(screen.split())
 
 
 class Typist:
@@ -262,6 +334,42 @@ class Typist:
             "user_message", block_id=block_id, text=COMPACT_COMMAND, source="remote"
         )
 
+    async def rename(self, name: str) -> str:
+        """`/rename <name>`: the name the CLI took, from its own `custom-title` row (A55).
+
+        The argument form, which A40 forbids for `/model` because it saves the
+        person's default: `/rename` saves nothing but this session's name, and
+        has no picker to walk. The caller has checked that the name is
+        `typeable`. The codes say what is known. A busy terminal, or one that
+        may hold the text of an earlier rename, is `conflict` and nothing is
+        typed; one the device cannot reach is `unsupported`; one that goes quiet
+        before anything is typed is `timeout`. Once the keys have gone, no
+        confirmation is `timeout` as well, and the terminal is looked at for the
+        text, because Enter may not have submitted it. No Escape follows a
+        script that opened no dialog.
+        """
+        if normalise(name) != name:
+            # Text that becomes keystrokes holds no control character: one could end the line.
+            raise RcError("bad_request", "the name must be normalised before it is typed")
+        try:
+            await self._gate()
+        except TerminalGone as exc:
+            raise RcError("unsupported", NOT_TYPEABLE) from exc
+        except TerminalSilent as exc:
+            raise RcError("timeout", exc.message) from exc
+        pending = self.control.expect(self.entry, RENAME_COMMAND, by_title=True)
+        self.control.quiet_for(self.entry, CONFIRM_TIMEOUT + RENAME_GRACE)
+        try:
+            await self.link.keys(f"{RENAME_COMMAND} {name}{ENTER}", clear=True)
+        except TerminalGone as exc:
+            self.control.unclaim(self.entry, pending)
+            raise RcError("unsupported", NOT_TYPEABLE) from exc
+        except RcError as exc:
+            self.control.unclaim(self.entry, pending)
+            await self._check_for_text(name)
+            raise RcError("timeout", NOT_CONFIRMED) from exc
+        return await self._named(pending, name)
+
     async def interrupt(self) -> None:
         """A42: Escape, which is how a turn is stopped in that terminal.
 
@@ -289,6 +397,10 @@ class Typist:
         if state is None or not state.injectable:
             raise RcError("conflict", BUSY)
         terminal = await self.link.state()
+        if state.unconfirmed is not None:
+            if not state.unconfirmed.moved(terminal.idle_for):
+                raise RcError("conflict", UNCONFIRMED)
+            state.unconfirmed = None
         if terminal.draft > 0 or terminal.idle_for < QUIET_SECONDS:
             raise RcError("conflict", BUSY)
 
@@ -359,6 +471,51 @@ class Typist:
         if answer is None:
             raise RcError("conflict", REFUSED)
         return answer
+
+    async def _named(self, pending: TypedCommand, name: str) -> str:
+        """Wait for the `custom-title` row the CLI writes, and return the name it carries.
+
+        The transcript is asked for again every `RENAME_POLL` rather than at the
+        reader's own pace, so the wait is the CLI's and not the two-second tail.
+        """
+        future = pending.done
+        if future is None:
+            raise RcError("timeout", NOT_CONFIRMED)
+        deadline = time.monotonic() + CONFIRM_TIMEOUT
+        while time.monotonic() < deadline:
+            self.control.read_soon()
+            try:
+                taken = await asyncio.wait_for(asyncio.shield(future), timeout=RENAME_POLL)
+            except TimeoutError:
+                continue
+            if taken:
+                return taken
+            break
+        self.control.unclaim(self.entry, pending)
+        await self._check_for_text(name)
+        raise RcError("timeout", NOT_CONFIRMED)
+
+    async def _check_for_text(self, name: str) -> None:
+        """After a rename nobody confirmed, look for its text in the prompt box, typing nothing.
+
+        If it may be there, or the screen cannot be read, the terminal is marked
+        `Unconfirmed` and the log says so once; `_gate` does the rest.
+        """
+        state = self.entry.shared
+        if state is None:
+            return
+        try:
+            seen = await self.link.screen()
+        except RcError:
+            human_at = time.monotonic()
+        else:
+            if not may_hold(seen.text, name):
+                return
+            human_at = time.monotonic() - seen.idle_for
+        state.unconfirmed = Unconfirmed(human_at)
+        log.warning(
+            "a typed rename was not confirmed and may still be in the prompt", pid=self.link.pid
+        )
 
     async def _give_up(self, pending: TypedCommand) -> None:
         """Close whatever is open and leave the terminal as it was found."""

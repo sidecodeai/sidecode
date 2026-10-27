@@ -29,6 +29,19 @@ dropping the whole JSON-RPC message into the peer's `inject/` directory.
 `_x.ai/billing` answers with the reply `fixtures/grok/billing.json` recorded for
 the case named in the scratch directory's `billing` file (A53); `silent` never
 answers, and without the file it is a method the peer does not know.
+
+`_x.ai/session/rename` (A55) is read from the strings of Grok Build's binary, not
+recorded: no real agent was asked, so its answer is a guess and is meant to be
+checked against one. The `rename` entry of `leader.json` picks what
+the peer does with it: `accept`, the default, answers an empty result and announces
+the title in `_x.ai/sessions/changed` the way the leader does, marked manual unless
+`announce` says `unflagged`, or announces nothing when it says `none`; `blank`,
+`too-long` and `no-session` refuse it with the reasons the strings carry,
+`invalid-params` with the JSON-RPC code for refused fields, and `write-error` with an
+internal failure that happens to mention the title; `silent` never answers, `die`
+exits, and `unknown` is a Grok that has no such method. The `manual` entry lists the
+sessions whose title in the leader's own index is marked a manual one, which is just
+as unrecorded.
 """
 
 from __future__ import annotations
@@ -61,6 +74,23 @@ DECLINED = (
 )
 # How long `question-timeout` waits before giving up on the question by itself.
 QUESTION_DEADLINE = 0.3
+# How the leader refuses a rename, by scenario: the code, the message and the `data`
+# an extension method puts the reason in (A55; the reasons are the binary's strings).
+RENAME_REFUSALS: dict[str, tuple[int, str, str | None]] = {
+    "blank": (-32603, "Internal error", "title must not be blank"),
+    "too-long": (
+        -32603,
+        "Internal error",
+        "title too long (max 40 characters after removing control characters)",
+    ),
+    "no-session": (-32603, "Internal error", "No active session"),
+    "invalid-params": (-32602, "Invalid params", None),
+    "write-error": (
+        -32603,
+        "Internal error",
+        "failed to write the title to summary.json: permission denied",
+    ),
+}
 # The modes whose prompt fails, with the JSON-RPC error each answers it with.
 FAILURES = {
     "refuse": (-32602, "Invalid prompt"),
@@ -191,6 +221,8 @@ class FakePeer:
             self.set_option(message_id, message.get("params") or {})
         elif method == "session/prompt":
             self.prompt(message_id, params)
+        elif method == "_x.ai/session/rename" and self.settings.get("rename") != "unknown":
+            self.rename(message_id, params)
         elif method == "_x.ai/billing" and (self.directory / "billing").exists():
             self.billing(message_id)
         else:
@@ -201,6 +233,31 @@ class FakePeer:
                     "error": {"code": -32601, "message": "Method not found"},
                 }
             )
+
+    def rename(self, message_id: Any, params: dict[str, Any]) -> None:
+        """What the leader does with a rename request, by the scenario a test chose."""
+        scenario = str(self.settings.get("rename") or "accept")
+        if scenario == "silent":
+            return
+        if scenario == "die":
+            os._exit(0)
+        if scenario in RENAME_REFUSALS:
+            code, message, data = RENAME_REFUSALS[scenario]
+            error: dict[str, Any] = {"code": code, "message": message}
+            if data is not None:
+                error["data"] = data
+            self.send({"jsonrpc": "2.0", "id": message_id, "error": error})
+            return
+        self.result(message_id, {})
+        announce = self.settings.get("announce")
+        if announce == "none":
+            return
+        row = {
+            "sessionId": params.get("sessionId"),
+            "title": params.get("title"),
+            **_manual_flag(announce != "unflagged"),
+        }
+        self.notify("_x.ai/sessions/changed", {"upserted": [row], "removed": []})
 
     def billing(self, message_id: Any) -> None:
         """What the leader answered to `/usage` for the recorded case a test chose."""
@@ -240,8 +297,13 @@ class FakePeer:
         return {"sessionId": session_id, "turns": 2, "context": {"used": 1024}}
 
     def listed(self) -> list[dict[str, Any]]:
+        """The leader's index of one directory; `manual` names the sessions a person titled."""
         titles: dict[str, Any] = self.settings.get("titles") or {}
-        return [{"sessionId": session_id, "title": title} for session_id, title in titles.items()]
+        manual = {str(item) for item in self.settings.get("manual") or []}
+        return [
+            {"sessionId": session_id, "title": title, **_manual_flag(session_id in manual)}
+            for session_id, title in titles.items()
+        ]
 
     def new_session(self, recorded: dict[str, Any]) -> dict[str, Any]:
         chosen = self.settings.get("newSessionId")
@@ -506,6 +568,10 @@ def _settings(directory: Path) -> dict[str, Any]:
         return {}
     data: Any = json.loads(path.read_text(encoding="utf-8"))
     return data if isinstance(data, dict) else {}
+
+
+def _manual_flag(manual: bool) -> dict[str, Any]:
+    return {"titleIsManual": True} if manual else {}
 
 
 def _for_session(row: dict[str, Any], session_id: str) -> dict[str, Any]:

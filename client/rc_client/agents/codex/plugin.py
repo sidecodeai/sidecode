@@ -6,8 +6,8 @@ from ... import __version__
 from ...errors import RcError
 from ...models import AgentInfo, Choice, Command, Session
 from ..base import SessionRunner
-from ..registry import DetectContext, RunnerSpec
-from . import account, runtime
+from ..registry import DetectContext, RenameSpec, RunnerSpec
+from . import account, naming, runtime
 from . import commands as slash
 from .adapter import CodexRunner
 from .daemon.rpc import handshake_ok
@@ -30,6 +30,8 @@ CAPABILITIES = [
     "attachments",
     "effort",
     "commands",
+    # A55: `thread/name/set` on the daemon, or on the runner's own connection.
+    "rename",
 ]
 
 
@@ -99,3 +101,8 @@ async def build_runner(spec: RunnerSpec) -> SessionRunner:
         on_turn_end=spec.on_turn_end,
         on_session_id=spec.on_session_id,
     )
+
+
+async def rename(spec: RenameSpec) -> str:
+    """A55: `thread/name/set` on whichever app-server serves the thread."""
+    return await naming.rename_thread(spec)

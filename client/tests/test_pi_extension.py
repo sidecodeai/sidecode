@@ -29,6 +29,7 @@ from rc_client.errors import RcError
 from rc_client.models import AgentInfo, Choice
 from rc_client.registry import Registry
 from rc_client.sessions.hub import SessionHub
+from tests import agent_guard
 from tests.uploads import shown, upload
 
 SESSION = "7f0a2b44-1c3d-4e5f-8a9b-0c1d2e3f4a5b"
@@ -682,7 +683,10 @@ async def test_a_connection_that_says_nothing_useful_is_dropped(bench: Bench) ->
 # ------------------------------------------------------------- the real thing
 
 
-@pytest.mark.skipif(real_pi() is None, reason="pi is not installed on this machine")
+@pytest.mark.skipif(
+    not agent_guard.opted_in() or real_pi() is None,
+    reason="set RC_REAL_AGENTS=1 to start the pi installed on this machine",
+)
 async def test_the_real_pi_loads_the_extension_without_complaint(
     bench: Bench, tmp_path: Path
 ) -> None:

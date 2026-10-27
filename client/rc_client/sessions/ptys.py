@@ -31,6 +31,20 @@ log = logger("rc_client.pty")
 REQUEST_TIMEOUT = 5.0
 
 
+class TerminalGone(RcError):
+    """The proxy is not attached, so nothing reached the terminal."""
+
+    def __init__(self) -> None:
+        super().__init__("conflict", "this terminal is no longer attached")
+
+
+class TerminalSilent(RcError):
+    """The proxy was asked and did not answer: what was sent may or may not have landed."""
+
+    def __init__(self, message: str = "the terminal did not answer in time") -> None:
+        super().__init__("conflict", message)
+
+
 @dataclass(frozen=True, slots=True)
 class TerminalState:
     """What the proxy says about its terminal right now.
@@ -82,7 +96,7 @@ class PtyLink:
     async def _request(self, build: Any) -> dict[str, Any]:
         writer = self._writer
         if writer is None:
-            raise RcError("conflict", "this terminal is no longer attached")
+            raise TerminalGone()
         request_id = str(next(self._ids))
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         self._pending[request_id] = future
@@ -90,11 +104,13 @@ class PtyLink:
             writer.write(wire.encode(build(request_id)))
             await writer.drain()
             return await asyncio.wait_for(future, timeout=REQUEST_TIMEOUT)
+        except TimeoutError as exc:
+            # First, because a timeout is an `OSError` too: a proxy that has only gone
+            # quiet is not one that has gone away.
+            raise TerminalSilent() from exc
         except (OSError, RuntimeError) as exc:
             self.detach()
-            raise RcError("conflict", "this terminal is no longer attached") from exc
-        except TimeoutError as exc:
-            raise RcError("conflict", "the terminal did not answer in time") from exc
+            raise TerminalGone() from exc
         finally:
             self._pending.pop(request_id, None)
 
@@ -108,7 +124,8 @@ class PtyLink:
         writer, self._writer = self._writer, None
         for future in self._pending.values():
             if not future.done():
-                future.set_exception(RcError("conflict", "this terminal is no longer attached"))
+                # The request had gone out: whether it landed is not known.
+                future.set_exception(TerminalSilent("this terminal is no longer attached"))
         self._pending.clear()
         if writer is not None:
             with contextlib.suppress(Exception):

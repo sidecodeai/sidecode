@@ -6,8 +6,8 @@ from ...channel import shim
 from ...channel.versions import runs_tool_batch_hooks
 from ...models import AgentInfo, Choice, Command, Session
 from ..base import SessionRunner
-from ..registry import DetectContext, RunnerSpec
-from . import account, runtime
+from ..registry import DetectContext, RenameSpec, RunnerSpec
+from . import account, renaming, runtime
 from .adapter import ClaudeRunner
 from .commands import COMMANDS
 
@@ -44,6 +44,9 @@ CAPABILITIES = [
     # A40: `/compact` runs on a remote session as a prompt and on a shared one
     # by being typed into the terminal.
     "commands",
+    # A55: the SDK's `rename_session` request, `/rename` typed into a terminal, or
+    # the transcript's own rows.
+    "rename",
 ]
 
 # What an app may change on a `shared` session, because the device can type it
@@ -100,6 +103,11 @@ async def commands(session: Session) -> list[Command]:
     attached terminal needs no process of the device's either.
     """
     return list(COMMANDS)
+
+
+async def rename(spec: RenameSpec) -> str:
+    """Rename a Claude session by the route its state allows (A55, `renaming.py`)."""
+    return await renaming.rename(spec)
 
 
 async def build_runner(spec: RunnerSpec) -> SessionRunner:

@@ -8,9 +8,9 @@ the private app-server of `adapter.py` and the shared daemon of
 `daemon/session.py`, because they differ only in which client carries a request.
 
 Settings, lifecycle and terminal ergonomics are never listed: `/model`,
-`/permissions` and `/fast` are `session.set`, `/new`, `/archive` and `/delete`
-are frames of their own, and `/vim`, `/theme` and `/copy` change a terminal the
-apps cannot see.
+`/permissions`, `/fast` and `/rename` are `session.set`, `/new`, `/archive` and
+`/delete` are frames of their own, and `/vim`, `/theme` and `/copy` change a
+terminal the apps cannot see.
 """
 
 from __future__ import annotations

@@ -5,8 +5,8 @@ from __future__ import annotations
 from ...errors import RcError
 from ...models import AgentInfo, Choice, Command, Session
 from ..base import SessionRunner
-from ..registry import DetectContext, RunnerSpec
-from . import account, leader, runtime
+from ..registry import DetectContext, RenameSpec, RunnerSpec
+from . import account, leader, naming, runtime
 from . import catalog as catalogue
 from .adapter import GrokRunner
 from .commands import recall
@@ -40,6 +40,7 @@ async def detect(context: DetectContext) -> AgentInfo:
     version = await runtime.probe_version(path) if path else None
     models = catalogue.load()
     accounts = await account.detect(context.limits, context.grok_billing) if path else None
+    leader_ready = leader.config_ready()
     return AgentInfo(
         agent=AGENT,
         available=bool(path),
@@ -51,13 +52,15 @@ async def detect(context: DetectContext) -> AgentInfo:
         default_permission_mode="default",
         efforts=list(models.efforts),
         default_effort=models.default_effort,
-        capabilities=list(CAPABILITIES),
+        # A55: Grok renames a session through its leader, so `rename` is listed
+        # only while the leader is ready.
+        capabilities=[*CAPABILITIES, "rename"] if leader_ready else list(CAPABILITIES),
         # Grok Build attaches through its leader: one backend per machine that
         # every `grok` joins when `[cli] use_leader` is on (A28). There is
         # nothing to hand-shake with beforehand, because whichever client comes
         # first starts it, so readiness is the person's own configuration.
         attach="leader",
-        attach_ready=leader.config_ready(),
+        attach_ready=leader_ready,
         # `session/cancel` and `session/set_config_option` from any client act
         # on the session every client is in, and a prompt names its files on
         # the leader as it does anywhere else (A49).
@@ -98,3 +101,12 @@ async def build_runner(spec: RunnerSpec) -> SessionRunner:
         on_turn_end=spec.on_turn_end,
         on_session_id=spec.on_session_id,
     )
+
+
+async def rename(spec: RenameSpec) -> str:
+    """A55: `_x.ai/session/rename` through the leader, whatever holds the session."""
+    service = spec.grok_leader
+    if service is None:
+        raise RcError("unsupported", naming.NOT_JOINED)
+    await service.rename(spec.session.session_id, spec.session.cwd, spec.name)
+    return spec.name

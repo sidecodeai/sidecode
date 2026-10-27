@@ -49,6 +49,8 @@ DEFAULT_MODEL_ID = "default"
 UNREAD = "the agent was stopped before it read your message"
 # How often a turn held open for its subagents asks whether they are done.
 SUBAGENT_POLL_S = 5.0
+# How long the CLI has to answer a request to rename its session (A55).
+RENAME_TIMEOUT = 10.0
 
 TurnEndCallback = Callable[[], Awaitable[None]]
 
@@ -478,6 +480,34 @@ class ClaudeRunner:
         if name != COMPACT.name:
             raise RcError("not_found", f"/{name} is not a command this session offers")
         await self.send(f"/{name}", block_id=block_id)
+
+    async def rename_session(self, name: str) -> bool:
+        """Ask the CLI to rename the session it runs; whether it took the request (A55).
+
+        The stream-json protocol has a `rename_session` control request, which, as
+        far as the CLI's source reads, runs its whole routine: the `custom-title`
+        row, the `agent-name` row the prompt bar reads and its own record of the
+        name. Nothing here has run it. The Python SDK has no method for it, so it
+        goes through the client's private query object, which is why a missing
+        attribute or a refusal is an answer and not an error: the caller writes
+        the row itself. `session_id` makes the CLI refuse if it has moved to
+        another session since (`/clear`).
+        """
+        send = getattr(getattr(self._client, "_query", None), "_send_control_request", None)
+        if send is None:
+            return False
+        request = {
+            "subtype": "rename_session",
+            "title": name,
+            "source": "host",
+            "session_id": self._translator.session_id or self.channel.session.session_id,
+        }
+        try:
+            await send(request, timeout=RENAME_TIMEOUT)
+        except Exception as exc:
+            log.warning("claude rename request failed", error=type(exc).__name__)
+            return False
+        return True
 
     async def apply_settings(
         self,

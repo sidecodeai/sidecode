@@ -38,6 +38,10 @@ _COMMAND_TAG = "<command-name>"
 _NAME = re.compile(r"<command-name>(.*?)</command-name>", re.DOTALL)
 _ARGS = re.compile(r"<command-args>(.*?)</command-args>", re.DOTALL)
 
+# The commands that name a session. What they leave behind for the model is a
+# note about the name, and nothing the model answers (A55).
+_RENAMES = frozenset({"rename", "name"})
+
 # The CLI's own reply to a typed command. `<local-command-caveat>` shares the
 # prefix but is not output: it is an instruction to the model and stays hidden
 # like the other tags a command leaves behind.
@@ -101,3 +105,9 @@ def typed_command(text: str) -> str | None:
     found = _ARGS.search(body)
     args = found.group(1).strip() if found else ""
     return f"{name} {args}" if args else name
+
+
+def is_rename(text: str) -> bool:
+    """Whether the text records a typed `/rename`, or its alias `/name`."""
+    match = _NAME.search(text)
+    return match is not None and match.group(1).strip().lstrip("/") in _RENAMES

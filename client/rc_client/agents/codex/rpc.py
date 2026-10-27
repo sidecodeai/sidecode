@@ -15,6 +15,7 @@ from typing import Any
 
 from ...errors import RcError
 from ...logging_setup import logger
+from .errors import CodexError
 from .provenance import DAEMON_CLIENT_NAME, EMBEDDED_CLIENT_NAME
 
 log = logger("rc_client.codex.rpc")
@@ -169,7 +170,7 @@ class CodexAppServer:
             if "error" in message:
                 error = message["error"] or {}
                 future.set_exception(
-                    RcError("agent_unavailable", str(error.get("message") or "codex error"))
+                    CodexError(str(error.get("message") or "codex error"), error.get("code"))
                 )
             else:
                 future.set_result(message.get("result") or {})

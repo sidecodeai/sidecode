@@ -33,6 +33,7 @@ from ...errors import RcError
 from ...logging_setup import logger
 from . import runtime
 from .acp import INTERACTIONS, GrokAgent, ServerRequestHandler
+from .sessions import Title
 
 log = logger("rc_client.grok.leader")
 
@@ -100,6 +101,16 @@ def config_ready() -> bool:
     """
     config = read_config()
     return use_leader(config) and not sandboxed(config)
+
+
+def titled(text: str, row: dict[str, Any]) -> Title:
+    """A title from one of the leader's session rows, with whether a person chose it.
+
+    The leader marks a manual title `titleIsManual` in the rows it sends, going by
+    the strings of Grok Build 1.0.70; a row that does not say is not read as manual
+    (unverified).
+    """
+    return Title(text.strip(), row.get("titleIsManual") is True)
 
 
 @dataclass(slots=True)
@@ -250,7 +261,7 @@ class LeaderClient:
         inner = result.get("result")
         return inner if isinstance(inner, dict) and inner else result
 
-    async def titles(self, cwd: str) -> dict[str, str]:
+    async def titles(self, cwd: str) -> dict[str, Title]:
         """The title the leader has for each session in one directory."""
         try:
             result = await self.request("_x.ai/session/list", {"cwd": cwd}, timeout=INFO_TIMEOUT)
@@ -259,14 +270,14 @@ class LeaderClient:
             return {}
         inner = result.get("result")
         payload = inner if isinstance(inner, dict) else result
-        found: dict[str, str] = {}
+        found: dict[str, Title] = {}
         for entry in payload.get("sessions") or []:
             if not isinstance(entry, dict):
                 continue
             session_id = entry.get("sessionId")
             title = entry.get("title") or entry.get("summary")
             if isinstance(session_id, str) and isinstance(title, str) and title.strip():
-                found[session_id] = title.strip()
+                found[session_id] = titled(title, entry)
         return found
 
     # ---------------------------------------------------------------- inbound

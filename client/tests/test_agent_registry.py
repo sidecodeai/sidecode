@@ -13,6 +13,7 @@ from rc_client.models import AgentInfo, Session
 from rc_client.registry import Registry
 from rc_client.sessions.channel import SessionChannel
 from rc_client.sessions.hub import SessionEntry
+from tests import agent_guard
 
 
 def test_every_id_names_a_package_with_the_three_plugin_symbols() -> None:
@@ -41,6 +42,7 @@ async def test_building_a_runner_for_an_unknown_agent_is_unsupported(tmp_path: P
 async def test_detection_answers_for_every_id_in_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    agent_guard.hide_agents(monkeypatch)
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     agents = await detect_all(DetectContext(codex_daemon_ready=False))

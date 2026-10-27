@@ -33,6 +33,11 @@ def settings_file() -> Path:
     return home() / "agent" / "settings.json"
 
 
+def sessions_dir() -> Path:
+    """Where pi keeps its sessions, one directory per working directory."""
+    return home() / "agent" / "sessions"
+
+
 def candidate_paths() -> list[str]:
     explicit = os.environ.get("RC_PI_BIN", "").strip()
     candidates: list[str] = []

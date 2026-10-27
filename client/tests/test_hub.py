@@ -302,13 +302,13 @@ async def test_set_options_updates_the_session_and_the_runner(tmp_path: Path) ->
     hub, _, registry = build_hub(tmp_path)
     entry = add_session(hub)
     result = await hub.set_options(
-        {"session_id": "sess-1", "model": "opus", "permission_mode": "plan", "title": "Renamed"}
+        {"session_id": "sess-1", "model": "opus", "permission_mode": "plan"}
     )
     runner = entry.runner
     assert isinstance(runner, FakeRunner)
     assert runner.settings == [("opus", "plan", None, UNSET)]
     assert result["session"]["model"] == "opus"
-    assert result["session"]["title"] == "Renamed"
+    assert result["session"]["permission_mode"] == "plan"
     registry.close()
 
 

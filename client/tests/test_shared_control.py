@@ -445,12 +445,6 @@ async def test_the_requests_a_shared_session_refuses(harness: Harness) -> None:
     assert raised.value.message == "already attached"
 
 
-async def test_the_title_can_still_be_changed_on_a_shared_session(harness: Harness) -> None:
-    await harness.attach()
-    result = await harness.hub.set_options({"session_id": "sess-1", "title": "Pairing codes"})
-    assert result["session"]["title"] == "Pairing codes"
-
-
 async def test_a_pending_message_can_be_removed_from_the_queue(harness: Harness) -> None:
     entry = await harness.attach()
     await tick(harness.hub, entry, running=True)

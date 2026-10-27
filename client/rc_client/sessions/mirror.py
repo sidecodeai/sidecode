@@ -273,11 +273,14 @@ class MirrorService:
             for title in await asyncio.to_thread(tail.read_new):
                 await self._apply_title(entry, title)
 
-    @staticmethod
-    async def _apply_title(entry: SessionEntry, title: transcripts.Title) -> None:
-        """A `/rename` in the terminal is as sticky as one set from an app."""
+    async def _apply_title(self, entry: SessionEntry, title: transcripts.Title) -> None:
+        """A `/rename` in the terminal is as sticky as one set from an app.
+
+        It is also what confirms a rename the device typed there (A55).
+        """
         if title.by_user:
             await titles.from_user(entry.channel, title.text)
+            await self.hub.shared.title_seen(entry, title.text)
         else:
             await titles.from_agent(entry.channel, title.text)
 
@@ -480,7 +483,9 @@ class MirrorService:
             if info.settings:
                 await entry.channel.set_meta(**info.settings)
             if info.title:
-                await titles.from_agent(entry.channel, info.title)
+                # A title Grok marks as a manual `/rename` is the user's (A55).
+                named = titles.from_user if info.title_is_manual else titles.from_agent
+                await named(entry.channel, info.title)
 
     async def _refresh_grok_control(self) -> None:
         """Grok's own registry says who is live; the file's writers are the fallback."""
@@ -720,6 +725,11 @@ class MirrorService:
         mirror.working = working
         settling = session_id in self._settling
         self._settling.discard(session_id)
+        # Naming a session is not activity (A55), whoever typed it: a rename's own
+        # rows, and every row while the device types one, keep the session where it is
+        # listed. The rows are classified first, so the classifier sees every one.
+        names = mirror.tailer.only_names(rows)
+        quiet = names or self.hub.shared.renaming(entry)
         if rows:
             await self._apply_rows(session_id, entry, mirror.tailer, rows)
         await self._report_subagents(entry, mirror)
@@ -731,6 +741,7 @@ class MirrorService:
             mirror.busy,
             _turn_trigger(mirror.tailer),
             _turn_end(mirror.tailer),
+            touch=not quiet,
         )
 
     async def _report_subagents(self, entry: SessionEntry, mirror: ClaudeMirror) -> None:
@@ -773,19 +784,23 @@ class MirrorService:
         working: bool,
         trigger: str,
         end: TurnEnd | None = None,
+        *,
+        touch: bool = True,
     ) -> None:
         """Report turn state as the rows just read left it.
 
         `own` is the session's own turn and `working` all of its work, the
         subagents' included. An attached session injects by the first and
-        shows the second (A51); every other session shows the second.
+        shows the second (A51); every other session shows the second. Rows that
+        are not activity do not move the session up the list: `touch` is False.
         """
-        entry.session.updated_at = now_ms()
+        if touch:
+            entry.session.updated_at = now_ms()
         if entry.shared is not None:
             await self.hub.shared.tick(entry, own, trigger, end, working=working)
         elif entry.session.control == "terminal":
             await entry.channel.set_state("running" if working else "readonly")
-        await entry.channel.publish_summary()
+        await entry.channel.publish_summary(touch=touch)
 
     async def _apply(self, entry: SessionEntry, emit: Any) -> None:
         if emit.kind in _CHANNEL_ECHOES:

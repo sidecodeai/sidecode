@@ -15,6 +15,7 @@ from rc_client.sessions import titles
 from rc_client.sessions.channel import SessionChannel
 from rc_client.sessions.hub import SessionEntry
 from rc_client.sessions.mirror import ClaudeMirror, MirrorService
+from tests.rename_helpers import RenameProbe, install_rename
 from tests.test_hub import FakeRunner, add_session, build_hub
 
 SESSION = "5f8f6a02-1c9d-4a1e-9d4a-2f1e4c7b90aa"
@@ -136,9 +137,12 @@ def test_a_pin_follows_a_session_to_the_agents_own_id(tmp_path: Path) -> None:
     registry.close()
 
 
-async def test_a_title_set_through_the_api_sticks_across_a_rekey(tmp_path: Path) -> None:
+async def test_a_title_set_through_the_api_sticks_across_a_rekey(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     hub, _, registry = build_hub(tmp_path)
     entry = add_session(hub)
+    install_rename(monkeypatch, "claude", RenameProbe())
     await hub.set_options({"session_id": "sess-1", "title": "Ledger migration"})
     await hub.rekey(entry, "real-id")
     await titles.from_agent(entry.channel, "Something the agent thought of")

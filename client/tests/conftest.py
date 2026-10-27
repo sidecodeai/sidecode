@@ -9,11 +9,19 @@ from pathlib import Path
 
 import pytest
 
+from rc_client import daemon as daemon_module
 from rc_client.agents.claude import account as claude_account
 from rc_client.agents.claude import runtime as claude_runtime
+from rc_client.agents.claude import transcripts as claude_transcripts
 from rc_client.agents.codex import runtime as codex_runtime
+from rc_client.agents.codex.daemon import setup as codex_setup
 from rc_client.agents.grok import runtime as grok_runtime
 from rc_client.agents.pi import runtime as pi_runtime
+from rc_client.sessions import mirror as mirror_module
+from tests import agent_guard
+
+# Refuse to start the agents installed on this machine, in every test, for good.
+agent_guard.install()
 
 
 @pytest.fixture(autouse=True)
@@ -60,6 +68,56 @@ def agent_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         return None
 
     monkeypatch.setattr(claude_account, "read_keychain", no_keychain)
+
+
+@pytest.fixture(autouse=True)
+def no_real_agents(
+    tmp_path: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[None]:
+    """Keep every test away from the agents installed on this machine.
+
+    Detection resolves an agent's executable from candidates that are absolute
+    or fixed when the module is imported (`STANDALONE`, `SYSTEM_PREFIXES`,
+    `/opt/homebrew/bin/...`), which neither `PATH` nor `HOME` moves, and then
+    runs it. So each `resolve_binary` finds only what lives in a temporary
+    directory, and `agent_guard`'s audit hook refuses to start anything else,
+    whichever way a test reached it. An attempt fails the test at its end even
+    when the code under test swallowed the error. `RC_REAL_AGENTS=1`, the
+    opt-in of the smoke tests, leaves all of it off.
+    """
+    agent_guard.allow(tmp_path_factory.getbasetemp())
+    agent_guard.VIOLATIONS.clear()
+    if not agent_guard.opted_in():
+        absent = tmp_path / "no-agents" / "bin" / "codex"
+        monkeypatch.setattr(codex_runtime, "STANDALONE", absent)
+        monkeypatch.setattr(codex_setup, "STANDALONE", absent)
+        monkeypatch.setattr(pi_runtime, "SYSTEM_PREFIXES", ())
+        for runtime in (claude_runtime, codex_runtime, grok_runtime, pi_runtime):
+            monkeypatch.setattr(
+                runtime, "resolve_binary", agent_guard.fakes_only(runtime.resolve_binary)
+            )
+        # The daemon and the mirror took the functions by name when they were imported.
+        monkeypatch.setattr(daemon_module, "resolve_codex", codex_runtime.resolve_binary)
+        monkeypatch.setattr(daemon_module, "resolve_grok", grok_runtime.resolve_binary)
+        monkeypatch.setattr(mirror_module, "resolve_codex", codex_runtime.resolve_binary)
+        monkeypatch.setattr(mirror_module, "resolve_grok", grok_runtime.resolve_binary)
+    yield
+    attempts = list(agent_guard.VIOLATIONS)
+    agent_guard.VIOLATIONS.clear()
+    assert not attempts, "\n".join(attempts)
+
+
+@pytest.fixture(autouse=True)
+def claude_projects(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point Claude's transcript directory at a scratch path.
+
+    `PROJECTS_DIR` is computed when the module is imported, so moving
+    `CLAUDE_HOME` does not move it. A scan that lists transcripts, and a rename
+    that appends to one (A55), would otherwise reach a person's own `~/.claude`.
+    """
+    projects = tmp_path / "claude-home" / ".claude" / "projects"
+    monkeypatch.setattr(claude_runtime, "PROJECTS_DIR", projects)
+    monkeypatch.setattr(claude_transcripts, "PROJECTS_DIR", projects)
 
 
 @pytest.fixture(autouse=True)

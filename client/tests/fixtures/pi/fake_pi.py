@@ -5,7 +5,9 @@ subprocess, the framing and the reader task are all exercised. What it answers
 comes from the files beside it, written from pi's shipped `docs/rpc.md`.
 
 `RC_FAKE_PI_DIR` names a scratch directory: `mode` picks the scenario and every
-command the peer receives is appended to `commands.jsonl`.
+command the peer receives is appended to `commands.jsonl`. A `name` file there is
+the name the session already has, as one a person gave it in a terminal; the mode
+`refuse-name` makes `set_session_name` refuse, as pi does an empty one.
 """
 
 from __future__ import annotations
@@ -39,6 +41,8 @@ class FakePi:
         self.log = (self.directory / "commands.jsonl").open("a", encoding="utf-8")
         self.session_id = _argument("--session-id")
         self.steering: list[str] = []
+        named = self.directory / "name"
+        self.name = named.read_text(encoding="utf-8").strip() if named.exists() else ""
 
     # ------------------------------------------------------------------ wire
 
@@ -102,6 +106,8 @@ class FakePi:
             self.set_model(message)
         elif command == "set_thinking_level":
             self.respond(message)
+        elif command == "set_session_name":
+            self.set_session_name(message)
         elif command == "get_commands":
             self.respond(message, self.available())
         elif command == "compact":
@@ -145,7 +151,19 @@ class FakePi:
     def state(self) -> dict[str, Any]:
         state = _object("state.json")
         state["sessionId"] = "reassigned-by-pi" if self.mode == "rename" else self.session_id
+        if self.name:
+            state["sessionName"] = self.name
         return state
+
+    def set_session_name(self, message: dict[str, Any]) -> None:
+        """pi appends the entry and emits `session_info_changed` before it answers."""
+        name = str(message.get("name") or "").strip()
+        if self.mode == "refuse-name" or not name:
+            self.refuse(message, "Session name cannot be empty")
+            return
+        self.name = name
+        self.send({"type": "session_info_changed", "name": name})
+        self.respond(message)
 
     def stats(self) -> dict[str, Any]:
         stats = _object("stats.json")
