@@ -785,7 +785,10 @@
           "type": "string"
         },
         "title": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Renames the session in the agent (A55). Counted in code points; the device normalises the name first and answers bad_request when nothing is left or more than 60 code points are."
         },
         "speed": {
           "type": [

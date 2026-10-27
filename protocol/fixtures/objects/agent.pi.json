@@ -56,7 +56,8 @@
     "attachments",
     "effort",
     "history",
-    "commands"
+    "commands",
+    "rename"
   ],
   "attach": "extension",
   "attach_ready": true,

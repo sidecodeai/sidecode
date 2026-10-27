@@ -803,7 +803,7 @@ The agent and option arrays are shortened here; the fixture holds the full objec
 | `efforts` | `LabeledId[]` | yes | Empty array when the agent has no effort levels |
 | `default_effort` | string \| null | yes | |
 | `speeds` | `LabeledId[]` | no | Speed tiers the agent can run a session at beyond its standard speed, for example Codex's `priority` ("Fast"); empty or absent when it has none (amendment A21) |
-| `capabilities` | string[] | yes | Subset of `worktree`, `takeover`, `interrupt`, `queue`, `steer`, `attachments`, `effort`, `history`, `commands`. `commands` means the agent's sessions can list and run slash commands from an app through `session.commands` and `session.command` (A27); Codex, Grok Build and pi carry it, Claude does not |
+| `capabilities` | string[] | yes | Subset of `worktree`, `takeover`, `interrupt`, `queue`, `steer`, `attachments`, `effort`, `history`, `commands`, `rename`. `commands` means the agent's sessions can list and run slash commands from an app through `session.commands` and `session.command` (A27); Codex, Grok Build and pi carry it, Claude does not. `rename` means the device can rename the agent's sessions in the agent itself through `session.set` with `title` (A55); Claude Code, Codex and pi carry it, Grok Build only while its leader mode is ready (`attach_ready`, A28) |
 | `attach` | `channel` \| `daemon` \| `extension` \| `leader` \| null | no | How this agent's terminal sessions can be attached. `channel` is the Claude channel shim, `daemon` the Codex shared app-server, `extension` an extension of the device's own that the agent loads into every one of its processes (pi, A26), `leader` Grok Build's leader process — one shared backend per machine that its TUI joins when `[cli] use_leader` is on and that the device joins as another ACP client (A28). Null or absent means terminal sessions can only be taken over or resumed. |
 | `attach_ready` | boolean | no | Whether the device is prepared to attach: for Claude the `claude` shim is installed and on `PATH`, for Codex a handshake on the shared daemon socket succeeds, for pi the device's extension is installed in pi's global extension directory at the current build, for Grok Build the person's own `~/.grok/config.toml` turns `[cli] use_leader` on and requests no sandbox profile, so the next `grok` started on that machine joins the leader (A28). Apps use it only to word the hint on a `terminal` session. |
 | `shared_interrupt` | boolean | no | Whether the attachment can interrupt a running turn. `session.stop` on a `shared` session needs this **and** capability `interrupt`. False when absent. |
@@ -855,10 +855,11 @@ it.
 
 Capabilities gate the UI. `steer` decides whether a message sent during a running turn is steered or
 queued; `takeover` decides whether a terminal-controlled session offers "Take over"; `history`
-decides whether the app can page backwards. On a `shared` session `shared_steer` decides steering
-as well: an app treats a running session as steering when the agent's `capabilities` has `steer`,
-or when the session is `shared` and the agent reports `shared_steer: true`, and as queueing
-otherwise (A51).
+decides whether the app can page backwards; `rename` decides whether it offers Rename for a session
+of that agent, while the device is online (A55). On a `shared` session `shared_steer` decides
+steering as well: an app treats a running session as steering when the agent's `capabilities` has
+`steer`, or when the session is `shared` and the agent reports `shared_steer: true`, and as
+queueing otherwise (A51).
 
 `capabilities` is unchanged by the attachment fields. `takeover` keeps its meaning and applies to
 `control: "terminal"` only; `attach`, `attach_ready`, `shared_interrupt`, `shared_settings` and
@@ -916,7 +917,7 @@ worked examples of A25 and A26.
 | `session_id` | string | yes | Device-local. Global identity is (`device_id`, `session_id`). |
 | `device_id` | uuid | yes | |
 | `agent` | string | yes | |
-| `title` | string | yes | Device-supplied summary of the conversation |
+| `title` | string | yes | Device-supplied name of the conversation, the one its agent holds. A name from any surface — an app, a terminal or another client — is the user's and outranks the agent's own summary, which outranks the first message; a name the agent reports after a rename made elsewhere replaces it (A55) |
 | `cwd` | string | yes | Working directory on the device |
 | `git` | `Git` \| null | yes | Null when `cwd` is not a repository |
 | `state` | see 4.5 | yes | |
@@ -928,7 +929,7 @@ worked examples of A25 and A26.
 | `effort` | string \| null | yes | |
 | `speed` | string \| null | no | The tier from `AgentInfo.speeds` the session runs at; null or absent is the standard speed (A21) |
 | `created_at` | timestamp | yes | |
-| `updated_at` | timestamp | yes | |
+| `updated_at` | timestamp | yes | When the session last changed, which orders the lists. A user's rename leaves it alone (A55) |
 | `last_seq` | integer | yes | Highest `seq` the device has produced |
 | `archived` | boolean | yes | |
 | `turn` | `{turn_id, started_at}` \| null | yes | Non-null while a turn is in progress |
@@ -2668,7 +2669,7 @@ The gateway forwards these to the owning device and returns the device's reply.
 | `session.stop` | `session_id` | `{}` |
 | `session.approve` | `session_id`, `request_id`, `option_id`, `message?` | `{}` |
 | `session.answer` | `session_id`, `request_id`, `answers` | `{}` |
-| `session.set` | `session_id`, `model?`, `permission_mode?`, `effort?`, `speed?`, `title?` | `{session}` |
+| `session.set` | `session_id`, `model?`, `permission_mode?`, `effort?`, `speed?`, `title?` | `{session}` — with `title`, the reply's `session.title` is the name the agent now holds, which can differ from the one sent; `bad_request` for an empty or over-long name, `conflict` while the terminal is busy, `unsupported` where the agent, or this state of it, cannot be renamed from here (A55) |
 | `session.history` | `session_id`, `before_seq?`, `after_seq?`, `limit?` | `{events, has_more}` |
 | `session.block` | `session_id`, `block_id` | `{event}` |
 | `session.commands` | `session_id` | `{commands}` — the slash commands the session offers now (A27) |
@@ -2736,6 +2737,55 @@ there is nothing left to edit. The edited words go back as an ordinary `session.
 An entry whose snapshot carries `attachments` is not edited: its files are on the device, and no
 frame brings them back to an app. Apps offer Remove for it and nothing else.
 
+#### Renaming a session (A55)
+
+`session.set` with `title` renames the session in the agent itself, as `/rename` (Claude Code,
+Codex, Grok Build) or `/name` (pi) would, and the agent keeps the name in its own records, so a
+terminal that opens or resumes the session shows it. Until A55 a `title` was a name only the device
+kept, and a device from before A55 still treats it so.
+
+- **Offered when.** `AgentInfo.capabilities` lists `rename` (4.2). An app offers Rename only for a
+  session whose agent, on that device, lists it, and only while the device is online. It decides
+  from the capability and never from a version.
+- **Request.** `title` is normally sent alone. A frame that also carries settings has the settings
+  applied first and the name last.
+- **Name.** The device is authoritative. Every character in the Unicode categories Cc, Cf, Cs, Zl
+  and Zp becomes a space (Cs is a lone surrogate), except U+200C and U+200D, which stay so that
+  emoji sequences and joined scripts survive. Runs of white space then collapse to one space
+  (Python's `" ".join(s.split())`), and both ends are trimmed. Nothing else changes, NFKC included,
+  so CJK, emoji and full-width forms stay as typed. A name empty after that is `bad_request` ("title
+  must not be empty"); one over 60 code points is `bad_request` ("title is too long (max 60
+  characters)"). Code points are what is counted everywhere: by the device, by the schema's
+  `minLength` and `maxLength`, and by an app that limits its field. A name equal to the session's
+  title is answered at once with the session when that title is already the user's; the same words
+  as a generated title are still written to the agent.
+- **Reply.** `{session}`, whose `title` is the name the agent now holds. That can differ from the
+  request: Claude Code adds a suffix to a name another live session holds. An app draws the reply's
+  title and never the requested one ahead of it, and shows no "Saved as" notice.
+- **Refusals** are `error` replies in the usual shape `{code, message}`, the device's message in
+  plain English. `conflict` means one thing here: the terminal is busy and nothing was typed.
+  `unsupported` means this agent, or this state of it, cannot be renamed from here: a live Claude
+  Code the device cannot reach, Grok Build without its leader, an archived or missing Codex thread,
+  Codex with neither a daemon nor a runner, a running pi whose extension predates A55.
+  `agent_unavailable` means the agent's binary is missing or will not start, or that the agent
+  failed in a way the device cannot classify. `bad_request` comes from the name rules above, or from
+  the agent's own refusal of a name that passed them. A session deleted while its rename is in
+  flight stays deleted, and the rename answers `not_found`. A typed rename that the transcript does
+  not confirm within 8 s is `timeout`; if its text may still be in the prompt box, the device treats
+  the terminal as busy from then on, refusing every further device-typed input with `conflict` until
+  a person uses the terminal, a turn starts or the attachment ends, and it never sends keys to clean
+  up. The gateway adds `not_found`, `device_offline` and its own `timeout`, after 60 s, as for every
+  forwarded request.
+- **`updated_at`** is not changed by a user's rename, whether an app asked for it, a person typed
+  `/rename` in the agent's own terminal, or the agent reports it (Claude Code's `custom-title` row,
+  Codex's `thread/name/updated`, Grok Build's `title_is_manual`, pi's `session_info_changed`), so a
+  renamed row keeps its place in a list. The rows a typed `/rename` leaves in a Claude session do
+  not count as activity either. A generated title behaves as before.
+- **Precedence.** A name from any surface — an app, a terminal or another client — is the user's.
+  It outranks the agent's own summary, which outranks the first message. When the agent reports a
+  name after a rename made elsewhere, that name replaces the title, because the agent's own record
+  is the truth.
+
 #### Rules the device enforces
 
 - `session.send` to a session with `control: "terminal"` is refused with `conflict`
@@ -2788,11 +2838,11 @@ session (as `session.send`), `unsupported` for an agent without the capability. 
 resumed first, exactly as `session.send` does. On a `shared` session the request works exactly where
 `session.send` does — Codex on the daemon, pi through its extension.
 
-Commands are not settings and not lifecycle. `/model`, `/permissions`, `/fast`, `/thinking` and
-`/name` are `session.set`; `/new`, `/archive`, `/delete` and `/resume` are `session.create`,
-`session.archive` and `session.delete`. A device never lists them as commands, so an app never draws
-two controls for one thing. Terminal ergonomics — `/vim`, `/theme`, `/keymap`, `/copy`, `/hotkeys` —
-are never listed either: they change a terminal the app cannot see.
+Commands are not settings and not lifecycle. `/model`, `/permissions`, `/fast`, `/thinking`,
+`/rename` and `/name` are `session.set` (A55); `/new`, `/archive`, `/delete` and `/resume` are
+`session.create`, `session.archive` and `session.delete`. A device never lists them as commands, so
+an app never draws two controls for one thing. Terminal ergonomics — `/vim`, `/theme`, `/keymap`,
+`/copy`, `/hotkeys` — are never listed either: they change a terminal the app cannot see.
 
 #### Requests on a `shared` session
 
@@ -2802,7 +2852,7 @@ are never listed either: they change a terminal the app cannot see.
 | `session.approve` | Relays the option the block offered. An `option_id` the block did not offer, `elsewhere` included, is `bad_request`. Replying to a request the terminal already answered is a no-op returning `{}`. A plan card (A54) offers its own options and takes `message` for `plan_keep`. |
 | `session.answer` | Supported for a `question` block the device raised through its `PermissionRequest` hook (A20): the answer goes to the CLI as the tool's own answers and the block resolves with `by: "remote"`. Answering a question the terminal already answered is a no-op returning `{}`. A question the device did not raise has no block to answer. |
 | `session.stop` | `unsupported` unless the agent lists capability `interrupt` **and** reports `shared_interrupt: true`. Message: "stop it in the terminal". Claude reports it since A42: the device types Escape into the CLI's terminal while a turn runs; with an approval or a question on screen it answers `conflict` ("answer the prompt first"), and with no turn running it returns `{}` and types nothing. |
-| `session.set` | `unsupported` for `model`, `permission_mode`, `effort` and `speed` ("change it in the terminal"). `title` works. |
+| `session.set` | `unsupported` for `model`, `permission_mode`, `effort` and `speed` ("change it in the terminal"). `title` renames the session (A55): the device types `/rename` into the terminal under the same gates as A40, answers `conflict` while the terminal is busy, and replies once the transcript shows the new name, or `timeout` when it does not within 8 s; an unconfirmed rename may leave its text in the prompt box, and the device then answers `conflict` to every further typed request until a person uses the terminal, a turn starts or the attachment ends. |
 | `session.takeover` | `conflict` ("already attached"). |
 
 The table above describes what an attachment can do at its narrowest, which is what a Claude channel
@@ -2813,7 +2863,7 @@ replace the ones they name for a `shared` Codex session on the daemon.
 | --- | --- |
 | `session.send` | Every `mode` behaves as it does on a `remote` session. Idle: the device starts the turn and replies `accepted: "sent"`. Running under `mode: "auto"`: the device steers the running turn and replies `accepted: "steered"`, because Codex has capability `steer`. Running under `mode: "queue"`: the device holds the message, replies `accepted: "queued"` with a `queued_id`, emits `user_message {delivery: "pending"}` and a `queue` event, and starts the turn once the running one completes. `mode: "interrupt"` interrupts and then sends. Attachments are delivered, because `shared_attachments` is true. |
 | `session.stop` | Interrupts the running turn, because `shared_interrupt` is true. |
-| `session.set` | `model`, `permission_mode`, `effort` and `speed` reach the daemon and change the thread for everyone attached to it, because `shared_settings` is true; `title` stays device-local as always. |
+| `session.set` | `model`, `permission_mode`, `effort` and `speed` reach the daemon and change the thread for everyone attached to it, because `shared_settings` is true; `title` renames the thread through `thread/name/set` on the daemon (A55). |
 | `session.answer` | Supported. The daemon relays questions asked of the thread and accepts the answer from whichever client replies. |
 
 `session.takeover` is still `conflict`, and every rule of 5.1 through 5.13 applies to a shared Codex
@@ -3745,8 +3795,9 @@ one app connection that asked. The gateway relays bytes and never reads them.
     and only then to mark it `archived: true`, `control: "none"`, `state: "stopped"`, in one reply
     and one publish. Nothing the agent says while it is being closed revives it. While the session
     is working the app asks first ("Close this session?"); an idle one closes on the tap. A row a
-    terminal holds offers nothing, a row already in the Archive offers nothing, and writing to a
-    closed session brings it back as before (A15).
+    terminal holds offers no Close, a row already in the Archive offers none, and writing to a
+    closed session brings it back as before (A15). Rename (A55) is a separate action and stays on
+    those rows while their agent lists `rename`.
 22. **A session that stopped working and waits for you is marked until someone looks.** A session
     whose `unseen` is true (4.4) carries a red dot on its row in every list that draws the row, and
     the number of such sessions that are open and held is the app's icon badge where the platform
@@ -4006,6 +4057,31 @@ one app connection that asked. The gateway relays bytes and never reads them.
       terminal only while a turn is running and no approval or question is on screen; answers
       `conflict` while one is; types nothing and returns `{}` when no turn runs; reports
       `shared_interrupt: true` with the same condition as `shared_settings` (A42).
+- [ ] Lists capability `rename` for Claude Code, Codex and pi, and for Grok Build only while its
+      leader mode is ready; renames the session in the agent on `session.set` with `title`, by the
+      route its state allows, and replies `{session}` with the name the agent now holds, which can
+      differ from the request; applies the settings of a frame that carries them first and the name
+      last (A55).
+- [ ] Normalises a rename's `title` itself — characters in the Unicode categories Cc, Cf, Cs, Zl and
+      Zp become spaces, except U+200C and U+200D, which stay; runs of white space collapse to one,
+      both ends are trimmed, nothing else changes — answers `bad_request` for a name that is then
+      empty or over 60 code points, and answers a name equal to the session's title at once with the
+      session only when that title is already the user's (A55).
+- [ ] Refuses a rename with `conflict` only when the terminal is busy and nothing was typed, an
+      unconfirmed typed rename whose text may still be in the prompt box making it busy to every
+      further device-typed input until a person uses the terminal, a turn starts or the attachment
+      ends; with `unsupported` when the agent or this state of it cannot be renamed from here (a
+      live Claude Code it cannot reach, Grok Build without its leader, an archived or missing Codex
+      thread, Codex with neither a daemon nor a runner, a running pi whose extension predates A55);
+      with `agent_unavailable` when the agent's binary is missing, will not start or failed in a way
+      it cannot classify; with `bad_request` also for the agent's own refusal of a name that passed
+      normalisation; and with `not_found`, without bringing the session back, when it was deleted
+      while the rename was in flight (A55).
+- [ ] Leaves `updated_at` alone for a user's rename, whether an app asked for it, a person typed
+      `/rename` in the agent's own terminal, or the agent reports it, the rows a typed `/rename`
+      writes to a Claude session included; ranks a name from any surface above the agent's own
+      summary and that above the first message; and lets a name the agent reports after a rename
+      made elsewhere replace the title (A55).
 
 ### 9.3 App
 
@@ -4107,11 +4183,25 @@ one app connection that asked. The gateway relays bytes and never reads them.
       message in the person's bubble with its caption, and treats `trigger: "resume"` like
       `remote` in the status line (A35).
 - [ ] Offers **Close** — not Archive — on a row whose `control` is `remote` and that is not
-      archived, asks first only while the session is working, and offers nothing on a row a terminal
-      holds or a row already in the Archive (A39).
+      archived, asks first only while the session is working, and offers no Close on a row a
+      terminal holds or a row already in the Archive (A39).
 - [ ] Reads `shared_settings_keys`: on a `shared` session the settings it names are pickers and the
       others are the values the terminal set (A17), never a control that fails when tapped; a
       `conflict` from `session.set` or `session.command` is shown in the reply's words (A40).
+- [ ] Offers **Rename** — from the chat header's title and from the session row's menu — only for a
+      session whose agent, on that device, lists `rename` and only while the device is online, on
+      every such row, a row a terminal holds and a row in the Archive included, and draws no such
+      control otherwise; never decides from a version (A55).
+- [ ] Sends a rename as `session.set` with `title` alone and draws no optimistic title: the rename
+      waits for the reply and draws the reply's `session.title`, the name the agent now holds,
+      which can differ from the request, with no "Saved as" notice; counts the name in code points
+      and keeps its field to 60; on an error keeps the dialog open with one line under the field
+      (A55).
+- [ ] In the rename dialog only, shows `conflict` and `unsupported` as the app's own localized
+      line, never in the reply's words, and reads every other code as the app already presents it
+      (offline, timeout, generic). A40's rule that a `conflict` from `session.set` or
+      `session.command` is shown in the reply's words stays as it was for a settings change and a
+      command; only a rename is worded by the app (A55).
 
 - [ ] Decodes every fixture under `fixtures/` in its test suite.
 
@@ -4123,7 +4213,7 @@ one app connection that asked. The gateway relays bytes and never reads them.
 | --- | --- |
 | `fixtures/app/` | One frame per app-socket type, in both directions, plus typed replies |
 | `fixtures/device/` | One frame per device-socket type |
-| `fixtures/device/forwarded/` | All seventeen forwarded requests as the device receives them, plus the A9 backfill and A43 re-queue variants |
+| `fixtures/device/forwarded/` | All seventeen forwarded requests as the device receives them, plus the A9 backfill, A43 re-queue and A55 rename variants |
 | `fixtures/events/` | One event per kind, and one `tool_call` per `tool_kind` |
 | `fixtures/objects/` | Bare `Session` and `AgentInfo` objects that no frame fixture carries, including the two attachable agents and the shared sessions |
 | `fixtures/http/` | One body per HTTP request and response |
@@ -4802,3 +4892,39 @@ a terminal shares the plan is raised from the `PermissionRequest` hook, whose ma
 started before the update keeps the old matcher and shows nothing in the apps. Known limits: a
 choice to clear the context first, to continue in auto or bypass mode, or to refine in the cloud is
 not offered, and an approval never restores a mode the session planned from. See 5.7 and 8.
+
+**2026-10-27 A55 — a session's name is the agent's.** `session.set` carried a `title` that only the
+device kept: a name pinned in its own registry, which outranked the agent's summaries and was never
+written to the agent, so a terminal that opened or resumed the session showed another one, and no
+app offered it. `session.set` with `title` now renames the session in the agent itself, as `/rename`
+(Claude Code, Codex, Grok Build) or `/name` (pi) would, and the agent keeps the name in its own
+records. `AgentInfo.capabilities` gains `rename`: a device lists it for Claude Code, Codex and pi,
+and for Grok Build only while its leader mode is ready, and an app offers Rename only for a session
+whose agent, on that device, lists it, while the device is online, deciding from the capability and
+never from a version; a device from before A55 does not list it and keeps the old behaviour. `title`
+is normally sent alone, and a frame that also carries settings has them applied first and the name
+last. The device is authoritative about the name: characters in the Unicode categories Cc, Cf, Cs,
+Zl and Zp become spaces, except U+200C and U+200D, which stay, runs of white space collapse to one,
+both ends are trimmed, and nothing else is rewritten; an empty result, or one over 60 code points,
+is `bad_request`; a name equal to the session's title is answered at once with the session when that
+title is already the user's, and the same words as a generated title are still written to the agent.
+The reply is `{session}` whose `title` is the name the agent now holds, which can differ from the
+request — Claude Code adds a suffix to a name another live session holds — so an app draws the
+reply's title and never the requested one ahead of it, and shows no "Saved as" notice. A refusal is
+an `error` in the usual shape: `unsupported` for an agent, or a state of one, that cannot be renamed
+from here (a live Claude Code the device cannot reach, Grok Build without its leader, an archived or
+missing Codex thread, Codex with neither a daemon nor a runner, a running pi whose extension
+predates A55); `conflict`, which here means only that the terminal is busy and nothing was typed, as
+it is to every further typed request after a typed rename that nothing confirmed, until a person
+uses the terminal, a turn starts or the attachment ends; `bad_request`, which also covers the
+agent's own refusal of a name that passed normalisation; `agent_unavailable`, which also covers an
+agent failure the device cannot classify; the gateway's own `not_found`, `device_offline` and
+`timeout`; and `not_found` from the device for a session deleted while its rename was in flight,
+which stays deleted. A user's rename leaves `updated_at` alone, whether an app asked for it, a
+person typed `/rename` in the agent's own terminal, or the agent reports it, so a renamed row keeps
+its place in a list; a generated title behaves as before. A name from any surface is the user's and
+outranks the agent's own summary, which outranks the first message; a name the agent reports after a
+rename made elsewhere replaces the title, because the agent's own record is the truth. The gateway
+changes nothing: it forwards `session.set` as it always did. `fixtures/objects/agent.*.json` show
+`rename` and `fixtures/app/session.set.rename.json` and `reply.session.set.rename.json` the
+exchange. See 4.2, 4.4, 6.3, 9.2 and 9.3.

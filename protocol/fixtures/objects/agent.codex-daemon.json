@@ -52,7 +52,8 @@
     "attachments",
     "effort",
     "history",
-    "commands"
+    "commands",
+    "rename"
   ],
   "attach": "daemon",
   "attach_ready": true,

@@ -1,0 +1,6 @@
+{
+  "type": "session.set",
+  "id": "5b1d8a2e-9f0c-4c9e-8a43-0d6a1b2c3d4e",
+  "session_id": "ad2c9abb-4a1e-470a-835c-228778fc17f0",
+  "title": "Fix flaky auth refresh test"
+}

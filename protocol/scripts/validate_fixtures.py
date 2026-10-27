@@ -239,6 +239,7 @@ PATH_SCHEMAS = {
     "app/reply.session.create.json": ("app_frames.json", "ReplySessionCreate"),
     "app/reply.session.send.json": ("app_frames.json", "ReplySessionSend"),
     "app/reply.session.set.json": ("app_frames.json", "ReplySessionSet"),
+    "app/reply.session.set.rename.json": ("app_frames.json", "ReplySessionSet"),
     "app/reply.session.block.json": ("app_frames.json", "ReplySessionBlock"),
     "app/reply.session.commands.json": ("app_frames.json", "ReplySessionCommands"),
     "app/reply.session.takeover.json": ("app_frames.json", "ReplySessionTakeover"),

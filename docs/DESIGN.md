@@ -449,12 +449,38 @@ above; `session.archive` stays the frame. While the session is working (its dot 
 first — "Close this session?" over "The agent is still working; what it has not finished is lost."
 with Close and Cancel — and an idle one closes on the tap, because there is nothing to lose. The
 web row's trailing button and the phone's swipe and context menu carry it, with a circled cross
-(lucide `CircleX`, SF `xmark.circle`); it is the row's only action. A row a terminal holds
-(`terminal` or `shared`) offers no close at all: the terminal owns it, and it leaves Active by
-itself the moment the terminal exits. A row already in the Archive offers nothing either, not even
+(lucide `CircleX`, SF `xmark.circle`); it is the row's only swipe action and the only control drawn
+on the row, Rename being in the row's context menu (§ "A session can be renamed"). A row a terminal
+holds (`terminal` or `shared`) offers no close at all: the terminal owns it, and it leaves Active by
+itself the moment the terminal exits. A row already in the Archive offers no Close either, and no
 "unarchive" — writing to it, or a terminal coming back to it, is what brings it back (A15). There
 is no global "show archived" switch: it only ever toggled the hand-archived rows, which were
 already folded inside the collapsed Archive, so it read as a control that did nothing.
+
+**A session can be renamed** (A55). The name a person gives a session is the agent's own, so a
+terminal that opens or resumes it shows the same name; the apps ask the device, which renames the
+session in the agent. Rename is reached from two places. One is the title in the chat header, which
+is a control only while Rename is offered. The other is the session row's context menu: right-click
+on the web and touch and hold on the phones, on rows and on the chat sidebar's items alike. The
+swipe stays Close-only. Every row offers Rename — a row a terminal holds and a row in the Archive
+included — while the session's agent lists `rename` on its device and that device is online;
+otherwise the menu item is not drawn and the header title is plain text, as before.
+
+The dialog is each app's own device-rename dialog, in its own look. It is titled "Rename session"
+(重命名会话) and holds one field, "Session name" (会话名称), filled with the session's current title and
+empty for an untitled session. A name is at most 60 characters, counted in code points; Save (保存)
+stays disabled while the trimmed text is empty or unchanged; Enter saves, and Escape or Cancel (取消)
+closes the dialog. While the request is out the dialog shows progress, because a rename typed into a
+Claude terminal can take about eight seconds. On success it closes and the title drawn is the one in
+the reply, never the one typed: the agent may have changed it (Claude Code adds a suffix to a name
+another live session holds), and nothing says "Saved as". On an error the dialog stays open with one
+line under the field. Two codes are worded by the app, in its own language, because here they mean
+one thing each: `conflict` reads "The session is busy. Try again later." (会话正忙，请稍后再试。), since the
+terminal was busy and nothing was typed, and `unsupported` reads "This session can't be renamed from
+here. Rename it in its terminal." (这个会话无法从这里重命名，请在它的终端里改名。). Any other code reads as the app already
+words it for that code: offline, timeout, generic. The dialog's own messages are "Enter a name."
+(请输入名称。) for an empty name and "Names can be up to 60 characters." (名称最多 60 个字符。) for a name past
+the limit, and the menu item reads Rename (重命名).
 
 **Agents are visible and filterable.** Every row carries an agent chip on its meta line — the
 agent's name from § "Agents", falling back to the raw agent id, in the one quiet tint every agent
