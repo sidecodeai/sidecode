@@ -9,8 +9,9 @@ is every subagent's transcript, under the session's own directory, so the last
 row of each file is the whole answer.
 
 A subagent is working until its transcript ends with an assistant message that
-ended a turn (`end_turn`, `stop_sequence`, `max_tokens`) or with the API error
-that stopped it. That is deliberately not the rule the parent's own transcript
+ended a turn (`end_turn`, `stop_sequence`, `max_tokens`), with the API error
+that stopped it, or with the marker the CLI leaves where the person's Escape
+aborted it. That is deliberately not the rule the parent's own transcript
 uses, where a missing `stop_reason` ends the turn as well (A34): the parent is
 read row by row as it grows, while these files are read from the end long after
 the fact, and a large share of subagent transcripts stop on an
@@ -29,10 +30,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .calls import Call, read_calls
+from .markers import is_interruption
+
 # Where the CLI files them: `<project>/<session id>/subagents/agent-<id>.jsonl`,
-# beside the session's own `<project>/<session id>.jsonl`.
+# beside the session's own `<project>/<session id>.jsonl`; a workflow's agents file theirs a
+# level deeper, under `workflows/<run>/`.
 SUBAGENT_DIR = "subagents"
-SUBAGENT_GLOB = "agent-*.jsonl"
+AGENT_PREFIX = "agent-"
+SUBAGENT_GLOB = f"{AGENT_PREFIX}*.jsonl"
 
 # How long a transcript may go unwritten before its subagent counts as gone.
 SUBAGENT_STALE_S = 1800.0
@@ -44,6 +50,9 @@ TAIL_BYTES = 64 * 1024
 
 # What the CLI writes where a subagent's turn is over.
 ENDED_STOP_REASONS = frozenset({"end_turn", "stop_sequence", "max_tokens"})
+
+# How many transcripts are read for their tool calls at most, the newest first.
+MAX_CALL_FILES = 32
 
 
 def subagents_dir(transcript: str | Path) -> Path:
@@ -63,11 +72,33 @@ def transcript_ended(last_row: Any) -> bool:
         return False
     if last_row.get("isApiErrorMessage"):
         return True
+    if last_row.get("type") == "user":
+        return _interrupted(last_row)
     if last_row.get("type") != "assistant":
         return False
     message = last_row.get("message")
     stop_reason = message.get("stop_reason") if isinstance(message, dict) else None
     return isinstance(stop_reason, str) and stop_reason in ENDED_STOP_REASONS
+
+
+def _interrupted(row: dict[str, Any]) -> bool:
+    """Whether a user row holds the marker left where the person's Escape stopped the turn.
+
+    The marker is text, and rides in the row that also carries the result of
+    the tool it interrupted, so the text is matched and the row is not.
+    """
+    message = row.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, str):
+        return is_interruption(content)
+    if not isinstance(content, list):
+        return False
+    return any(
+        isinstance(block, dict)
+        and block.get("type") == "text"
+        and is_interruption(str(block.get("text") or ""))
+        for block in content
+    )
 
 
 def read_last_row(path: str | Path, tail_bytes: int = TAIL_BYTES) -> dict[str, Any] | None:
@@ -76,7 +107,9 @@ def read_last_row(path: str | Path, tail_bytes: int = TAIL_BYTES) -> dict[str, A
     Seeking into the middle of a row leaves a fragment at the front of the
     buffer, which is why the search runs backwards and skips whatever does not
     parse: the fragment is only ever reached when nothing after it parsed
-    either, and it does not parse.
+    either, and it does not parse. A fragment that begins inside a multibyte
+    character is not even text, and fails as `UnicodeDecodeError` rather than
+    `JSONDecodeError`, so both are skipped.
     """
     try:
         with open(path, "rb") as handle:
@@ -91,7 +124,7 @@ def read_last_row(path: str | Path, tail_bytes: int = TAIL_BYTES) -> dict[str, A
             continue
         try:
             row = json.loads(line)
-        except json.JSONDecodeError:
+        except ValueError:
             continue
         if isinstance(row, dict):
             return row
@@ -111,6 +144,7 @@ class SubagentWatch:
     stale_s: float = SUBAGENT_STALE_S
     tail_bytes: int = TAIL_BYTES
     _ended: dict[str, tuple[float, int]] = field(default_factory=dict, init=False)
+    _calls: dict[str, tuple[float, int, dict[str, Call]]] = field(default_factory=dict, init=False)
 
     @classmethod
     def for_transcript(cls, transcript: str | Path, **options: Any) -> SubagentWatch:
@@ -119,6 +153,53 @@ class SubagentWatch:
     def working(self) -> bool:
         """Whether any subagent of this session is still under way."""
         return bool(self.working_agents())
+
+    def activity(self) -> dict[str, float]:
+        """When each subagent's transcript was last written, by agent id, while it is recent.
+
+        A write is a sign of life, whatever its last row says: it is how a
+        subagent that works for hours is told from one whose end was lost.
+        """
+        now = time.time()
+        written: dict[str, float] = {}
+        for path in self._files():
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            if now - mtime <= self.stale_s:
+                agent_id = path.stem.removeprefix(AGENT_PREFIX)
+                written[agent_id] = max(mtime, written.get(agent_id, 0.0))
+        return written
+
+    def calls(self, since: float) -> dict[str, Call]:
+        """The tool calls in the tails of the transcripts written since `since`, by call id.
+
+        What a subagent is asked at a permission prompt is in its own transcript
+        and nowhere else, so this is read only while a prompt or a question
+        waits (`agents/claude/calls.py`). A transcript that has not grown since
+        it was last read is not read again.
+        """
+        listed: list[tuple[float, int, Path]] = []
+        for path in self._files():
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            if stat.st_mtime >= since:
+                listed.append((stat.st_mtime, stat.st_size, path))
+        found: dict[str, Call] = {}
+        read: dict[str, tuple[float, int, dict[str, Call]]] = {}
+        for mtime, size, path in sorted(listed, reverse=True)[:MAX_CALL_FILES]:
+            key = str(path)
+            known = self._calls.get(key)
+            calls = (
+                known[2] if known is not None and known[:2] == (mtime, size) else read_calls(path)
+            )
+            read[key] = (mtime, size, calls)
+            found.update(calls)
+        self._calls = read
+        return found
 
     def working_agents(self) -> list[str]:
         """Which of them are, by file name, for logging and for tests."""
@@ -147,7 +228,8 @@ class SubagentWatch:
         return found
 
     def _files(self) -> list[Path]:
+        """Every subagent transcript, those of a workflow's agents a level deeper included."""
         try:
-            return sorted(self.directory.glob(SUBAGENT_GLOB))
+            return sorted(self.directory.rglob(SUBAGENT_GLOB))
         except OSError:
             return []

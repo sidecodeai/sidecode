@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import threading
 import time
@@ -20,6 +21,7 @@ from rc_client.agents.claude import transcripts
 from rc_client.agents.codex import rollouts
 from rc_client.agents.registry import AGENT_IDS
 from rc_client.build import write_build
+from rc_client.channel import paths
 from rc_client.config import Config, ensure_dirs
 from rc_client.daemon import Daemon
 from rc_client.models import Session
@@ -90,6 +92,27 @@ async def test_hello_describes_this_device_and_its_agents(
     assert {info["agent"] for info in hello["agents"]} == set(AGENT_IDS)
     assert isinstance(hello["sessions"], list)
     assert "device_token" not in hello
+
+
+@pytest.fixture
+def stale_hook_files() -> None:
+    """The settings files an earlier installation left behind: a `Stop` hook and nothing else."""
+    ensure_dirs()
+    stale = json.dumps({"hooks": {"Stop": []}})
+    for path in (paths.settings_path(), paths.no_batch_settings_path()):
+        path.write_text(stale, encoding="utf-8")
+
+
+async def test_startup_refreshes_the_hook_files_the_shim_points_at(
+    stale_hook_files: None, running_daemon: tuple[Daemon, FakeGateway]
+) -> None:
+    """A newly added hook reaches every CLI started from now on, with no reinstall."""
+    full = json.loads(paths.settings_path().read_text())["hooks"]
+    lean = json.loads(paths.no_batch_settings_path().read_text())["hooks"]
+    newer = {"PostToolBatch", "SubagentStart", "SubagentStop", "StopFailure"}
+    assert newer <= set(full)
+    assert not newer & set(lean)
+    assert {"UserPromptSubmit", "Stop"} <= set(lean)
 
 
 async def test_device_dirs_is_answered_over_the_socket(

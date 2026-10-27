@@ -889,7 +889,15 @@ both apps; typing is untouched, because a caret already keeps itself visible.
 - **A question is answered where you are.** On an attached Claude Code session the terminal shows
   its own dialog and the app shows the card, at the same moment, and whichever is answered first
   wins (A20): the other side sees the card resolved and by whom — "answered in the terminal" on the
-  phone, the dialog withdrawn in the terminal. Nothing is queued behind a question.
+  phone, the dialog withdrawn in the terminal. Nothing is queued behind a question. A prompt a
+  background subagent raised comes the same way, and is withdrawn the same way when the device can
+  tell which of the subagent's calls it waits on: it finds that call by what it would run, and
+  closes the card when that call is over, but only when nothing else could be that call, never on
+  the strength of another subagent's tool, or the main thread's, ending. When it cannot tell — two
+  prompts or two calls look alike, the preview was cut — the card stays: an app's answer closes it,
+  and so does a result of the main thread's that shows the card's own input, or, with no subagent at
+  work, the only card of that tool; failing those it stays until the attachment ends. A card kept is
+  only a card, and a card closed too early is a prompt nobody sees.
 - **While a question is pending, the field is the free-text answer.** The composer's button reads
   Answer, the status line "Waiting for your answer", and Send submits the draft as the free-text
   answer to the first question on the card that has no selection, together with whatever was
@@ -1010,6 +1018,19 @@ subagent. Background shells are not counted, since some never end — a dev serv
 would hold a session working for good; nor are teammates, which always read `running`, Claude Code's
 own housekeeping tasks, or a `/loop`'s scheduled prompts (`session_crons`), none of which is work
 the person waits on.
+
+A terminal that runs the device's hooks is told rather than left to infer: Claude Code's
+`SubagentStart` and `SubagentStop` say when each subagent begins and ends, and the dot stays green
+while any has begun and not ended — with the main turn over, the transcript quiet and the `Stop`
+payload silent about it. The bound is thirty minutes without a sign of life from it — a write to its
+transcript — so a long job stays green. A `Stop` that lists no agent at all clears whatever was
+never heard ending, and so does the usage limit, which refuses every request and says nothing of the
+subagents it takes with it. The person's Escape aborts, just as silently, the foreground subagents
+the turn was waiting for, and leaves the background ones running, which have an abort signal of
+their own. The last one to end leaves the dot green five seconds more, so that the prompt the CLI
+wakes with for its report takes the turn over instead of the apps hearing a turn finish and begin
+again. A pending approval or question still outranks it, and a subagent that has finished and waits
+on a background shell of its own is not counted, since shells are not.
 
 Codex announces the thread a subagent runs in as it announces any other (`thread/started`, the
 thread naming its `parentThreadId`) and that thread's turns, and the parent's own timeline names

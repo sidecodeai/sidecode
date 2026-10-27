@@ -1,10 +1,11 @@
 """The Claude Code hooks that say where a turn stands (amendment A51).
 
-Claude Code runs this file for `UserPromptSubmit`, `PostToolBatch` and `Stop`:
-on every prompt, every batch of tool calls and every turn's end, inside the
-person's own session. So it is run by path with `python -I -S`, imports the
-standard library and nothing else — not even this package — and is done well
-inside a tenth of a second whenever the device has nothing for it.
+Claude Code runs this file for `UserPromptSubmit`, `PostToolBatch`, `Stop`,
+`SubagentStart`, `SubagentStop` and `StopFailure`: on every prompt, every batch
+of tool calls, every turn's end and every subagent's start and end, inside the
+person's own session. So it is run by path with `python -I -S`, imports the standard library
+and nothing else — not even this package — and is done well inside a tenth of
+a second whenever the device has nothing for it.
 
 - `UserPromptSubmit` tells the daemon a prompt went in and whose it was — the
   device's own injection by its message id, another agent's message, a slash
@@ -13,13 +14,18 @@ inside a tenth of a second whenever the device has nothing for it.
   and hands them to the model as the batch's additional context, with a line
   the terminal shows.
 - `Stop` says the turn is ending, and how many background subagents and
-  workflows it leaves running — a number, never what they run — and waits
-  while the daemon writes what it held for this moment into the channel: up to
-  two seconds, and only when it holds something, since the daemon answers at
-  once otherwise.
+  workflows it leaves running, and how many agents of any kind its task list
+  holds — numbers, never what they run — and waits while the daemon writes
+  what it held for this moment into the channel: up to two seconds, and only
+  when it holds something, since the daemon answers at once otherwise.
+- `SubagentStart` and `SubagentStop` name the subagent by its id, which is how
+  the daemon knows one is at work; what it was asked never leaves the hook. A
+  subagent that an API error ends fires `StopFailure` and no `SubagentStop`, so
+  that is its end as well; the main thread's own `StopFailure` has no
+  `agent_id` and says nothing to the device.
 
-A subagent's or a teammate's own hooks carry an `agent_id` and are none of the
-device's business: the person's messages go to the main thread.
+Every other hook of a subagent's or a teammate's carries an `agent_id` and is
+none of the device's business: the person's messages go to the main thread.
 
 Every failure is silent and the exit code is always 0: a hook of the device's
 must never come between the person and Claude Code. The frame names below are
@@ -43,13 +49,30 @@ WALL_STARTED = time.time()
 TURN = "turn"
 TURN_REPLY = "turn_reply"
 # Claude Code's event names, and the device's for them.
-EVENTS = {"UserPromptSubmit": "prompt", "PostToolBatch": "batch", "Stop": "stop"}
+EVENTS = {
+    "UserPromptSubmit": "prompt",
+    "PostToolBatch": "batch",
+    "Stop": "stop",
+    "SubagentStart": "agent_start",
+    "SubagentStop": "agent_stop",
+    "StopFailure": "agent_stop",
+}
+# The events that are about the subagent named in the payload's `agent_id`,
+# which every other hook of a subagent's leaves to it.
+AGENT_EVENTS = frozenset({"agent_start", "agent_stop"})
 # How long each hook may take in all, counted from its start.
-BUDGETS = {"prompt": 1.0, "batch": 1.0, "stop": 2.0}
+BUDGETS = {
+    "prompt": 1.0,
+    "batch": 1.0,
+    "stop": 2.0,
+    "agent_start": 1.0,
+    "agent_stop": 1.0,
+}
 
 MAX_STDIN_BYTES = 8 * 1024 * 1024
 MAX_REPLY_BYTES = 1024 * 1024
 SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,80}\Z")
+AGENT_ID = re.compile(r"[A-Za-z0-9_.:@-]{1,128}\Z")
 CHANNEL_HEAD = '<channel source="rc"'
 MESSAGE_ID = re.compile(r'message_id="([^"]{1,64})"')
 AGENT_MARKS = (
@@ -66,6 +89,10 @@ AGENT_MARKS = (
 # imports, scans) is not the person's. A scheduled prompt (`session_crons`) is
 # not work under way either.
 BACKGROUND_KINDS = frozenset({"subagent", "workflow"})
+# Every `type` that is an agent at work or waiting for work, a teammate included.
+# A `Stop` whose list holds none of them leaves no agent running at all, which is
+# how the daemon learns that a subagent whose end it never heard is gone.
+AGENT_KINDS = BACKGROUND_KINDS | {"teammate"}
 # The `status`es of such an entry that are work under way. Claude Code lists only
 # running and pending work, so an entry saying anything else is finished or
 # killed and nothing to hold a session for; one that says nothing is taken as
@@ -86,14 +113,20 @@ def prompt_kind(prompt: str) -> dict[str, str]:
     return {"prompt_kind": "person"}
 
 
-def under_way(task: object) -> bool:
-    """Whether a `background_tasks` entry is work the person still waits for."""
+def under_way(task: object, kinds: frozenset[str] = BACKGROUND_KINDS) -> bool:
+    """Whether a `background_tasks` entry is work of one of these kinds that is under way."""
     if not isinstance(task, dict):
         return False
     kind, status = task.get("type"), task.get("status")
-    if not isinstance(kind, str) or kind not in BACKGROUND_KINDS:
+    if not isinstance(kind, str) or kind not in kinds:
         return False
     return status is None or (isinstance(status, str) and status in LIVE_STATUSES)
+
+
+def task_list(payload: Mapping[str, object]) -> list[object] | None:
+    """The `Stop` payload's `background_tasks`, or None when it has no usable list."""
+    tasks = payload.get("background_tasks")
+    return tasks if isinstance(tasks, list) else None
 
 
 def background_count(payload: Mapping[str, object]) -> int:
@@ -105,10 +138,36 @@ def background_count(payload: Mapping[str, object]) -> int:
     without the list, or with anything else in its place, as a Claude Code from
     before it has, leaves none.
     """
-    tasks = payload.get("background_tasks")
-    if not isinstance(tasks, list):
-        return 0
-    return sum(1 for task in tasks if under_way(task))
+    tasks = task_list(payload)
+    return 0 if tasks is None else sum(1 for task in tasks if under_way(task))
+
+
+def agent_count(payload: Mapping[str, object]) -> int | None:
+    """How many agents of any kind the list holds that are under way, or None.
+
+    None says the payload has no usable list, which is not the same as holding
+    none: a Claude Code from before the field has told the daemon nothing.
+    """
+    tasks = task_list(payload)
+    return None if tasks is None else sum(1 for task in tasks if under_way(task, AGENT_KINDS))
+
+
+def details(event: str, payload: Mapping[str, object]) -> Mapping[str, object] | None:
+    """What a frame says beside its event, or None when the device has no part in the hook."""
+    agent_id = str(payload.get("agent_id") or "")
+    if event in AGENT_EVENTS:
+        return {"agent_id": agent_id} if AGENT_ID.match(agent_id) else None
+    if agent_id:
+        return None
+    if event == "prompt":
+        return prompt_kind(str(payload.get("prompt") or ""))
+    if event == "stop":
+        counts: dict[str, object] = {"background": background_count(payload)}
+        listed = agent_count(payload)
+        if listed is not None:
+            counts["listed_agents"] = listed
+        return counts
+    return {}
 
 
 def frame(payload: Mapping[str, object]) -> dict[str, object] | None:
@@ -121,13 +180,10 @@ def frame(payload: Mapping[str, object]) -> dict[str, object] | None:
     session_id = str(payload.get("session_id") or "")
     if event is None or not SESSION_ID.match(session_id):
         return None
-    if payload.get("agent_id"):
+    said = details(event, payload)
+    if said is None:
         return None
-    message: dict[str, object] = {"type": TURN, "event": event, "session_id": session_id}
-    if event == "prompt":
-        message.update(prompt_kind(str(payload.get("prompt") or "")))
-    elif event == "stop":
-        message["background"] = background_count(payload)
+    message: dict[str, object] = {"type": TURN, "event": event, "session_id": session_id, **said}
     message["deadline"] = round(WALL_STARTED + BUDGETS[event], 3)
     return message
 

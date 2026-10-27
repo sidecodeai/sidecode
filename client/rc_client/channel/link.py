@@ -75,10 +75,12 @@ class DaemonLink:
             backoff = min(MAX_BACKOFF, backoff * 2)
 
     async def _session(self) -> None:
-        reader, writer = await asyncio.open_unix_connection(str(self._path))
+        reader, writer = await asyncio.open_unix_connection(
+            str(self._path), limit=wire.MAX_LINE_BYTES
+        )
         sender = asyncio.create_task(self._send_loop(writer))
         try:
-            async for line in reader:
+            async for line in wire.lines(reader):
                 message = wire.decode(line)
                 if message is not None:
                     await self._on_message(message)

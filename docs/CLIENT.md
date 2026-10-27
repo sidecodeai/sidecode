@@ -103,7 +103,7 @@ directory to your `PATH` to call it by name.
   state/attachments/        files received with a message, one folder each, kept a week at most
   state/claude-mcp.json     the channel server definition the shim passes to Claude Code
   state/claude-settings.json  the hooks the shim passes to Claude Code (A51)
-  state/claude-settings-no-batch.json  the same without `PostToolBatch`, for an older Claude Code
+  state/claude-settings-no-batch.json  the same without `PostToolBatch`, the subagent hooks and `StopFailure`, for an older Claude Code
   state/claude-versions.json  the version of each `claude` executable the proxy has started
   state/channel.sock        where channel bridges register (see below)
   state/pi-extension.sock   where pi extensions register (see "pi")
@@ -587,11 +587,63 @@ disconnects, and thirty minutes after the `Stop` that counted it (`BACKGROUND_HO
 silent subagent). A slash command lets nothing go, since it may only open a dialog, which no `Stop`
 follows; a Claude Code that lists no tasks keeps the earlier behaviour.
 
+A CLI that runs the device's hooks is not left to infer its subagents from files and task lists:
+`SubagentStart` and `SubagentStop` (Claude Code 2.0.43 and later) name each subagent by its
+`agent_id`, as a `turn` frame of event `agent_start` or `agent_stop`, and
+`sessions/agents_at_work.py` keeps the ones heard starting and not yet heard ending. While any is,
+the session is `running`: with the main turn over, the transcript quiet, and the `Stop` payload
+leaving it out — a list that is missing, or a teammate, which starts and stops for each message it
+handles. It never holds a message back, as the transcript's subagents do not. The CLI does not
+always say a subagent ended. An API error ends one with `StopFailure` (2.1.78 and later) and no
+`SubagentStop`, so the hook reports that as the same `agent_stop` (the main thread's own
+`StopFailure` has no `agent_id` and sends nothing); one the person aborts ends with neither (read
+from Claude Code 2.1.310). Four bounds keep a hook that never came from holding a session for good.
+A subagent is let go after thirty minutes with no sign of life (`AGENT_SILENCE`, the bound of a
+silent subagent), and a sign of life is its start or a write to its transcript
+(`SubagentWatch.activity`, which lists a workflow's agents, a level deeper, too), so one that works
+for hours stays and one whose end was lost goes half an hour after its last word. A sign that brings
+a session shown as idle back to work shows it at once, and the time the subagents waited for the
+person's answer to a prompt or a question is no silence of theirs: those believed at work when it
+was raised are believed so for as long as they had been silent before it, up to an hour's wait
+(`AgentsAtWork.waited`, `WAIT_CREDIT`), so an answer to a card hours old revives nobody. A `Stop`
+whose task list holds no agent of any kind — subagent, workflow or teammate, `listed_agents: 0` in
+its frame, left out when the CLI lists nothing — clears the set. A turn that ends by the person's
+Escape or the vendor's usage limit (A35), as the transcript says, takes subagents with it, once, at
+that end; a prompt the hooks heard counts as the turn having run, since one read can hold the prompt
+and its end both, and a subagent that starts afterwards counts again. The Escape aborts without a
+word the subagents the turn was waiting for, and none that run in the background, which have an
+abort signal of their own and are what Claude Code starts by default in a terminal session. The two
+are told apart by the last prompt or tool batch the hooks reported (`prompted_at`): a subagent that
+began after it is the one the turn waits for, while one launched by a batch that has finished began
+before it, and goes on. One launched by the batch still under way, or heard starting only after that
+batch's own hook, which races its start, cannot be told from the foreground, and goes with it; with
+no prompt or batch heard there is nothing to tell them by, and the Escape takes them all. A limit
+refuses every request, a background subagent's too, so it takes all of them. And Stop from an app
+lets go of the count above and of the subagents the hooks named, and stops none of them, the CLI
+being idle. The last subagent to end leaves the session `running` five seconds more
+(`AGENT_HANDOFF`), because the CLI wakes for the end of a background subagent with a prompt of its
+own a moment later, and a turn that ended in between would be announced as finished and begun again:
+the prompt takes over, and the `Stop` of the turn it starts closes the turn once. The late end of a
+subagent already let go for its silence has no such prompt to wait for, and leaves the session as it
+is. An end heard for an id never heard starting — an agent of Claude Code's own, such as a prompt
+suggestion, or one begun before the daemon — changes nothing, the turn's own end included. A bridge
+registering again for the same session keeps the queue, and, when it is the same CLI process (a
+known pid that is the same), what that CLI is doing — the turn, the subagents and the count — which
+starting over would show as a turn finished and begun again at the next read, up to ten seconds
+later, and the prompts and the question it still waits on, which must stay answerable; the
+transcript is read at once after every registration. Another process registering for the session
+takes none of it over, and what the old one waited on expires. A question or an approval still
+outranks all of it. The hooks sit in the settings file with `PostToolBatch`, so a CLI too old for
+it, or whose version cannot be read, has none of them and keeps the rules above, as does one started
+before the file gained them, until it is started again. Not counted: a subagent that has finished
+its turn and waits on a background shell of its own, since shells are not.
+
 **Claude Code.** The CLI writes each subagent's transcript under the session's own directory,
 `<project>/<session id>/subagents/agent-<id>.jsonl`, beside an `agent-<id>.meta.json` that names the
 agent and what it was asked and never says how it is doing. `agents/claude/subagents.py` is the one
 rule: a subagent is working until the last row of its transcript is an assistant message that ended
-its turn (`end_turn`, `stop_sequence`, `max_tokens`) or the API error that stopped it — a pending
+its turn (`end_turn`, `stop_sequence`, `max_tokens`), the API error that stopped it, or the marker
+the CLI leaves where the person's Escape aborted it (`[Request interrupted by user …]`) — a pending
 `tool_use`, a tool result, a streamed block whose message never completed all mean it is still at
 work — and a transcript nothing has written to for thirty minutes (`SUBAGENT_STALE_S`) counts as
 abandoned, because nothing marks a subagent that was killed. `SubagentWatch` reads only each file's
@@ -604,7 +656,8 @@ assistant row whose message never completed, and reading those as finished was t
 Where it applies. A mirrored or attached terminal session (`sessions/mirror.py`) is busy while its
 transcript's turn is open **or** its subagents are working — busy as the apps see it; an attached
 session decides injecting by its own turn alone (A51), and is shown busy as well while the
-background subagents and workflows its last `Stop` counted are taken to run — and the subagents are
+background subagents and workflows its last `Stop` counted are taken to run, and while the
+subagents its hooks said began have not said they ended — and the subagents' files are
 asked on every tail
 interval even when the parent transcript has not grown, because the last one finishing writes
 nothing to the parent the mirror could wait for, and only a change of answer is published. When the
@@ -916,7 +969,9 @@ claude (your terminal)
 The bridge reads `CLAUDE_CODE_SESSION_ID` and `CLAUDE_PROJECT_DIR` from its own environment,
 registers with the daemon and stays until stdin closes. It survives a daemon restart: frames are
 buffered and the registration is replayed on reconnect. It logs nothing but warnings, and never the
-text of a message.
+text of a message. A line on this socket is at most 256 KiB (`wire.MAX_LINE_BYTES`) for the bridge and
+the daemon alike; a longer one is dropped by the side that reads it, and the connection goes on,
+except an opening frame, whose connection is closed quietly: it never said what it was for.
 
 The bridge registers when Claude Code sends `initialize`, so the session is `shared` and the
 device may inject from that moment. Claude Code, though, starts listening for channel messages
@@ -1021,7 +1076,8 @@ folded that way is the absorption above, never a second bubble.
 
 Turn state comes from the turn hooks first and the transcript second. `UserPromptSubmit` marks the
 session busy the moment a prompt goes in, before its row is written; `PostToolBatch` proves a turn
-under way; `Stop` ends it for injecting. A prompt that no `Stop` follows and no turn row shows — a
+under way; `Stop` ends it for injecting (the subagent hooks are about the apps'
+view only, and decide nothing here). A prompt that no `Stop` follows and no turn row shows — a
 turn the person interrupted — stops counting after three seconds. A slash command holds injecting
 back for the same three seconds without showing a turn, since it may only open a dialog. The
 transcript, which the daemon already tails, lags reality by up to two seconds, and alone shows a
@@ -1109,29 +1165,37 @@ nothing, exits 0, and what the person typed in the terminal stands. Claude Code 
 hook when its dialog is answered, so that release is the device's job, and a hook whose CLI exits
 first sees its socket close and expires the block.
 
-The other three hooks say where a turn stands (A51): `UserPromptSubmit`, `PostToolBatch` and `Stop`
-all run `rc_client/channel/turnhook.py`. They run on every prompt, every batch of tool calls and
-every turn's end, so the file runs by path on the bare interpreter — `python -I -S turnhook.py
-<socket>` — and imports nothing but the standard library, this package included; the socket path
-is written into the command because the script cannot read the device's configuration. Each sends
-one `turn` frame and reads one `turn_reply`: a prompt says whose it was (the device's own injection
-by its id, another agent's message, a slash command, or the person's words) and never what it said;
-a batch of the main thread's tool calls — never a subagent's, which carry an `agent_id` — asks for
-what was steered into the turn and prints it as the batch's `additionalContext` with a
-`systemMessage` the terminal shows; a `Stop` says how many background subagents and workflows it
-leaves running — a number, never what they run; shells are not counted, since some never end — and
-waits while the daemon writes what it held for the turn's end. Each keeps to its budget — a second,
-two for `Stop`, counted from its start — and sends
-the moment it stops waiting, so the daemon begins nothing it could not answer in time; it answers at
-once when the daemon has nothing, and a `Stop` with nothing to deliver does not wait for the
-session at all. The timeouts in the settings file (2 s, 3 s for `Stop`) are Claude Code's backstop.
-Every failure, an interrupt included, prints nothing and exits 0.
+The other six hooks say where a turn stands and which subagents are at work (A51):
+`UserPromptSubmit`, `PostToolBatch`, `Stop`, `SubagentStart`, `SubagentStop` and `StopFailure` all
+run `rc_client/channel/turnhook.py`. They run on every prompt, every batch of tool calls, every
+turn's end and every subagent's start and end, so the file runs by path on the bare interpreter —
+`python -I -S turnhook.py <socket>` — and imports nothing but the standard library, this package
+included; the socket path is written into the command because the script cannot read the device's
+configuration. Each sends one `turn` frame and reads one `turn_reply`: a prompt says whose it was
+(the device's own injection by its id, another agent's message, a slash command, or the person's
+words) and never what it said; a batch of the main thread's tool calls — a subagent's own carries an
+`agent_id`, is none of the device's business and sends nothing — asks for what was steered into the
+turn and prints it as the batch's `additionalContext` with a `systemMessage` the terminal shows; a
+`Stop` says how many background subagents and workflows it leaves running and how many agents of any
+kind its task list holds — numbers, never what they run; shells are not counted, since some never
+end — and waits while the daemon writes what it held for the turn's end; `SubagentStart`,
+`SubagentStop` and a subagent's `StopFailure` say which subagent, by the `agent_id` the payload
+names, began or ended, print nothing whatever the daemon answers (anything printed would be read as
+the subagent's context), and hold the subagent back no longer than a second. Each keeps to its
+budget — a second, two for `Stop`, counted from its start — and sends the moment it stops waiting,
+so the daemon begins nothing it could not answer in time; it answers at once when the daemon has
+nothing, and a `Stop` with nothing to deliver does not wait for the session at all. The timeouts in
+the settings file (2 s, 3 s for `Stop`) are Claude Code's backstop. Every failure, an interrupt
+included, prints nothing and exits 0.
 
 `PostToolBatch` is for Claude Code 2.1.291 and later. Neither the public changelog nor the hooks
 reference dates the event, so the line is the oldest build checked on a machine, and a version that
-cannot be read counts as older. Two settings files are written side by side, with the hook and
-without it (`claude-settings-no-batch.json`), and the terminal proxy hands the CLI it starts the one
-its version can load: it asks the executable's `--version` once per build, remembered in
+cannot be read counts as older. The two subagent hooks (2.0.43) and `StopFailure` (2.1.78) are older
+but go the same way, since a CLI whose version cannot be read must not be handed an event it may
+not know. Two settings files are written side by side, with the four hooks and without them
+(`claude-settings-no-batch.json`),
+and the terminal proxy hands the CLI it starts the one its version can load: it asks the
+executable's `--version` once per build, remembered in
 `claude-versions.json` by real path, size, inode, modification and change times (a package may give
 every build the same modification time), a failed answer for five minutes only, and tells the daemon
 which file it chose. It knows the shim's file by the whole path the shim passes it, so a file of the
@@ -1169,15 +1233,45 @@ This table is the Claude channel. Codex on the shared daemon does more; see the 
 
 Whoever answers a permission prompt first wins. When the terminal answers, the device sees the tool
 run or be refused in the transcript and closes the block with `decision.by: "terminal"`; a later
-reply from an app is a no-op. A question works the same way and says so on the block: `by: "remote"`
+reply from an app is a no-op. A prompt a subagent raised is relayed like the main thread's, with the
+tool's name and a preview of its input and nothing to say who asked, or whether it is a subagent's
+at all; the call's result row is in the subagent's own transcript
+(`<session>/subagents/**/agent-*.jsonl`, workflows' a level deeper), not the main one. So while a
+prompt or a question waits the mirror also reads the tails of the subagents' transcripts
+(`SubagentWatch.calls`, `agents/claude/calls.py`; nothing is read when none waits) and of the main
+one, and `sessions/prompt_calls.py` pairs the prompt with the open call whose own text the preview
+shows, only when the pairing cannot be another call's. The preview rewrites the text it shows
+(`agents/claude/previews.py`: control, bidirectional and invisible characters become a space, the
+look-alikes of quotes, primes and angle brackets a middle dot), so a call's text is rewritten the
+same way before it is looked for. The pairing needs the prompt to fit exactly one open call, no
+other waiting prompt to fit that call, and none of the main thread's open calls to fit the prompt.
+Prompts or calls that look alike, a call the main thread may have made, a preview that was redacted
+or cut, an input with nothing long enough to compare, a call made minutes before the prompt or more
+than a few seconds after it, and a call whose row is not written yet pair nothing, and a prompt that
+pairs nothing stays as it was: a card closed too early hides a prompt that still waits, and a card
+kept is only a card, which an app's answer or the main thread's own result (below) still closes. A
+paired prompt is closed `by: "terminal"` when its call has its result — `allow`, or `deny` for a
+result that failed — but only while no other open call besides its own could be the one it waited
+on, and the pairing is let go as soon as another could be, its call ended or not. The mirror applies
+the main thread's own rows before it reports on the subagents' transcripts, so a result row closes
+its own prompt before any pairing can, and a failure in reporting on the subagents is logged and
+costs the pass neither those rows nor the turn state. The main thread's result
+(`answered_by_result`) closes the prompt that shows its input, or else the one prompt of its tool,
+when no subagent is at work; with subagents about it closes only a prompt that shows that call's own
+input (`about_input`, which reuses `calls.fits`) or, when the input has no text to compare, the only
+prompt of the tool; it closes none when several fit, and never one paired with a subagent's call. A
+fork has the main conversation's whole tool pool, `AskUserQuestion` and a plan's `ExitPlanMode`
+among it, so a question or a plan a subagent raised is paired with the one open call of that tool
+when the main thread has none open, and ends with the answer its result row records, as the main
+thread's does. A question works the same way and says so on the block: `by: "remote"`
 when an app answered, `by: "terminal"` when the dialog did, with the terminal's own answer mapped
 back from the tool result to the option ids the card offered. Only one question is open at a time;
 a second one expires the first. While one is open the session reports `needs_input` — an approval
 still outranks it, because an approval blocks the very work the question was asked about — and a
 message an app sends meanwhile is never injected, because the dialog owns the prompt: it is steered
-or held as during any turn. When the attachment drops, pending approvals and a pending question
-become `expired`, and the session moves to `terminal` if the CLI process is still alive or to `none`
-if it exited. Messages still held in the queue stay there and go out through the ordinary resume
+or held as during any turn. When the attachment drops, or another CLI process registers for the
+session and takes it over, pending approvals and a pending question become `expired`; on a drop
+the session moves to `terminal` if the CLI process is still alive or to `none` if it exited. Messages still held in the queue stay there and go out through the ordinary resume
 path, and so do messages steered into the turn and not yet handed over (A51); their files are deleted
 now and written again by whatever delivers them (A49).
 

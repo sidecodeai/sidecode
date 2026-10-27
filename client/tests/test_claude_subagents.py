@@ -55,6 +55,34 @@ def test_the_usage_limit_row_ends_the_subagent() -> None:
     assert transcript_ended({"type": "user", "isApiErrorMessage": True}) is True
 
 
+INTERRUPTIONS = ["[Request interrupted by user]", "[Request interrupted by user for tool use]"]
+
+
+@pytest.mark.parametrize("marker", INTERRUPTIONS)
+def test_the_marker_the_cli_leaves_where_the_person_stopped_a_turn_ends_the_subagent(
+    marker: str,
+) -> None:
+    """An Escape aborts a foreground subagent without a word, and this row is all it files."""
+    assert transcript_ended(user_row(marker, "u1")) is True
+    carried = {
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "no", "is_error": True},
+                {"type": "text", "text": marker},
+            ],
+        },
+    }
+    assert transcript_ended(carried) is True
+
+
+def test_a_user_row_that_only_mentions_the_marker_is_work_in_progress() -> None:
+    mentioned = user_row("please [Request interrupted by user] the build", "u1")
+    assert transcript_ended(mentioned) is False
+    assert transcript_ended(user_row("go on", "u2")) is False
+
+
 @pytest.mark.parametrize(
     "row",
     [
@@ -90,6 +118,28 @@ def write_agent(directory: Path, name: str, rows: list[dict[str, Any]]) -> Path:
         for row in rows:
             handle.write(json.dumps(row) + "\n")
     return path
+
+
+def test_the_agents_of_a_workflow_are_watched_a_level_deeper(tmp_path: Path) -> None:
+    """Their transcripts are filed under `workflows/<run>/`, and count like any other."""
+    nested = tmp_path / "workflows" / "run-1"
+    write_agent(nested, "agent-w1", [assistant("tool_use")])
+    write_agent(nested, "agent-w2", [assistant("end_turn")])
+    write_agent(tmp_path, "agent-a1", [assistant("end_turn")])
+    watch = SubagentWatch(directory=tmp_path)
+
+    assert watch.working_agents() == ["agent-w1"]
+    assert watch.working() is True
+    assert set(watch.activity()) == {"w1", "w2", "a1"}
+
+
+def test_an_interrupted_subagent_is_not_working(tmp_path: Path) -> None:
+    write_agent(tmp_path, "agent-a1", [assistant("tool_use")])
+    watch = SubagentWatch(directory=tmp_path)
+    assert watch.working_agents() == ["agent-a1"]
+    marker = user_row("[Request interrupted by user for tool use]", "u1")
+    write_agent(tmp_path, "agent-a1", [marker])
+    assert watch.working_agents() == []
 
 
 def test_a_subagent_directory_that_does_not_exist_is_not_working(tmp_path: Path) -> None:
@@ -154,6 +204,23 @@ def test_a_finished_transcript_is_read_once_and_then_only_stat_ed(
     reads.clear()
     assert watch.working_agents() == ["agent-running"]
     assert reads == ["agent-running"]
+
+
+@pytest.mark.parametrize("tail_bytes", range(1000, 1004))
+def test_a_tail_that_begins_inside_a_multibyte_character_is_skipped_not_fatal(
+    tmp_path: Path, tail_bytes: int
+) -> None:
+    """A last row longer than the window leaves only a fragment, and the cut may fall in 你.
+
+    The fragment is not text then, and fails as `UnicodeDecodeError`; one such file used to
+    stop the whole tail pass, every session after it in the pass included.
+    """
+    row = json.dumps({"type": "user", "message": {"content": "你" * 5000}}, ensure_ascii=False)
+    path = tmp_path / "agent-big.jsonl"
+    path.write_text(row + "\n", encoding="utf-8")
+    assert subagents.read_last_row(path, tail_bytes) is None
+    watch = SubagentWatch(directory=tmp_path, tail_bytes=tail_bytes)
+    assert watch.working_agents() == ["agent-big"], "the safe direction: still working"
 
 
 def test_a_removed_transcript_is_forgotten(tmp_path: Path) -> None:

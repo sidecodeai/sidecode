@@ -24,13 +24,16 @@ another agent's hidden message starts. An injection marks itself in flight
 until its own row appears. What decides injecting is the CLI's own turn:
 subagents still at work are shown, because working means all of it, but never
 hold a message back, since the CLI takes one between them as readily as the
-person's. The background subagents and workflows a turn leaves running are
-shown the same way: the `Stop` hook counts them, and the turn the apps see
-stays open past it. A background shell is not counted, since a dev server or a
-watcher never ends. The CLI wakes for the end of a task with a prompt of its
-own, which lets the hold go, and the `Stop` of that turn counts afresh; the
-hold also lapses after `BACKGROUND_HOLD`, and Stop from an app, the CLI having
-nothing to press Escape on, lets it go at once.
+person's. A CLI that runs the device's hooks says which: `SubagentStart` and
+`SubagentStop` name each subagent as it begins and ends (`agents_at_work.py`),
+and the session is shown as working while any is at work. The background
+subagents and workflows a turn leaves running are shown the same way: the
+`Stop` hook counts them, and the turn the apps see stays open past it. A
+background shell is not counted, since a dev server or a watcher never ends.
+The CLI wakes for the end of a task with a prompt of its own, which lets the
+`Stop` count go, and the `Stop` of that turn counts afresh; that count also
+lapses after `BACKGROUND_HOLD`, and Stop from an app, the CLI having nothing to
+press Escape on, lets both go at once.
 
 A message the CLI takes as data anyway is put back and injected again at the
 next turn's end, at most three times; absorbed once more, it is an `error` the
@@ -60,21 +63,32 @@ import json
 import re
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 from .. import attachments
+from ..agents.claude.calls import Call
 from ..agents.claude.plans import PLAN_TOOL, fit_plan, plan_fields, verdict
-from ..agents.claude.questions import answers_for_tool, answers_from_tool
+from ..agents.claude.questions import QUESTION_TOOL, answers_for_tool, answers_from_tool
 from ..agents.claude.subagents import SUBAGENT_STALE_S
 from ..agents.claude.tools import reads_session_file, tool_kind, tool_title
 from ..agents.questions import normalise_questions
+from ..channel.wire import AGENT_EVENTS
 from ..errors import RcError
 from ..logging_setup import logger
 from ..models import now_ms
 from . import titles
+from .agents_at_work import AGENT_HANDOFF, AgentsAtWork
 from .attach import Attachment, HookQuestion, TurnHook
 from .limits import TurnEnd
+from .prompt_calls import (
+    answered_by_result,
+    bind_approvals,
+    bind_question,
+    contested_approval,
+    contested_question,
+)
 from .ptys import PtyLink
 from .queue import hold, release
 from .typist import COMPACT_COMMAND, TypedCommand, Typist
@@ -124,6 +138,9 @@ HELD_QUIET = 30.0
 # working: as long as a subagent's silent transcript is, since nothing marks a
 # task that was killed or one whose notification never came.
 BACKGROUND_HOLD = SUBAGENT_STALE_S
+# How long after a prompt is raised its call is looked for in the subagents' transcripts: the
+# row that names the call is written a moment before the prompt, and flushed a moment after.
+CALL_LOOK = 0.5
 # How much of a message the terminal's line repeats, and the give-up error quotes.
 NOTE_CHARS = 200
 QUOTE_CHARS = 60
@@ -169,6 +186,10 @@ class SharedApproval:
     input: dict[str, Any]
     plan: dict[str, Any] | None = None
     hook: HookQuestion | None = None
+    # When it was raised, by the wall clock the transcripts' rows are stamped with, and the id
+    # of the subagent's call it was found to wait on, once there is one (`calls_seen`).
+    raised: float = field(default_factory=time.time)
+    call: str | None = None
 
 
 @dataclass(slots=True)
@@ -179,6 +200,8 @@ class SharedQuestion:
     block_id: str
     questions: list[dict[str, Any]]
     hook: HookQuestion
+    raised: float = field(default_factory=time.time)
+    call: str | None = None
 
 
 @dataclass(slots=True)
@@ -192,13 +215,16 @@ class SharedState:
     `command_at` from a slash command that may or may not start one, and
     `stopping` while a `Stop` hook is answered. `background` is how many
     background subagents and workflows the last `Stop` found still running,
-    counted at `background_at`: shown as work, never a reason to hold a message
+    counted at `background_at`, and `agents` the subagents the CLI's hooks said
+    began and have not ended: shown as work, never a reason to hold a message
     back.
     """
 
     attachment: Attachment
     running: bool = False
     working: bool = False
+    # The subagents' transcripts show one at work; `working` counts the turn's own as well.
+    subagents: bool = False
     inflight: str | None = None
     inflight_at: float = 0.0
     trigger: str = "terminal"
@@ -214,6 +240,7 @@ class SharedState:
     stopping: bool = False
     background: int = 0
     background_at: float = 0.0
+    agents: AgentsAtWork = field(default_factory=AgentsAtWork)
     # Messages steered into the running turn and not handed over yet, oldest
     # first, and the ones handed over at a tool boundary until their row shows.
     steers: list[dict[str, Any]] = field(default_factory=list)
@@ -283,7 +310,7 @@ class SharedState:
         """
         own = self.running or self.prompted_at is not None or self.stopping
         waiting = self.waiting and not self.inflight_at_stop
-        return own or waiting or self.working or self.backgrounded
+        return own or waiting or self.working or self.backgrounded or self.agents.running
 
     @property
     def busy_typing(self) -> bool:
@@ -400,6 +427,35 @@ def _gone_past(item: dict[str, Any]) -> bool:
     return passed is not None and time.monotonic() - float(passed) >= PASSED_GRACE
 
 
+def _ended_as(approval: SharedApproval, failed: bool) -> str:
+    """What to say an approval was answered, when only the call's own result tells.
+
+    A plan has no allow or deny of its own to name, so it says only that the
+    terminal answered (A11's reserved id).
+    """
+    return ELSEWHERE if approval.plan is not None else DENY if failed else ALLOW
+
+
+def _halt_agents(state: SharedState, end: TurnEnd | None) -> None:
+    """Let go the subagents a turn that ended this way took with it, as the transcript tells.
+
+    The person's Escape aborts, without a `SubagentStop`, the subagents the turn
+    was waiting for, which began after its last prompt or tool batch, and none
+    of those that run in the background (`AgentsAtWork.abort`). The vendor's
+    usage limit refuses every request, a background subagent's too (A35). An
+    ordinary end stops none. It is the moment the transcript stops showing the
+    turn that counts, and no later: the end stays on the transcript until the
+    next turn begins. A prompt and its end can be read in one pass that never
+    saw the turn running, so a prompt the hooks heard stands for it.
+    """
+    if end is None or not (state.running or state.prompted_at is not None):
+        return
+    if end.limit is not None:
+        state.agents.clear()
+    elif end.stop_reason == "interrupted":
+        state.agents.abort(state.prompted_at)
+
+
 def _one_line(text: str, limit: int) -> str:
     said = " ".join(text.split())
     return said if len(said) <= limit else said[: limit - 1] + "…"
@@ -490,12 +546,19 @@ class SharedControl:
         # Amendment A15: a terminal attached to it, so it is a live session again.
         await entry.channel.revive()
         state = SharedState(attachment=attachment)
+        replaced: SharedState | None = None
         if previous is not None:
-            # A51: the same session registering again keeps what it owes the CLI,
-            # and what the CLI said it holds: its process, and its queue, are the same.
+            # A51: the same session registering again keeps what it owes the CLI
+            # and what the CLI said it holds: its process and its queue are the same.
             state.steers, state.handed = previous.steers, previous.handed
             state.held_by_cli, state.queue_seen_at = previous.held_by_cli, previous.queue_seen_at
+            if attachment.pid and previous.attachment.pid == attachment.pid:
+                self._carry_work(previous, state)
+            else:
+                replaced = previous
         entry.shared = state
+        if replaced is not None:
+            await self._expire_prompts(entry, replaced)
         entry.holder_pid = attachment.pid or None
         entry.holder_identity = None
         entry.session.control = "shared"
@@ -503,8 +566,29 @@ class SharedControl:
         await self._settle(entry)
         await entry.channel.publish_summary()
         # Its transcript is looked for now, not at the next scan: turn state,
-        # and every change typed into the terminal, are read from it.
+        # and every change typed into the terminal, are read from it, and the
+        # state just shown is checked against it at once rather than at the scan.
         self.read_soon()
+        if self.reader is not None:
+            self.reader.settle_soon(entry.session.session_id, 0.0)
+
+    @staticmethod
+    def _carry_work(previous: SharedState, state: SharedState) -> None:
+        """What a CLI is doing, kept when its bridge registers again before the old one is gone.
+
+        Starting over would show a turn under way as finished, with the "Turn
+        finished" that goes with it, and as begun again at the next read, which
+        can be ten seconds off. Only the same process has the same work: the
+        turn, the subagents and the tasks it left running, and the prompts it
+        still waits on, which must stay answerable from the apps that show them.
+        """
+        state.hooked, state.running = previous.hooked, previous.running
+        state.working, state.subagents = previous.working, previous.subagents
+        state.prompted_at, state.command_at = previous.prompted_at, previous.command_at
+        state.background, state.background_at = previous.background, previous.background_at
+        state.agents = previous.agents
+        state.approvals, state.by_channel = previous.approvals, previous.by_channel
+        state.question = previous.question
 
     async def closed(self, entry: SessionEntry, attachment: Attachment, control: str) -> None:
         """Detach and hand the session back to the terminal, or to nobody."""
@@ -512,12 +596,7 @@ class SharedControl:
         if state is None or state.attachment is not attachment:
             return
         entry.shared = None
-        for approval in state.approvals.values():
-            await self._emit_approval(entry, approval, status="expired")
-        state.approvals.clear()
-        state.by_channel.clear()
-        self._drop_typed(state)
-        await self._expire_question(entry, state)
+        await self._expire_prompts(entry, state)
         entry.session.control = control  # type: ignore[assignment]
         await entry.channel.emit("meta", control=control)
         if entry.session.turn is not None:
@@ -541,6 +620,16 @@ class SharedControl:
                 await release(item)
             await entry.channel.publish_queue(self.hub.queue_snapshot(entry))
         await entry.channel.publish_summary()
+
+    async def _expire_prompts(self, entry: SessionEntry, state: SharedState) -> None:
+        """Nobody can answer what a CLI that is gone, or replaced, was waiting on."""
+        approvals = list(state.approvals.values())
+        state.approvals.clear()
+        state.by_channel.clear()
+        self._drop_typed(state)
+        for approval in approvals:
+            await self._emit_approval(entry, approval, status="expired")
+        await self._expire_question(entry, state)
 
     async def forget(self, entry: SessionEntry) -> None:
         """Drop the attachment without publishing: the session itself is going.
@@ -589,9 +678,11 @@ class SharedControl:
         state.working = working
         if running and not state.running and not state.waiting:
             state.trigger = trigger
-        state.running = running
         if not running:
+            # How the turn ended is judged by its own state, before that is let go.
+            _halt_agents(state, end)
             state.lapse_prompt()
+        state.running = running
         await self._recover_handed(entry, state)
         await self._recover_at_stop(entry, state)
         await self._settle(entry, end)
@@ -891,20 +982,92 @@ class SharedControl:
             log.warning("a message handed to the model never showed in the transcript")
             await self._lost(entry, item)
 
-    async def tool_finished(self, entry: SessionEntry, tool: str, failed: bool) -> None:
-        """A tool ran or was refused, so its prompt was answered in the terminal."""
+    async def tool_finished(
+        self, entry: SessionEntry, tool: str, failed: bool, tool_input: Any = None
+    ) -> None:
+        """A tool of the main thread ran or was refused, so its prompt was answered in the terminal.
+
+        With subagents about, a prompt of the same tool may be theirs, so only
+        one that shows this call's own input is closed (`answered_by_result`).
+        """
         state = entry.shared
         if state is None:
             return
-        for request_id, approval in list(state.approvals.items()):
-            if approval.tool != tool:
-                continue
-            self._forget(state, request_id)
-            # A plan has no allow or deny of its own to name, so it says only
-            # that the terminal answered (A11's reserved id).
-            option_id = ELSEWHERE if approval.plan is not None else DENY if failed else ALLOW
-            await self._resolve(entry, approval, option_id, "terminal")
+        subagents = state.agents.running or state.subagents
+        approval = answered_by_result(state.approvals.values(), tool, tool_input, subagents)
+        if approval is None:
             return
+        self._forget(state, approval.request_id)
+        await self._resolve(entry, approval, _ended_as(approval, failed), "terminal")
+
+    def calls_wanted(self, entry: SessionEntry) -> float | None:
+        """When the oldest prompt a subagent's call may be behind was raised (wall clock), if any.
+
+        It is what the mirror reads the subagents' transcripts for, and it reads
+        them only while there is one: nothing else needs what they ran.
+        """
+        state = entry.shared
+        if state is None:
+            return None
+        raised = [approval.raised for approval in state.approvals.values()]
+        if state.question is not None:
+            raised.append(state.question.raised)
+        return min(raised, default=None)
+
+    async def calls_seen(
+        self, entry: SessionEntry, calls: Mapping[str, Call], rivals: Mapping[str, Call]
+    ) -> None:
+        """The subagents' tool calls as their transcripts show them now (`prompt_calls.py`).
+
+        A prompt is paired with the call it waits on, and ends with it: the
+        person answered in the terminal, which only that call's result row says
+        for a subagent's tool, as the main transcript's rows say it for the main
+        thread's. `rivals` are the main thread's calls, which a prompt may be
+        about as well. A prompt that fits no call for certain stays as it is.
+        """
+        state = entry.shared
+        if state is None:
+            return
+        for approval in list(state.approvals.values()):
+            call = calls.get(approval.call) if approval.call else None
+            if call is None:
+                continue
+            if contested_approval(approval, calls, rivals):
+                approval.call = None
+            elif call.closed:
+                self._forget(state, approval.request_id)
+                await self._resolve(entry, approval, _ended_as(approval, call.failed), "terminal")
+        await self._question_seen(entry, calls, rivals)
+        state = entry.shared
+        if state is None:
+            return
+        taken = {approval.call for approval in state.approvals.values() if approval.call}
+        question = state.question
+        if question is not None and question.call:
+            taken.add(question.call)
+        pending = [approval for approval in state.approvals.values() if approval.call is None]
+        bind_approvals(pending, calls, rivals, taken)
+        if question is not None and question.call is None:
+            bind_question(question, calls, rivals, taken, QUESTION_TOOL)
+
+    async def _question_seen(
+        self, entry: SessionEntry, calls: Mapping[str, Call], rivals: Mapping[str, Call]
+    ) -> None:
+        """The same for the question the CLI has open: its call's end is its answer."""
+        state = entry.shared
+        question = state.question if state is not None else None
+        call = calls.get(question.call) if question is not None and question.call else None
+        if question is None or call is None:
+            return
+        if contested_question(question, calls, rivals, QUESTION_TOOL):
+            question.call = None
+        elif call.closed:
+            await self.question_answered(entry, call.answers, question.call)
+
+    def _look_soon(self, entry: SessionEntry) -> None:
+        """A prompt was raised: the subagents' transcripts are looked at in a moment."""
+        if self.reader is not None:
+            self.reader.settle_soon(entry.session.session_id, CALL_LOOK)
 
     # ----------------------------------------------------------- turn hooks
 
@@ -923,13 +1086,16 @@ class SharedControl:
         if state is None:
             return {}
         state.hooked = True
+        if hook.event in AGENT_EVENTS:
+            await self._subagent(entry, state, hook)
+            return {}
         self._passed(entry, state, hook)
         if hook.event == "prompt":
             await self._prompted(entry, state, hook)
             return {}
         deadline = hook.deadline or time.time() + HOOK_FALLBACK_BUDGET
         if hook.event == "stop":
-            self._turn_over(state, hook.background)
+            self._turn_over(state, hook)
             if self.reader is not None:
                 self.reader.settle_soon(entry.session.session_id, STOP_SETTLE)
             if not self.runs_tool_batch(state) or not self._owes_turn_end(entry, state):
@@ -988,7 +1154,9 @@ class SharedControl:
         turn is how the CLI wakes for the end of a background task, among
         other things, and that turn's `Stop` counts the tasks afresh: what the
         last one counted is let go, so a turn the person interrupts, which
-        runs no `Stop`, cannot leave the session working.
+        runs no `Stop`, cannot leave the session working on a count nobody
+        renewed. The subagents the hooks named are the CLI's own account of
+        what runs, and stay.
         """
         now = time.monotonic()
         if hook.prompt_kind == "ours" and hook.message_id:
@@ -1050,20 +1218,65 @@ class SharedControl:
             state.handed[str(item["message_id"])] = item
         return {"context": steer_context(prompts), "system_message": steer_note(handed)}
 
+    async def _subagent(self, entry: SessionEntry, state: SharedState, hook: TurnHook) -> None:
+        """A subagent began or ended, as its hooks say.
+
+        One that ended is followed, a moment later, by the prompt the CLI wakes
+        with when nothing else is running, so the session is looked at again
+        once `AGENT_HANDOFF` has gone by and no prompt came. The end of one
+        never heard starting changes nothing, not even the turn's own end,
+        which waits for the transcript.
+        """
+        if hook.event == "agent_start":
+            state.agents.start(hook.agent_id)
+        else:
+            if not state.agents.stop(hook.agent_id):
+                return
+            if self.reader is not None:
+                self.reader.settle_soon(entry.session.session_id, AGENT_HANDOFF)
+        log.info("subagent hook", event=hook.event, at_work=len(state.agents.seen))
+        await self._settle(entry)
+
     @staticmethod
-    def _turn_over(state: SharedState, background: int) -> None:
+    def note_subagents(entry: SessionEntry, working: bool) -> None:
+        """What the subagents' transcripts show, as of this read: one at work, or none."""
+        if entry.shared is not None:
+            entry.shared.subagents = working
+
+    async def agents_alive(self, entry: SessionEntry, written: Mapping[str, float]) -> None:
+        """Subagent transcripts were last written at these times: signs of life.
+
+        A session shown as idle because its subagents were let go for their
+        silence is shown as working again at once, not at the next read.
+        """
+        state = entry.shared
+        if state is None:
+            return
+        was_running = state.agents.running
+        for agent_id, wall_time in written.items():
+            state.agents.touch(agent_id, wall_time)
+        if state.agents.running and not was_running:
+            await self._settle(entry)
+
+    @staticmethod
+    def _turn_over(state: SharedState, hook: TurnHook) -> None:
         """The CLI says its turn is over, for injecting; the apps hear it from the transcript.
 
         Ending the turn here would end it too early: somebody's own `Stop` hook
         can send it on, and only the transcript says how it ended (A32, A35).
         The tasks it leaves running replace what the last `Stop` counted, and
-        keep the apps' turn open when there are any.
+        keep the apps' turn open when there are any. A task list that holds no
+        agent at all clears the subagents whose end was never heard.
         """
         state.prompted_at = None
         state.command_at = None
         state.running = False
-        state.background = background
+        state.background = hook.background
         state.background_at = time.monotonic()
+        if hook.listed_agents == 0:
+            if state.agents.seen:
+                log.info("a Stop listed no agent", let_go=len(state.agents.seen))
+            state.agents.clear()
 
     async def _turn_end(self, entry: SessionEntry, state: SharedState, deadline: float) -> None:
         """Write what waits for this turn's end into the channel before the CLI idles.
@@ -1392,11 +1605,12 @@ class SharedControl:
             await self._drop_background(entry)
 
     async def _drop_background(self, entry: SessionEntry) -> None:
-        """Stop believing in the tasks the last `Stop` counted, and show it."""
+        """Stop believing in the tasks the last `Stop` counted and the subagents, and show it."""
         state = entry.shared
-        if state is None or not state.background:
+        if state is None or not (state.background or state.agents.running):
             return
         state.background = 0
+        state.agents.clear()
         await self._settle(entry, TurnEnd("interrupted"))
 
     async def run_command(self, entry: SessionEntry, name: str, block_id: str) -> None:
@@ -1464,6 +1678,7 @@ class SharedControl:
         state.by_channel[channel_id] = approval.request_id
         await self._emit_approval(entry, approval, status="pending")
         await self._settle(entry)
+        self._look_soon(entry)
 
     async def approve(
         self, entry: SessionEntry, request_id: str, option_id: str, message: str | None = None
@@ -1539,10 +1754,12 @@ class SharedControl:
         state.by_channel[approval.channel_id] = approval.request_id
         await self._emit_approval(entry, approval, status="pending")
         await self._settle(entry)
+        self._look_soon(entry)
 
     async def _resolve(
         self, entry: SessionEntry, approval: SharedApproval, option_id: str, by: str
     ) -> None:
+        self._waited(entry, approval.raised)
         await self._emit_approval(
             entry, approval, status="resolved", decision={"option_id": option_id, "by": by}
         )
@@ -1577,6 +1794,7 @@ class SharedControl:
         )
         await self._emit_question(entry, state.question, status="pending")
         await self._settle(entry)
+        self._look_soon(entry)
 
     async def answer(
         self, entry: SessionEntry, request_id: str, answers: dict[str, Any]
@@ -1590,17 +1808,25 @@ class SharedControl:
             # the CLI has what it needs and this reply changes nothing.
             return {}
         state.question = None
+        self._waited(entry, question.raised)
         await question.hook.answer(answers_for_tool(question.questions, answers))
         await self._emit_question(entry, question, status="resolved", answers=answers, by="remote")
         await self._settle(entry)
         return {}
 
-    async def question_answered(self, entry: SessionEntry, result: Any) -> None:
-        """The transcript shows the tool ran: the terminal answered first."""
+    async def question_answered(
+        self, entry: SessionEntry, result: Any, call: str | None = None
+    ) -> None:
+        """The transcript shows the tool ran: the terminal answered first.
+
+        A question paired with a subagent's call is answered by that call's own
+        result, named by `call`, and never by the main thread's.
+        """
         state = entry.shared
-        if state is None or state.question is None:
+        if state is None or state.question is None or state.question.call != call:
             return
         question, state.question = state.question, None
+        self._waited(entry, question.raised)
         await question.hook.answer(None)
         answers = answers_from_tool(question.questions, result)
         fields: dict[str, Any] = {"answers": answers} if answers else {}
@@ -1621,6 +1847,12 @@ class SharedControl:
         await self._settle(entry)
         if state.injectable and (entry.queue or state.steers):
             self.hub.schedule_drain(entry)
+
+    @staticmethod
+    def _waited(entry: SessionEntry, raised: float) -> None:
+        """A prompt raised at `raised` (wall clock) was answered: the subagents waited on it."""
+        if entry.shared is not None:
+            entry.shared.agents.waited(time.time() - raised)
 
     async def _expire_question(self, entry: SessionEntry, state: SharedState) -> None:
         question, state.question = state.question, None

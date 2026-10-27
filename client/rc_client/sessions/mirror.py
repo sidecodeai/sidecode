@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..agents.claude import subagents, transcripts
+from ..agents.claude.calls import LOOKBACK, read_calls
 from ..agents.claude.holders import SessionRef, scan_holders
 from ..agents.codex import rollouts
 from ..agents.codex.daemon.service import CodexDaemonService
@@ -714,14 +715,16 @@ class MirrorService:
         """
         rows = await asyncio.to_thread(mirror.tailer.read_new)
         working = await asyncio.to_thread(mirror.subagents.working)
+        self.hub.shared.note_subagents(entry, working)
         changed = working != mirror.working
         mirror.working = working
         settling = session_id in self._settling
         self._settling.discard(session_id)
-        if not rows and not changed and not settling:
-            return
         if rows:
             await self._apply_rows(session_id, entry, mirror.tailer, rows)
+        await self._report_subagents(entry, mirror)
+        if not rows and not changed and not settling:
+            return
         await self._after_rows(
             entry,
             mirror.tailer.awaiting_reply,
@@ -729,6 +732,27 @@ class MirrorService:
             _turn_trigger(mirror.tailer),
             _turn_end(mirror.tailer),
         )
+
+    async def _report_subagents(self, entry: SessionEntry, mirror: ClaudeMirror) -> None:
+        """Read the subagents' transcripts and tell the session what they show, after the main rows.
+
+        Signs of life, and, only while a prompt or a question waits, the calls
+        it may be about: theirs, and the main thread's own to tell it apart
+        from. A result row of the main thread's closes its own prompt first,
+        and a failure here costs the pass neither those rows, which are read for
+        good, nor the turn state it still has to report.
+        """
+        try:
+            if entry.shared is not None and entry.shared.agents.seen:
+                written = await asyncio.to_thread(mirror.subagents.activity)
+                await self.hub.shared.agents_alive(entry, written)
+            asked = self.hub.shared.calls_wanted(entry)
+            if asked is not None:
+                calls = await asyncio.to_thread(mirror.subagents.calls, asked - LOOKBACK)
+                rivals = await asyncio.to_thread(read_calls, mirror.tailer.path)
+                await self.hub.shared.calls_seen(entry, calls, rivals)
+        except Exception:
+            log.exception("the subagents' transcripts could not be reported")
 
     async def _apply_rows(
         self, session_id: str, entry: SessionEntry, tailer: Tailer, rows: list[dict[str, Any]]
@@ -805,7 +829,10 @@ class MirrorService:
             status = str(emit.fields.get("status") or "")
             if status in {"succeeded", "failed"}:
                 await self.hub.shared.tool_finished(
-                    entry, str(emit.fields.get("tool") or ""), status == "failed"
+                    entry,
+                    str(emit.fields.get("tool") or ""),
+                    status == "failed",
+                    emit.fields.get("input"),
                 )
         if emit.kind == "todos":
             await entry.channel.publish_todos(list(emit.fields.get("items") or []))

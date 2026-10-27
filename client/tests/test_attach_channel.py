@@ -226,6 +226,78 @@ async def test_a_bridge_and_the_daemon_talk_over_the_unix_socket(short_dir: Path
     assert not (short_dir / "channel.sock").exists()
 
 
+async def test_a_frame_beyond_the_64_kib_default_is_read_on_both_sides(short_dir: Path) -> None:
+    """The protocol allows a line of `MAX_LINE_BYTES`; asyncio reads 64 KiB unless it is told."""
+    socket = short_dir / "channel.sock"
+    sink = RecordingSink()
+    server = AttachServer(socket, sink)
+    await server.start()
+    inbound: list[dict[str, Any]] = []
+
+    async def on_message(message: dict[str, Any]) -> None:
+        inbound.append(message)
+
+    link = DaemonLink(socket, on_message)
+    link.register(wire.register("sess-9", "/repo", 4242, "2.1.267"))
+    link.start()
+    big = "x" * (100 * 1024)
+    try:
+        await asyncio.wait_for(_until(lambda: bool(sink.registered)), timeout=2)
+        attachment = sink.registered[0]
+        asked = {"request_id": "r-big", "tool_name": "Write", "input_preview": big}
+        link.send(wire.permission_request(asked))
+        await asyncio.wait_for(sink.saw_permission.wait(), timeout=2)
+        assert sink.permissions[0]["input_preview"] == big
+        assert await attachment.inject("m-big", big)
+        await asyncio.wait_for(
+            _until(lambda: any(m.get("message_id") == "m-big" for m in inbound)), timeout=2
+        )
+        assert sink.closed == [], "and neither side dropped the connection"
+    finally:
+        await link.stop()
+        await server.stop()
+
+
+async def test_a_line_over_the_protocol_limit_costs_the_connection_only_that_line(
+    short_dir: Path,
+) -> None:
+    socket = short_dir / "channel.sock"
+    sink = RecordingSink()
+    server = AttachServer(socket, sink)
+    await server.start()
+    inbound: list[dict[str, Any]] = []
+
+    async def on_message(message: dict[str, Any]) -> None:
+        inbound.append(message)
+
+    link = DaemonLink(socket, on_message)
+    link.register(wire.register("sess-9", "/repo", 4242, "2.1.267"))
+    link.start()
+    huge = "x" * (wire.MAX_LINE_BYTES + 4096)
+    try:
+        await asyncio.wait_for(_until(lambda: bool(sink.registered)), timeout=2)
+        attachment = sink.registered[0]
+        asked = {"request_id": "r-huge", "tool_name": "Write", "input_preview": huge}
+        link.send(wire.permission_request(asked))
+        link.send(wire.permission_request({"request_id": "r-next", "tool_name": "Bash"}))
+        await asyncio.wait_for(
+            _until(lambda: any(p["request_id"] == "r-next" for p in sink.permissions)), timeout=2
+        )
+        assert [p["request_id"] for p in sink.permissions] == ["r-next"]
+        assert len(sink.registered) == 1 and sink.closed == [], "the connection lived"
+
+        assert await attachment.inject("m-huge", huge)
+        assert await attachment.inject("m-next", "still here")
+        await asyncio.wait_for(
+            _until(lambda: any(m.get("message_id") == "m-next" for m in inbound)), timeout=2
+        )
+        assert not any(m.get("message_id") == "m-huge" for m in inbound)
+        assert len(sink.registered) == 1, "and the bridge did not reconnect either"
+    finally:
+        await link.stop()
+        await server.stop()
+
+
 async def test_a_bridge_started_before_the_daemon_buffers_and_reconnects(
     short_dir: Path,
 ) -> None:
@@ -409,6 +481,31 @@ async def test_a_turn_hook_gets_one_reply_and_the_connection_ends(short_dir: Pat
     assert sink.turns == [TurnHook("sess-1", "batch")]
 
 
+async def test_a_subagent_event_is_read_off_the_socket_and_answered_at_once(
+    short_dir: Path,
+) -> None:
+    """A51: a subagent's start or end names the agent, and the hook is given nothing to print."""
+    socket = short_dir / "channel.sock"
+    sink = RecordingSink()
+    server = AttachServer(socket, sink)
+    await server.start()
+    try:
+        for event in ("agent_start", "agent_stop"):
+            reader, writer = await asyncio.open_unix_connection(str(socket))
+            frame = {"type": wire.TURN, "event": event, "session_id": "sess-1", "agent_id": "a1"}
+            writer.write(wire.encode(frame))
+            await writer.drain()
+            line = await asyncio.wait_for(reader.readline(), timeout=2)
+            assert wire.decode(line) == {"type": "turn_reply"}
+            writer.close()
+    finally:
+        await server.stop()
+    assert sink.turns == [
+        TurnHook("sess-1", "agent_start", agent_id="a1"),
+        TurnHook("sess-1", "agent_stop", agent_id="a1"),
+    ]
+
+
 def test_a_turn_hooks_deadline_is_kept_only_when_it_is_soon() -> None:
     """A51: the daemon does not begin what it could not answer before the hook gives up."""
     frame = {"type": wire.TURN, "event": "batch", "session_id": "s1"}
@@ -426,9 +523,38 @@ def test_a_stop_hooks_background_tasks_are_a_count_and_default_to_none() -> None
     hook = attach_module._turn_hook({**frame, "background": 2})
     assert hook is not None and hook.background == 2
     assert attach_module._turn_hook(frame) == TurnHook("s1", "stop")
-    for odd in (0, -1, 1.5, "2", None, [2], {"count": 2}):
+    for odd in (0, -1, 1.5, "2", None, [2], {"count": 2}, True, False):
         hook = attach_module._turn_hook({**frame, "background": odd})
         assert hook is not None and hook.background == 0
+
+
+def test_a_stop_hooks_agent_count_is_a_count_or_nothing_at_all() -> None:
+    """None says the CLI gave no task list; a list that holds no agent says 0."""
+    frame = {"type": wire.TURN, "event": "stop", "session_id": "s1"}
+    for count in (0, 3):
+        hook = attach_module._turn_hook({**frame, "listed_agents": count})
+        assert hook is not None and hook.listed_agents == count
+    assert attach_module._turn_hook(frame) == TurnHook("s1", "stop")
+    for odd in (-1, 1.5, "2", None, [2], {"count": 2}, True, False):
+        hook = attach_module._turn_hook({**frame, "listed_agents": odd})
+        assert hook is not None and hook.listed_agents is None
+
+
+@pytest.mark.parametrize("event", ["agent_start", "agent_stop"])
+def test_a_subagent_event_is_read_by_the_agent_it_names(event: str) -> None:
+    frame = {"type": wire.TURN, "event": event, "session_id": "s1", "agent_id": "a1.b:c@d-e_f"}
+    assert attach_module._turn_hook(frame) == TurnHook("s1", event, agent_id="a1.b:c@d-e_f")
+    for odd in (None, "", "has space", "a/b", "x" * 129, ["a1"]):
+        assert attach_module._turn_hook({**frame, "agent_id": odd}) is None
+    assert attach_module._turn_hook({k: v for k, v in frame.items() if k != "agent_id"}) is None
+
+
+def test_an_agent_id_means_nothing_to_the_other_events() -> None:
+    """Only a subagent event is about a subagent, whatever else the frame carries."""
+    for event in ("prompt", "batch", "stop"):
+        frame = {"type": wire.TURN, "event": event, "session_id": "s1", "agent_id": "a1"}
+        hook = attach_module._turn_hook(frame)
+        assert hook is not None and hook.agent_id == ""
 
 
 async def test_a_terminal_says_whether_its_cli_has_the_batch_hook(short_dir: Path) -> None:

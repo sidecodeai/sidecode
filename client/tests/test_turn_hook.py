@@ -38,7 +38,9 @@ def payload(event: str, **extra: Any) -> dict[str, Any]:
 
 def test_the_hook_spells_the_frames_as_the_wire_does() -> None:
     assert (turnhook.TURN, turnhook.TURN_REPLY) == (wire.TURN, wire.TURN_REPLY)
-    assert sorted(turnhook.EVENTS.values()) == sorted(wire.TURN_EVENTS)
+    assert set(turnhook.EVENTS.values()) | turnhook.AGENT_EVENTS == set(wire.TURN_EVENTS)
+    assert set(wire.AGENT_EVENTS) == turnhook.AGENT_EVENTS
+    assert set(turnhook.BUDGETS) == set(wire.TURN_EVENTS)
     kinds = {turnhook.prompt_kind(text)["prompt_kind"] for text in ("/x", "a", CHANNEL_PROMPT)}
     assert kinds <= set(wire.PROMPT_KINDS)
 
@@ -221,6 +223,109 @@ def test_only_the_stop_carries_the_count() -> None:
         assert frame is not None and "background" not in frame
 
 
+def test_a_stop_counts_every_agent_its_list_holds_a_teammate_included() -> None:
+    """Which is what tells the daemon that no subagent is left, whatever it heard last."""
+    listed = [
+        {"id": "a", "type": "subagent", "status": "running"},
+        {"id": "b", "type": "workflow", "status": "pending"},
+        {"id": "c", "type": "teammate", "status": "running"},
+        {"id": "d", "type": "subagent", "status": "completed"},
+        {"id": "e", "type": "shell", "status": "running"},
+        {"id": "f", "type": "monitor", "status": "running"},
+    ]
+    frame = turnhook.frame(payload("Stop", background_tasks=listed))
+    assert frame is not None
+    assert (frame["background"], frame["listed_agents"]) == (2, 3)
+    frame = turnhook.frame(payload("Stop", background_tasks=tasks("shell", "monitor")))
+    assert frame is not None and (frame["background"], frame["listed_agents"]) == (0, 0)
+
+
+@pytest.mark.parametrize("listed", [None, "subagent", 3, {"type": "subagent"}])
+def test_a_stop_with_no_usable_list_says_nothing_of_agents(listed: Any) -> None:
+    """None is not zero: a Claude Code from before the list has told the daemon nothing."""
+    frame = turnhook.frame(payload("Stop", background_tasks=listed))
+    assert frame is not None and "listed_agents" not in frame
+    bare = turnhook.frame(payload("Stop"))
+    assert bare is not None and "listed_agents" not in bare
+    empty = turnhook.frame(payload("Stop", background_tasks=[]))
+    assert empty is not None and empty["listed_agents"] == 0
+
+
+@pytest.mark.parametrize(
+    ("event", "named"), [("SubagentStart", "agent_start"), ("SubagentStop", "agent_stop")]
+)
+def test_a_subagent_hook_names_the_agent_and_nothing_else(event: str, named: str) -> None:
+    frame = turnhook.frame(
+        payload(
+            event,
+            agent_id="a1b2c3",
+            agent_type="Explore",
+            agent_transcript_path="/t/sess-1/subagents/agent-a1b2c3.jsonl",
+            last_assistant_message="the secret reply",
+            background_tasks=tasks("subagent", "workflow"),
+        )
+    )
+    assert without_deadline(frame) == {
+        "type": "turn",
+        "event": named,
+        "session_id": "sess-1",
+        "agent_id": "a1b2c3",
+    }
+    assert "secret" not in json.dumps(frame)
+
+
+@pytest.mark.parametrize("agent_id", [None, "", "has space", "a/b", "x" * 129, ["x"]])
+def test_a_subagent_hook_that_names_no_usable_agent_is_not_sent(agent_id: Any) -> None:
+    for event in ("SubagentStart", "SubagentStop"):
+        assert turnhook.frame(payload(event, agent_id=agent_id)) is None
+    assert turnhook.frame(payload("SubagentStart")) is None
+
+
+def test_an_api_error_that_ends_a_subagent_is_its_end() -> None:
+    """Claude Code fires `StopFailure` for it and no `SubagentStop`, which the daemon waits for."""
+    frame = turnhook.frame(
+        payload(
+            "StopFailure",
+            agent_id="a1b2c3",
+            error="rate_limit",
+            error_details="429 Too Many Requests",
+            last_assistant_message="API Error: the secret reply",
+        )
+    )
+    assert without_deadline(frame) == {
+        "type": "turn",
+        "event": "agent_stop",
+        "session_id": "sess-1",
+        "agent_id": "a1b2c3",
+    }
+    assert "secret" not in json.dumps(frame)
+
+
+def test_the_main_threads_own_api_error_says_nothing_to_the_device() -> None:
+    """It has no `agent_id`, and the transcript is what tells how its turn ended."""
+    assert turnhook.frame(payload("StopFailure", error="overloaded")) is None
+
+
+def test_a_subagents_own_tool_batch_is_none_of_the_devices_business() -> None:
+    """It costs the subagent nothing: no frame is sent, so no connection is made or awaited."""
+    batch = payload(
+        "PostToolBatch",
+        agent_id="a1b2c3",
+        tool_calls=[{"tool_name": "Bash", "tool_input": {"command": "the secret plan"}}],
+    )
+    assert turnhook.frame(batch) is None
+    main = turnhook.frame(payload("PostToolBatch", tool_calls=[]))
+    assert main is not None and main["event"] == "batch" and "agent_id" not in main
+
+
+def test_the_subagent_hooks_wait_for_no_more_than_a_second() -> None:
+    """A `SubagentStart` holds the subagent back until it is done."""
+    for event in ("SubagentStart", "SubagentStop"):
+        frame = turnhook.frame(payload(event, agent_id="a1"))
+        assert frame is not None
+        assert abs(float(str(frame["deadline"])) - (turnhook.WALL_STARTED + 1.0)) < 0.01
+
+
 def test_only_a_number_crosses_the_hook_boundary(short_dir: Path) -> None:  # noqa: F811
     """What the background tasks run, and what they were asked, stay in the hook."""
     path = short_dir / "c.sock"
@@ -258,7 +363,13 @@ def test_only_a_number_crosses_the_hook_boundary(short_dir: Path) -> None:  # no
         daemon.close()
     assert done.returncode == 0
     assert [without_deadline(frame) for frame in daemon.frames] == [
-        {"type": "turn", "event": "stop", "session_id": "sess-1", "background": 2}
+        {
+            "type": "turn",
+            "event": "stop",
+            "session_id": "sess-1",
+            "background": 2,
+            "listed_agents": 2,
+        }
     ]
     assert not any(secret in json.dumps(daemon.frames) for secret in (*secrets, "secret reply"))
 
@@ -266,7 +377,7 @@ def test_only_a_number_crosses_the_hook_boundary(short_dir: Path) -> None:  # no
 def test_frames_the_device_has_no_part_in_are_not_sent() -> None:
     assert turnhook.frame(payload("PreToolUse")) is None
     assert turnhook.frame({**payload("Stop"), "session_id": "no spaces allowed"}) is None
-    for event in ("UserPromptSubmit", "PostToolBatch", "Stop"):
+    for event in ("UserPromptSubmit", "Stop"):
         assert turnhook.frame(payload(event, agent_id="a-sub")) is None, "a subagent's own"
     assert without_deadline(turnhook.frame(payload("PostToolBatch"))) == {
         "type": "turn",
@@ -349,6 +460,28 @@ def test_a_batch_hands_the_model_what_the_daemon_gave_it(short_dir: Path) -> Non
     ]
 
 
+@pytest.mark.parametrize(
+    ("event", "named"), [("SubagentStart", "agent_start"), ("SubagentStop", "agent_stop")]
+)
+def test_a_subagent_hook_reaches_the_daemon_and_prints_nothing(
+    short_dir: Path,  # noqa: F811
+    event: str,
+    named: str,
+) -> None:
+    """Whatever the daemon says, Claude Code is handed nothing: it would read it as context."""
+    path = short_dir / "c.sock"
+    daemon = Daemon(path, wire.turn_reply(context="never printed"))
+    try:
+        done, _ = run_hook(path, payload(event, agent_id="a1", agent_type="Explore"))
+        daemon.thread.join(timeout=2)
+    finally:
+        daemon.close()
+    assert (done.returncode, done.stdout, done.stderr) == (0, "", "")
+    assert [without_deadline(frame) for frame in daemon.frames] == [
+        {"type": "turn", "event": named, "session_id": "sess-1", "agent_id": "a1"}
+    ]
+
+
 def test_a_stop_waits_for_the_daemon_and_prints_nothing(short_dir: Path) -> None:  # noqa: F811
     path = short_dir / "c.sock"
     daemon = Daemon(path, wire.turn_reply(), delay=0.3)
@@ -393,7 +526,7 @@ def test_garbage_on_stdin_is_silent(short_dir: Path) -> None:  # noqa: F811
     assert (done.returncode, done.stdout, done.stderr) == (0, "", "")
 
 
-def test_the_settings_file_runs_it_for_three_events_on_the_bare_interpreter() -> None:
+def test_the_settings_file_runs_it_for_every_turn_event_on_the_bare_interpreter() -> None:
     hooks = settings()["hooks"]
     command = paths.turn_hook_command()
     assert command[1:3] == ["-I", "-S"]
@@ -402,6 +535,9 @@ def test_the_settings_file_runs_it_for_three_events_on_the_bare_interpreter() ->
     for event, timeout in (
         ("UserPromptSubmit", TURN_TIMEOUT),
         ("PostToolBatch", TURN_TIMEOUT),
+        ("SubagentStart", TURN_TIMEOUT),
+        ("SubagentStop", TURN_TIMEOUT),
+        ("StopFailure", TURN_TIMEOUT),
         ("Stop", STOP_TIMEOUT),
     ):
         [entry] = hooks[event]
@@ -416,8 +552,9 @@ def test_the_settings_file_runs_it_for_three_events_on_the_bare_interpreter() ->
 
 
 def test_a_cli_too_old_for_the_batch_hook_keeps_the_other_two() -> None:
+    """Nor is it handed the subagent hooks, which a CLI of unreadable version may not know."""
     hooks = settings(tool_batch=False)["hooks"]
-    assert "PostToolBatch" not in hooks
+    assert not {"PostToolBatch", "SubagentStart", "SubagentStop", "StopFailure"} & set(hooks)
     assert {"UserPromptSubmit", "Stop", "SessionStart", "PermissionRequest"} <= set(hooks)
 
 
@@ -463,12 +600,14 @@ class _Bytes:
         return self.data
 
 
-def test_both_settings_files_are_written_and_differ_by_the_batch_hook() -> None:
+def test_both_settings_files_are_written_and_differ_by_the_newer_hooks() -> None:
     ensure_dirs()
     write_settings()
     full = json.loads(paths.settings_path().read_text())["hooks"]
     lean = json.loads(paths.no_batch_settings_path().read_text())["hooks"]
-    assert set(full) - set(lean) == {"PostToolBatch"}
+    newer = {"PostToolBatch", "SubagentStart", "SubagentStop", "StopFailure"}
+    assert set(full) - set(lean) == newer
+    assert set(lean) <= set(full)
     assert lean["Stop"] == full["Stop"]
 
 

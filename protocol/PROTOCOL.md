@@ -4685,7 +4685,8 @@ session started, one the person had just begun, one Claude Code's own queue bega
 held it — and gave up after one re-send; it also held every message while any subagent worked,
 though the CLI takes one between turns as readily as the person's. The settings file the shim passes
 now also carries `UserPromptSubmit`, `PostToolBatch` and `Stop` hooks, which tell the device where
-each turn stands as the CLI knows it. `AgentInfo` gains the optional `shared_steer`: when it is true
+each turn stands as the CLI knows it, and `SubagentStart`, `SubagentStop` and `StopFailure` hooks,
+which tell it which subagents are at work. `AgentInfo` gains the optional `shared_steer`: when it is true
 and a `shared` session is running, `session.send` with `mode: "auto"` is steered — the device
 answers `accepted: "steered"` and the message reaches the turn at its next step. For Claude that is
 the turn's next batch of tool calls, where the hook hands the message to the model in the words
@@ -4722,7 +4723,18 @@ message back. A background shell is not counted, since some never end, such as a
 watcher. That hold lasts until the CLI's next prompt that starts a turn (it wakes for the end of a
 task with one, and that turn's `Stop` counts afresh), until the person stops the session from an app
 (the turn then ends as `interrupted`), until the CLI disconnects, or for thirty minutes after the
-`Stop` that counted them; a Claude Code that reports no task list is unaffected. A message the CLI
+`Stop` that counted them; a Claude Code that reports no task list is unaffected. So do the subagents
+the CLI's `SubagentStart` hook names, until their `SubagentStop` (or the `StopFailure` an API error
+ends one with), a `Stop` whose task list holds no agent at all, a turn's end by the usage limit or,
+for the foreground subagents it was waiting for (a background subagent outlives an Escape), by the
+person's Escape, the person's stop from an app, the CLI disconnecting, or thirty minutes with no
+sign of life from them (their start, a write to their transcript, a workflow's agents' included); the last
+of them to end leaves the session `running` five seconds more, which is how
+the prompt the CLI wakes with takes the turn over without it ending in between. A CLI started without
+those hooks is unaffected. A permission prompt, a plan or a question a subagent raised is closed
+`by: "terminal"` as the main thread's are, when its own transcript shows the call the prompt was
+paired with ended; a prompt that cannot be paired with one call for certain — two that look alike, a
+call the main thread may have made, a preview that was cut — stays open. A message the CLI
 absorbs anyway — it took the message as data, so the model has read
 it once as such — goes in again until its own row appears: one sent with `mode: "auto"` at the
 running turn's next batch of tool calls when the session steers, any other as a turn ends. So does a

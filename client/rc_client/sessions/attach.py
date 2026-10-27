@@ -32,6 +32,7 @@ log = logger("rc_client.attach")
 
 REGISTER_TIMEOUT = 10.0
 _SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
+_AGENT_ID = re.compile(r"[A-Za-z0-9_.:@-]{1,128}")
 # How many confirmations of injections nobody has asked about yet are kept: the
 # bridge confirms every write, and only a `Stop` hook waits on them (A51).
 MAX_UNCLAIMED_ACKS = 64
@@ -89,13 +90,15 @@ class HookQuestion:
 class TurnHook:
     """Where a turn stands, as one of the CLI's turn hooks reported it (A51).
 
-    `event` is `prompt`, `batch` or `stop`. A prompt says whose it was —
-    `ours` with the injection's `message_id`, `agent`, `command` or `person` —
-    and never what it said. `deadline` is when the hook stops waiting for an
-    answer, in seconds since the epoch; 0 when it did not say. A `stop` says in
-    `background` how many background subagents and workflows the turn leaves
-    running, and never what they run; 0 for every other event, and for a CLI
-    that does not say.
+    `event` is `prompt`, `batch`, `stop`, `agent_start` or `agent_stop`. A
+    prompt says whose it was — `ours` with the injection's `message_id`,
+    `agent`, `command` or `person` — and never what it said. `deadline` is when
+    the hook stops waiting for an answer, in seconds since the epoch; 0 when it
+    did not say. A `stop` says in `background` how many background subagents and
+    workflows the turn leaves running, and never what they run; 0 for every
+    other event, and for a CLI that does not say. It says in `listed_agents` how
+    many agents of any kind its task list holds, or None when the CLI gave no
+    list. The two subagent events name the subagent by its `agent_id`.
     """
 
     session_id: str
@@ -104,6 +107,8 @@ class TurnHook:
     message_id: str = ""
     deadline: float = 0.0
     background: int = 0
+    agent_id: str = ""
+    listed_agents: int | None = None
 
 
 class AttachSink(Protocol):
@@ -225,7 +230,9 @@ class AttachServer:
     async def start(self) -> None:
         self._prepare_directory()
         self._unlink_stale()
-        self._server = await asyncio.start_unix_server(self._serve, path=str(self.path))
+        self._server = await asyncio.start_unix_server(
+            self._serve, path=str(self.path), limit=wire.MAX_LINE_BYTES
+        )
         os.chmod(self.path, 0o600)
         log.info("channel socket listening", path=str(self.path))
 
@@ -307,7 +314,7 @@ class AttachServer:
             return
         await self._sink.attach_registered(attachment)
         try:
-            async for line in reader:
+            async for line in wire.lines(reader):
                 message = wire.decode(line)
                 if message is None:
                     continue
@@ -375,7 +382,7 @@ class AttachServer:
         link = PtyLink(pid, writer, tool_batch=message.get("tool_batch") is True)
         self.ptys.add(link)
         try:
-            async for line in reader:
+            async for line in wire.lines(reader):
                 answer = wire.decode(line)
                 if answer is not None:
                     link.resolve(answer)
@@ -387,7 +394,7 @@ class AttachServer:
         """What the connection is for; a caller that says nothing in time is dropped."""
         try:
             line = await asyncio.wait_for(reader.readline(), timeout=REGISTER_TIMEOUT)
-        except (TimeoutError, OSError):
+        except (TimeoutError, OSError, ValueError):
             return None
         return wire.decode(line)
 
@@ -428,24 +435,39 @@ def _hook_question(message: dict[str, Any], writer: asyncio.StreamWriter) -> Hoo
 
 
 def _turn_hook(message: dict[str, Any]) -> TurnHook | None:
-    """Read a `turn` frame, or None when it names no session or no event we know."""
+    """Read a `turn` frame, or None when it names no session or no event we know.
+
+    A subagent event that names no usable subagent is no event at all: there is
+    nothing to say about an agent nobody can tell apart from another.
+    """
     session_id = str(message.get("session_id") or "")
     event = str(message.get("event") or "")
     if not _SESSION_ID.fullmatch(session_id) or event not in wire.TURN_EVENTS:
+        return None
+    agent_id = str(message.get("agent_id") or "")
+    if event in wire.AGENT_EVENTS and not _AGENT_ID.fullmatch(agent_id):
         return None
     kind = str(message.get("prompt_kind") or "")
     raw = message.get("deadline")
     deadline = float(raw) if isinstance(raw, int | float) else 0.0
     soon = 0 < deadline - time.time() <= MAX_HOOK_WAIT
-    background = message.get("background")
     return TurnHook(
         session_id=session_id,
         event=event,
         prompt_kind=kind if kind in wire.PROMPT_KINDS else "",
         message_id=str(message.get("message_id") or "")[:64],
         deadline=deadline if soon else 0.0,
-        background=background if isinstance(background, int) and background > 0 else 0,
+        background=_count(message.get("background")) or 0,
+        agent_id=agent_id if event in wire.AGENT_EVENTS else "",
+        listed_agents=_count(message.get("listed_agents")),
     )
+
+
+def _count(value: object) -> int | None:
+    """A count a hook sent: a whole number from zero up, and never a boolean."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
 
 
 def _session_start(message: dict[str, Any]) -> SessionStart | None:

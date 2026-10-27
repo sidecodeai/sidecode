@@ -7,7 +7,9 @@ reader caps the line length instead of growing without bound.
 
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import AsyncIterator
 from typing import Any
 
 MAX_LINE_BYTES = 256 * 1024
@@ -28,7 +30,9 @@ PTY = "pty"
 # turn hook -> daemon: one frame, then the hook waits for `TURN_REPLY` (A51).
 # `turnhook.py` imports nothing of this package and spells these out itself.
 TURN = "turn"
-TURN_EVENTS = ("prompt", "batch", "stop")
+# The turn events about one subagent, which they name by its `agent_id`: it began, or it ended.
+AGENT_EVENTS = ("agent_start", "agent_stop")
+TURN_EVENTS = ("prompt", "batch", "stop", *AGENT_EVENTS)
 PROMPT_KINDS = ("ours", "agent", "command", "person")
 # daemon -> turn hook
 TURN_REPLY = "turn_reply"
@@ -48,6 +52,23 @@ TYPED = "typed"
 def encode(message: dict[str, Any]) -> bytes:
     """One frame: compact JSON followed by a newline."""
     return (json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+async def lines(reader: asyncio.StreamReader) -> AsyncIterator[bytes]:
+    """The lines a stream sends, until it ends, on a reader whose limit is `MAX_LINE_BYTES`.
+
+    A longer line costs the connection nothing but itself: what overran the
+    limit is dropped as it is read, and the rest of it comes as a line no frame
+    ever is, which `decode` refuses.
+    """
+    while True:
+        try:
+            line = await reader.readline()
+        except ValueError:
+            continue
+        if not line:
+            return
+        yield line
 
 
 def decode(line: bytes) -> dict[str, Any] | None:

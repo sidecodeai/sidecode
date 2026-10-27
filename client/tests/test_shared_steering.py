@@ -891,6 +891,7 @@ async def test_stop_asks_the_reader_for_the_turn_state_soon(harness: Harness) ->
 
     harness.hub.shared.reader = Reader()
     await running_turn(harness)
+    settled.clear()  # the registration asks for a look too, at once
     await hook(harness, "stop")
     assert settled == [("sess-1", shared_module.STOP_SETTLE)]
 

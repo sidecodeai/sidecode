@@ -1,6 +1,6 @@
 """The `--settings` file the shim hands to Claude Code.
 
-It carries up to five hooks. A `SessionStart` hook tells the daemon which session the
+It carries up to eight hooks. A `SessionStart` hook tells the daemon which session the
 terminal is in now: the environment a CLI starts with is the environment its
 MCP servers keep for as long as they live, so the channel bridge reports the
 session id Claude Code picked at startup and nothing else, and `/resume` and
@@ -15,13 +15,16 @@ it shows in the terminal and takes whichever answers first, so the hook waits
 as long as the dialog does — a day, which is far longer than anyone leaves a
 question open and short enough that nothing waits for ever.
 
-`UserPromptSubmit`, `PostToolBatch` and `Stop` run `turnhook.py`, which tells
-the daemon where each turn stands the moment the CLI knows it, hands the model
-a message a phone steered into the turn at the next batch of tool calls, and
+`UserPromptSubmit`, `PostToolBatch`, `Stop`, `SubagentStart`, `SubagentStop` and
+`StopFailure` run `turnhook.py`, which tells the daemon where each turn stands
+the moment the CLI knows it, which subagents are at work, hands the model a
+message a phone steered into the turn at the next batch of tool calls, and
 holds a turn's end while the messages waiting for it go into the channel
 (amendment A51). A Claude Code too old for `PostToolBatch` must not be handed
-it, so a second file carries every hook but that one, and the terminal proxy
-passes whichever the CLI it starts can load (`versions.py`).
+it, nor the subagent hooks and `StopFailure` beside it, which are older but may
+not be known to a CLI whose version could not be read, so a second file carries
+every hook but those, and the terminal proxy passes whichever the CLI it starts
+can load (`versions.py`).
 
 Both are written by `rc-client shim install` and by the daemon at startup, like
 the MCP config beside them, so they match whichever of the two ran last.
@@ -51,9 +54,14 @@ QUESTION_TIMEOUT = 24 * 60 * 60
 TURN_TIMEOUT = 2
 STOP_TIMEOUT = 3
 TOOL_BATCH_EVENT = "PostToolBatch"
+# The events only a CLI that can run `PostToolBatch` is given.
+NEWER_EVENTS = frozenset({TOOL_BATCH_EVENT, "SubagentStart", "SubagentStop", "StopFailure"})
 TURN_EVENTS = (
     ("UserPromptSubmit", TURN_TIMEOUT),
     (TOOL_BATCH_EVENT, TURN_TIMEOUT),
+    ("SubagentStart", TURN_TIMEOUT),
+    ("SubagentStop", TURN_TIMEOUT),
+    ("StopFailure", TURN_TIMEOUT),
     ("Stop", STOP_TIMEOUT),
 )
 
@@ -83,13 +91,14 @@ def settings(
 ) -> dict[str, Any]:
     """Every session start, `AskUserQuestion`, `ExitPlanMode`, and where each turn stands (A51).
 
-    `tool_batch` is whether the CLI runs `PostToolBatch` hooks at all.
+    `tool_batch` is whether the CLI runs `PostToolBatch` hooks at all, and so
+    whether it is handed the subagent hooks and `StopFailure` that go with them.
     """
     turn = turn_command or paths.turn_hook_command()
     events = [
         (event, timeout)
         for event, timeout in TURN_EVENTS
-        if tool_batch or event != TOOL_BATCH_EVENT
+        if tool_batch or event not in NEWER_EVENTS
     ]
     return {
         "hooks": {
