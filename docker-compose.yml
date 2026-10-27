@@ -20,6 +20,8 @@ services:
     image: rc-gateway:latest
     container_name: rc-gateway
     restart: unless-stopped
+    # A stop waits up to 5 s each for sockets, pushes and badges: 15 s, over Docker's 10 s default.
+    stop_grace_period: 20s
     # Rotate the container log at 10 MB and keep five files, so it never grows without bound.
     logging: {driver: json-file, options: {max-size: "10m", max-file: "5"}}
     env_file: .env
