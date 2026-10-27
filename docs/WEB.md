@@ -13,7 +13,7 @@ hand-written CSS with no framework. It talks only to the gateway and follows
 | `/devices` | Device list: a computer glyph, the name, a status line of online state, platform, session count and reach, the agents as logos, and — only while an update runs or has failed — "Updating…" or "Update failed · <reason>"; Rename and Revoke on every row, **Retry update** on a failed one; **Add device** with the copyable one-liner, the pairing code, its expiry, live handshake steps, and the scan flow beside them. The row itself opens the device |
 | `/devices/:deviceId` | One device: the machine's own facts, including the hostname and the architecture the row drops, then a card per agent it found, how each is signed in, and a meter per rate-limit window (A33) |
 | `/pair` | Claims the token a host printed as a QR code and shows the same handshake (A23) |
-| `/sessions` | Every session across every device: one collapsible group per device, its active rows and then its own collapsed **Archive**, a search, an agent filter and a device filter, and **New session** in a right-hand drawer |
+| `/sessions` | Every session across every device: one collapsible group per device, its active rows and then its own collapsed **Archive**, a search, a status filter, an agent filter and a device filter, and **New session** in a right-hand drawer |
 | `/sessions/:deviceId/:sessionId` | The chat: sidebar, timeline, composer, status line |
 | `/settings` | The Settings screen (`docs/DESIGN.md` § "The Settings screen"): an identity header — initials, username, `role · connection dot · host` — then four groups of two-line rows, **Account** (Users for the admin role, Change password for every account but `admin`, Sign out, which asks first), **While you're away** (Notify me, "Resume after the limit resets", A35), **Voice** (Transcribe, which names the gateway and offers nothing to choose, A44; polish and its model and strength) and **Reading** (language, timeline detail), and one caption line with the gateway and protocol versions |
 | `/users` | The admin's accounts screen: the registration switch, one row per account, Reset password / Disable / Delete, and **Add user** (A24). A member who types it lands on Sessions |
@@ -621,20 +621,27 @@ Nothing of this reaches the gateway.
   device arriving later moves nobody. `LoginPage` returns to `/` when there is nothing to go back
   to, so signing in lands by the same rule; a remembered `from` still wins, fragment and all (A23).
 - **The session list** is one selector, `selectSessionLayout` in `src/stores/sessions.ts`. It
-  filters on the device, the agent and the search text, then returns one `DeviceGroup` per device
-  that still has something to show: the device, whether the user folded it shut, its active rows,
-  its own Archive and whether that Archive is open. Both the Sessions page and the chat sidebar
-  render its result, so the two lists cannot drift; `tests/sessionLayout.test.ts` owns the rule.
-  `docs/DESIGN.md` states it in full.
+  filters on the device, the agent, the status and the search text, then returns one `DeviceGroup`
+  per device that still has something to show: the device, whether the user folded it shut, its
+  active rows, its own Archive and whether that Archive is open. Both the Sessions page and the
+  chat sidebar render its result, so the two lists cannot drift (the sidebar passes no status, as
+  the filter's bullet below says); `tests/sessionLayout.test.ts` owns the rule. `docs/DESIGN.md`
+  states it in full.
 - **A session with no title still has a name.** `sessionTitle` in `src/strings.ts` turns an empty
   or blank `title` into "Untitled session", and the session row, the chat header, the chat sidebar
   and the search text `selectSessionLayout` matches on all read it, so an unnamed thread never
   draws a blank line above its meta and is still found by those words.
 - **Collapse state** is two arrays of device ids in the settings store, `collapsedDevices` and
   `archiveExpanded`, persisted with the rest of the preferences under the signed-in account's key. Device groups
-  are open by default, Archives shut. A non-empty search overrides both — it opens every device
-  group and every Archive holding a match, without writing either array, and clearing the query
-  hands the list back to what was stored. There is no global "show archived" toggle: it only ever
+  are open by default, Archives shut. A non-empty search overrides both, and so does a status other
+  than All states — either opens every device group and every Archive holding a match, without
+  writing either array, and clearing the query or choosing All states hands the list back to what
+  was stored. While either is on, the headers of those groups take no click: the group is open on
+  screen whatever the click would store, so it would only flip the stored choice behind the user's
+  back. `selectSessionLayout` says so with `DeviceGroup.revealing`, the page and the sidebar pass it
+  on as `locked` to `DeviceGroupHeader` and `ArchiveGroupHeader`, and a locked header carries
+  `aria-disabled="true"` and is drawn without the pointer and the hover ink, nothing else changed.
+  There is no global "show archived" toggle: it only ever
   toggled the hand-archived sessions, which the collapsed Archive already hid, so pressing it
   changed nothing on screen. The row's one action is **Close** (A39, `docs/DESIGN.md` § "Close,
   then the Archive"): on a `remote` row that is not archived, a circled cross that sends
@@ -648,6 +655,11 @@ Nothing of this reaches the gateway.
   control into a menu beside the device one: an "All" segment plus one per agent was 27 px wider
   than a 400 px viewport, and a menu holds any number of agents at any width. With a filter on, the
   button shows that agent's logo and name.
+- **The status filter** is `statusFilter` in the same store, beside `agentFilter` and for the same
+  reason: the choice outlives the page, so going into a conversation and coming back keeps it. It is
+  not persisted either. Unlike the agent filter the chat sidebar does not read it: a conversation
+  changes status under the reader's eyes, and a filtered sidebar would drop the row of the
+  conversation that is open. Its rule, its mapping and its empty state are § "Filtering by status".
 - **Four agents, each drawn as its own logo** (A25, A26). `agentLabels` in `src/strings.ts` names
   Claude Code, Codex, Grok Build and pi, and an id it does not know is drawn as itself. The mark
   beside or instead of a name is `src/components/AgentLogo.tsx`: one inline `<svg>` per agent with
@@ -783,11 +795,24 @@ Nothing of this reaches the gateway.
   `src/components/dotTone.ts`, never by the state alone: a finished turn on a live session and a
   session whose CLI exited both report `idle`. The five tones and when each applies are the table in
   `docs/DESIGN.md`; `tests/dotTone.test.ts` walks all of it. The looks are five rules in
-  `src/components/ui.css`: `working` is a still green, `waiting` an amber that pulses, `live` a
-  still amber, `off` grey and `failed` red — green says the agent is working and needs nobody, amber
-  says there is something for you, and only `waiting` animates, which the reduced-motion block
-  stops. `tests/StatusDot.test.tsx` reads those rules and the class each tone renders. The tooltip
-  names the tone, so `live` reads "Done". `OnlineDot`, the device's own dot, is not part of it: it
+  `src/components/ui.css`: `working` is a green, `waiting` an amber that pulses, `live` a still
+  amber, `off` grey and `failed` red — green says the agent is working and needs nobody, amber says
+  there is something for you. Two things move. `waiting` pulses, so the one state that needs the
+  person asks for a glance. A working session breathes, so a running one is easy to find in a list:
+  `StatusDot` adds the modifier `.breathes` when the tone is `working`, and the chat status line puts
+  it on its dot while a turn runs (`dot running breathes`, where that dot used to pulse).
+  `.dot.breathes` dims the dot from 1 to 0.7 and back while its `::after` — a disc of the same green,
+  out of the flow so it never moves the line — swells to 2.2 times the dot's width at 0.30 opacity
+  and fades again, once in 1.8 s on `ease-in-out` (`rc-breathe-core` and `rc-breathe-glow`). Only
+  opacity and transform move, so the compositor runs it and a long list of running rows costs
+  nothing in JavaScript: there is no timer and no per-row state. Under `prefers-reduced-motion`
+  every animation stops; the amber alone still says what it says, and the breathing dot keeps its
+  glow held at rest (scale 1.8, opacity 0.22), so a working session still looks unlike a dot that
+  is merely green. The same green marks things that are not a session at work, and none of them
+  breathes: the legend's key to the colours, the connection dot beside the host in Settings, a
+  running tool's marker (`dot running pulse`), the pairing progress and `OnlineDot`.
+  `tests/StatusDot.test.tsx` reads those rules and the class each tone renders. The tooltip names
+  the tone, so `live` reads "Done". `OnlineDot`, the device's own dot, is not part of the table: it
   is green when the device is online, a grey ring when it is not, and pulses only while the device
   updates itself.
 - **`control: "shared"`** (amendments A10 and A11) is a live terminal session the device is
@@ -1087,6 +1112,57 @@ order while the ellipsis lands at the start — so the folder the path ends in i
 narrow row. Rows are `--row-h-three` tall at every width; the phone-width rules that used to wrap
 the status onto its own line are gone with the column they served. `tests/SessionsPage.test.tsx`
 holds the row to the three lines, the order on the second and the folder's outline.
+
+## Filtering by status
+
+The Sessions toolbar carries a status filter between the search and the agent filter: a `Menu`
+(`Popover.tsx`) of **All states**, **Running**, **Waiting** and **Ended** (全部状态, 正在运行, 正在等待,
+已结束), always drawn, its button reading the chosen word and named "Filter by status" for a screen
+reader, and the chosen row marked, All states included. The rule is `matchesStatus` in
+`src/components/statusFilter.ts`, and it reads the dot a row shows, `dotTone(state, control, online)`,
+rather than the raw state, so what the reader filters on is what they see. The three options that
+narrow the list share the five tones between them: every session is in exactly one.
+
+| Option | The dot | Tones | What the session reports |
+| --- | --- | --- | --- |
+| All states | any | every tone | everything |
+| Running | green | `working` | `starting` or `running` |
+| Waiting | both ambers | `waiting` and `live` | `needs_approval` or `needs_input`; or `idle` or `readonly` while `control` is not `none` |
+| Ended | grey and red | `off` and `failed` | `stopped`; `idle` or `readonly` with `control: none`; `error`; and any state on an offline or unlisted device |
+
+Waiting is the legend's "For you": a question or an approval still to answer and a finished turn
+waiting to be read are one colour to the eye, so one option holds both. Ended holds a session on a
+device that is offline, or that the gateway no longer lists, because its dot is grey; it also holds
+an errored session, because its dot is red and Ended is where the grey and the red go. A session on
+a device the gateway never listed counts as offline, as the offline dot on its group already shows.
+A state this build has never heard of — a newer device can report one — is grey too, because
+`dotTone` returns `off` for it, so it is Ended and the three options leave no gap.
+
+- **It combines with the other filters.** `selectSessionLayout` applies it before the grouping,
+  beside the device filter, the agent filter and the search, each narrowing what the last left, so
+  a device whose sessions all drop out is not drawn. It lives in the sessions store as
+  `statusFilter` — in memory, like `agentFilter` — and the chat sidebar leaves it alone
+  (§ "Behaviour worth knowing"). Signing out already puts it back: the store's `reset()`, which
+  sign-out calls, sets `agentFilter` to none and `statusFilter` to All states beside emptying the
+  list, and the search text and the device filter are the page's own state, which goes with the page.
+- **It shows what it found, as a search does.** While a status narrows the list, a device the reader
+  folded is open and an Archive that holds a match is open, without touching `collapsedDevices` or
+  `archiveExpanded`; choosing All states hands both back. Ended would otherwise show nothing but
+  closed Archives, which is where most ended sessions live. Under a status, as under a search, the
+  headers of those groups are inert (`aria-disabled="true"`, no pointer, no hover ink): a click on
+  one would change nothing on screen and would only flip the stored fold.
+- **The empty list says why.** A search is answered first ("Nothing matches that search."); then a
+  narrowed status says "Nothing matches that status." and "Choose All states to see every session."
+  — unless an agent or a device filter is on too, when the pair is what matched nothing and the
+  status cannot be blamed alone: "No session matches these filters." and "Clear a filter to see more
+  sessions." (没有符合这些筛选条件的会话。 / 清除一个筛选条件即可查看更多会话。); otherwise it is the
+  plain "No sessions yet." The menu is drawn in all of them, so the way back is one choice away.
+- `tests/statusFilter.test.ts` holds the rule and the partition, an unknown state included,
+  `tests/sessionLayout.test.ts` the selector with a status and the `revealing` flag,
+  `tests/SessionsPage.test.tsx` the menu, the narrowing, the reveal, the inert headers, the empty
+  wording and the store, `tests/GroupHeader.test.tsx` the locked header and its stylesheet, and
+  `tests/Sidebar.test.tsx` the sidebar that does not apply the status and whose own search locks
+  its headers.
 
 ## The device row
 

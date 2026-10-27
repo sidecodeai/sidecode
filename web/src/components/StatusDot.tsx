@@ -6,7 +6,9 @@ import type { ControlOwner, SessionState } from '../protocol/types';
 /**
  * A session's dot. The tone comes from `dotTone`, which reads the state, the
  * control owner and the device together; the accessibility label stays the raw
- * state and the tooltip names the tone.
+ * state and the tooltip names the tone. A working session's dot breathes, so a
+ * running row is easy to find in a list; no other tone moves but the amber of a
+ * question waiting.
  */
 export function StatusDot({
   state,
@@ -22,7 +24,7 @@ export function StatusDot({
   const tone = dotTone(state, control, online);
   return (
     <span
-      className={cx('dot', tone, className)}
+      className={cx('dot', tone, tone === 'working' && 'breathes', className)}
       role="img"
       aria-label={stateLabel(state)}
       title={dotToneLabel(tone)}

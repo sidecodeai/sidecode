@@ -1,5 +1,7 @@
 /** Gateway session index: the list rendered by Sessions and the chat sidebar. */
 import { create } from 'zustand';
+import { dotTone } from '../components/dotTone';
+import { matchesStatus, type StatusFilter } from '../components/statusFilter';
 import { api } from '../lib/api';
 import { rpc } from '../lib/gateway';
 import { sessionTitle } from '../strings';
@@ -24,6 +26,16 @@ interface SessionsState {
    */
   agentFilter: string | null;
   setAgentFilter: (agent: string | null) => void;
+  /**
+   * The status the Sessions page is narrowed to, `'all'` for none. In memory on
+   * purpose, like the agent filter, and here rather than in the page so that
+   * opening a conversation and coming back keeps the choice. The chat sidebar
+   * does not read it: the conversation open beside that list changes status
+   * under the reader's eyes, and a filtered list would drop its row the moment
+   * it did.
+   */
+  statusFilter: StatusFilter;
+  setStatusFilter: (status: StatusFilter) => void;
   load: () => Promise<void>;
   replaceAll: (sessions: Session[]) => void;
   upsert: (session: Session) => void;
@@ -56,8 +68,10 @@ export const useSessions = create<SessionsState>((set, get) => ({
   sessions: {},
   loaded: false,
   agentFilter: null,
+  statusFilter: 'all',
 
   setAgentFilter: (agentFilter) => set({ agentFilter }),
+  setStatusFilter: (statusFilter) => set({ statusFilter }),
 
   load: async () => {
     const { sessions } = await api.sessions();
@@ -83,7 +97,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
 
   reset: () => {
     seenInFlight.clear();
-    set({ sessions: {}, loaded: false, agentFilter: null });
+    set({ sessions: {}, loaded: false, agentFilter: null, statusFilter: 'all' });
   },
 
   create: async (params) => {
@@ -173,6 +187,13 @@ export interface DeviceGroup {
   active: Session[];
   archive: Session[];
   archiveExpanded: boolean;
+  /**
+   * A search or a status is showing this group whatever the user folded, and
+   * its Archive open if it holds a match. Folding either then changes nothing on
+   * screen, so a header that took the click would only flip the stored choice
+   * behind the user's back: it takes none.
+   */
+  revealing: boolean;
 }
 
 export interface SessionLayoutOptions {
@@ -180,6 +201,12 @@ export interface SessionLayoutOptions {
   deviceFilter?: string | null;
   /** Restrict the whole list to one agent. Applied before grouping. */
   agentFilter?: string | null;
+  /**
+   * Restrict the whole list to one status: a session passes by the dot it shows
+   * on its own device, so one on a device the gateway no longer lists counts as
+   * offline. Applied before grouping, and like a search it shows what it found.
+   */
+  statusFilter?: StatusFilter;
   /** Free-text filter over title, working directory and device name. */
   query?: string;
   /** Device ids the user folded shut. */
@@ -221,6 +248,7 @@ export function selectSessionLayout(
   const {
     deviceFilter = null,
     agentFilter = null,
+    statusFilter = 'all',
     collapsedDevices = [],
     archiveExpanded = [],
   } = options;
@@ -233,9 +261,16 @@ export function selectSessionLayout(
     return `${sessionTitle(session)} ${session.cwd} ${name}`.toLowerCase().includes(needle);
   };
 
+  const passesStatus = (session: Session): boolean =>
+    matchesStatus(
+      statusFilter,
+      dotTone(session.state, session.control, known.get(session.device_id)?.online ?? false),
+    );
+
   const visible = Object.values(sessions)
     .filter((s) => (deviceFilter ? s.device_id === deviceFilter : true))
     .filter((s) => (agentFilter ? s.agent === agentFilter : true))
+    .filter(passesStatus)
     .filter(matches);
 
   const buckets = new Map<string, { active: Session[]; archive: Session[] }>();
@@ -249,21 +284,24 @@ export function selectSessionLayout(
     else bucket.archive.push(session);
   }
 
-  // A search reveals what it matched without persisting anything: a device only
-  // reaches this point when it still holds a matching row, so under a query its
-  // group is open whatever the user folded shut, and so is any Archive holding
-  // one. Clearing the query hands both back to the stored state.
-  const searching = needle.length > 0;
+  // A search or a status reveals what it matched without persisting anything: a
+  // device only reaches this point when it still holds a matching row, so under
+  // either its group is open whatever the user folded shut, and so is any
+  // Archive holding one — an Ended filter would otherwise show nothing but
+  // closed Archives. Clearing the query or choosing All states hands both back
+  // to the stored state.
+  const revealing = needle.length > 0 || statusFilter !== 'all';
 
   const groups = [...buckets.entries()].map(([deviceId, bucket]) => ({
     device: known.get(deviceId) ?? placeholderDevice(deviceId),
-    collapsed: !searching && collapsedDevices.includes(deviceId),
+    collapsed: !revealing && collapsedDevices.includes(deviceId),
     active: bucket.active.sort(
       (a, b) => activityRank(a) - activityRank(b) || b.updated_at - a.updated_at,
     ),
     archive: bucket.archive.sort((a, b) => b.updated_at - a.updated_at),
     archiveExpanded:
-      archiveExpanded.includes(deviceId) || (searching && bucket.archive.length > 0),
+      archiveExpanded.includes(deviceId) || (revealing && bucket.archive.length > 0),
+    revealing,
   }));
 
   // Devices with something live first, each side by its most recent activity.

@@ -30,5 +30,11 @@ export function dotTone(state: SessionState, control: ControlOwner, online: bool
     case 'idle':
     case 'readonly':
       return control === 'none' ? 'off' : 'live';
+    // A state this build has never heard of — a newer device can report one —
+    // claims nothing, so every session still falls in exactly one option of the
+    // status filter. The union above is closed, which is why this reads as dead
+    // code to the compiler and is not at run time.
+    default:
+      return 'off';
   }
 }

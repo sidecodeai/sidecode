@@ -84,7 +84,7 @@ function fillStores(): void {
     stt: { enabled: true },
     polish: { enabled: true },
   });
-  useSessions.setState({ sessions: {}, loaded: true, agentFilter: 'codex' });
+  useSessions.setState({ sessions: {}, loaded: true, agentFilter: 'codex', statusFilter: 'ended' });
   useDevices.setState({ devices: [], loaded: true, updateErrors: { 'dev-a': 'busy' } });
   useUsers.setState({ users: [], registrationOpen: true, loaded: true, error: null });
   // A38: the shell this account left detached on a device. The next person in
@@ -108,6 +108,8 @@ describe('signing out', () => {
     expect(useAnswers.getState().drafts).toEqual({});
     expect(Object.keys(useCommands.getState().entries)).toEqual([]);
     expect(useSessions.getState().sessions).toEqual({});
+    expect(useSessions.getState().agentFilter).toBeNull();
+    expect(useSessions.getState().statusFilter).toBe('all');
     expect(useDevices.getState().updateErrors).toEqual({});
     expect(useUsers.getState().registrationOpen).toBe(false);
     expect(rememberedTerminal('dev-a')).toBeNull();

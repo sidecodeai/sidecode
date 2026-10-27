@@ -38,7 +38,12 @@ const index = (list: Session[]): Record<string, Session> =>
 
 beforeEach(() => {
   useDevices.setState({ devices: [...devices, quietDevice], loaded: true, error: null });
-  useSessions.setState({ sessions: index(sessions), loaded: true, agentFilter: null });
+  useSessions.setState({
+    sessions: index(sessions),
+    loaded: true,
+    agentFilter: null,
+    statusFilter: 'all',
+  });
   useSettings.setState({ collapsedDevices: [], archiveExpanded: [] });
 });
 
@@ -79,7 +84,10 @@ const dotTone = (title: string): string => {
   const row = screen
     .getAllByRole('button', { name: strings.sessions.open })
     .find((r) => r.querySelector('.session-title')?.textContent === title);
-  return (row?.querySelector('.dot')?.className ?? '').replace('dot ', '');
+  // `breathes` is the working tone's motion, not a tone of its own.
+  return [...(row?.querySelector('.dot')?.classList ?? [])]
+    .filter((name) => name !== 'dot' && name !== 'breathes')
+    .join(' ');
 };
 
 describe('SessionsPage grouping', () => {
@@ -315,6 +323,17 @@ describe('the session row', () => {
     expect(dotTone('Migrate web to Vite 6')).toBe('waiting');
   });
 
+  it('breathes the dot of a working row, and no other', () => {
+    renderPage();
+    const dotOf = (title: string) => rowFor(title).querySelector('.dot');
+
+    expect(dotOf('Fix flaky auth test')).toHaveClass('working', 'breathes');
+    expect(dotOf('Refactor relay routing')).toHaveClass('working', 'breathes');
+    expect(dotOf('Migrate web to Vite 6')).toHaveClass('waiting');
+    expect(dotOf('Migrate web to Vite 6')).not.toHaveClass('breathes');
+    expect(dotOf('iOS push tokens')).not.toHaveClass('breathes');
+  });
+
   it('gives the word the secondary ink whatever the state', () => {
     renderPage();
     expect(document.querySelector('.session-state.attention')).toBeNull();
@@ -390,6 +409,350 @@ describe('the dot legend', () => {
 
     expect(legend()).toBeNull();
     expect(screen.getByText(strings.sessions.empty)).toBeInTheDocument();
+  });
+});
+
+/**
+ * The filter by status: a menu beside the search and the agent filter whose
+ * options read the dot a row shows (`tests/statusFilter.test.ts` is the rule),
+ * kept in the sessions store like the agent filter.
+ */
+describe('the filter by status', () => {
+  afterEach(() => {
+    useSettings.setState({ language: 'en' });
+  });
+
+  const trigger = () => screen.getByRole('button', { name: strings.sessions.statusFilter });
+
+  const pickStatus = async (name: string) => {
+    await userEvent.click(trigger());
+    await userEvent.click(screen.getByRole('option', { name }));
+  };
+
+  /** The tone of every row on the page. */
+  const tones = (): Set<string> => new Set(rowTitles().map(dotTone));
+
+  const quiet = sessions.find((s) => s.session_id === 'ses-push') as Session;
+
+  it('is a menu of All states, Running, Waiting and Ended, with All marked', async () => {
+    renderPage();
+    await userEvent.click(trigger());
+
+    const options = screen.getAllByRole('option');
+    expect(options.map((o) => o.textContent)).toEqual(['All states', 'Running', 'Waiting', 'Ended']);
+    expect(options.map((o) => o.getAttribute('aria-selected'))).toEqual([
+      'true',
+      'false',
+      'false',
+      'false',
+    ]);
+  });
+
+  it('stands right after the search and before the agent and device filters', () => {
+    renderPage();
+    const toolbar = document.querySelector('.sessions-toolbar') as HTMLElement;
+
+    expect(toolbar.firstElementChild?.classList.contains('search-field')).toBe(true);
+    expect([...toolbar.querySelectorAll('button.pill')].map((b) => b.getAttribute('aria-label'))).toEqual([
+      strings.sessions.statusFilter,
+      strings.sessions.agentFilter,
+      strings.sessions.allDevices,
+    ]);
+  });
+
+  it('says the chosen word on its button', async () => {
+    renderPage();
+    expect(trigger()).toHaveTextContent('All states');
+
+    await pickStatus('Waiting');
+
+    expect(trigger()).toHaveTextContent('Waiting');
+  });
+
+  it('narrows the list to the green dots under Running, and keeps the choice in the store', async () => {
+    renderPage();
+
+    await pickStatus('Running');
+
+    expect(useSessions.getState().statusFilter).toBe('running');
+    expect(rowTitles()).toContain('Fix flaky auth test');
+    expect(rowTitles()).not.toContain('Migrate web to Vite 6');
+    expect(tones()).toEqual(new Set(['working']));
+  });
+
+  it('reads Waiting as both ambers, a question and a finished turn alike', async () => {
+    renderPage();
+
+    await pickStatus('Waiting');
+
+    expect(rowTitles()).toContain('Migrate web to Vite 6');
+    expect(rowTitles()).toContain('iOS push tokens');
+    expect(rowTitles()).not.toContain('Fix flaky auth test');
+    expect(tones()).toEqual(new Set(['waiting', 'live']));
+  });
+
+  it('reads Ended as the grey and the red dots, and opens the Archives that hold them', async () => {
+    renderPage();
+    expect(screen.queryByText('Rewrite the pairing docs')).not.toBeInTheDocument();
+
+    await pickStatus('Ended');
+
+    expect(archiveTitles()).toContain('Rewrite the pairing docs');
+    expect(activeTitles()).toContain('Regenerate the API client');
+    expect(tones()).toEqual(new Set(['off', 'failed']));
+    // The opening is the filter's, not the reader's: nothing was stored.
+    expect(useSettings.getState().archiveExpanded).toEqual([]);
+  });
+
+  it('unfolds a device the reader folded, and hands it back under All states', async () => {
+    useSettings.setState({ collapsedDevices: ['dev-mac'] });
+    renderPage();
+    expect(screen.queryByText('Fix flaky auth test')).not.toBeInTheDocument();
+
+    await pickStatus('Running');
+
+    expect(screen.getByText('Fix flaky auth test')).toBeInTheDocument();
+    expect(useSettings.getState().collapsedDevices).toEqual(['dev-mac']);
+
+    await pickStatus(strings.sessions.allStates);
+
+    expect(screen.queryByText('Fix flaky auth test')).not.toBeInTheDocument();
+    expect(useSessions.getState().statusFilter).toBe('all');
+  });
+
+  it('combines with the agent filter', async () => {
+    renderPage();
+
+    await pickStatus('Running');
+    await userEvent.click(screen.getByRole('button', { name: strings.sessions.agentFilter }));
+    await userEvent.click(screen.getByRole('option', { name: 'Codex' }));
+
+    expect(rowTitles()).toEqual(['Typecheck the web app']);
+  });
+
+  it('survives going into a conversation and back, because it lives in the store', async () => {
+    const first = renderPage();
+    await pickStatus('Running');
+    first.unmount();
+
+    renderPage();
+
+    expect(trigger()).toHaveTextContent('Running');
+    expect(tones()).toEqual(new Set(['working']));
+  });
+
+  it('says so, and how to get the list back, when the status leaves nothing', () => {
+    useSessions.setState({ sessions: index([quiet]), statusFilter: 'running' });
+    renderPage();
+
+    expect(screen.getByText(strings.sessions.noStatusMatches)).toBeInTheDocument();
+    expect(document.querySelector('.empty')?.textContent).toContain(strings.sessions.statusEmptyHint);
+    // The menu stays, so the way back is one choice away, and no legend names dots that are not there.
+    expect(trigger()).toHaveTextContent('Running');
+    expect(document.querySelector('.session-legend')).toBeNull();
+  });
+
+  it('answers a search before it answers the status', async () => {
+    useSessions.setState({ sessions: index([quiet]), statusFilter: 'running' });
+    renderPage();
+
+    await userEvent.type(screen.getByLabelText(strings.sessions.searchPlaceholder), 'zzz');
+
+    expect(screen.getByText(strings.sessions.noMatches)).toBeInTheDocument();
+    expect(document.querySelector('.empty')?.textContent).not.toContain(strings.sessions.statusEmptyHint);
+  });
+
+  it('does not blame the status alone while an agent filter is on too', () => {
+    // The agent matches this session and the status does not: the pair left nothing.
+    useSessions.setState({
+      sessions: index([quiet]),
+      statusFilter: 'running',
+      agentFilter: quiet.agent,
+    });
+    renderPage();
+
+    expect(screen.getByText(strings.sessions.noFilterMatches)).toBeInTheDocument();
+    expect(document.querySelector('.empty')?.textContent).toContain(strings.sessions.filterEmptyHint);
+    expect(screen.queryByText(strings.sessions.noStatusMatches)).not.toBeInTheDocument();
+    expect(document.querySelector('.empty')?.textContent).not.toContain(strings.sessions.statusEmptyHint);
+  });
+
+  it('does not blame the status alone while a device filter is on too', async () => {
+    useSessions.setState({ statusFilter: 'running' });
+    renderPage();
+
+    await userEvent.click(screen.getByRole('button', { name: strings.sessions.allDevices }));
+    await userEvent.click(screen.getByRole('option', { name: quietDevice.name }));
+
+    expect(screen.getByText(strings.sessions.noFilterMatches)).toBeInTheDocument();
+    expect(screen.queryByText(strings.sessions.noStatusMatches)).not.toBeInTheDocument();
+  });
+
+  it('keeps its own words while the status is the only filter, and answers a search first of all', async () => {
+    useSessions.setState({ sessions: index([quiet]), statusFilter: 'running' });
+    renderPage();
+
+    expect(screen.getByText(strings.sessions.noStatusMatches)).toBeInTheDocument();
+    expect(screen.queryByText(strings.sessions.noFilterMatches)).not.toBeInTheDocument();
+
+    useSessions.setState({ agentFilter: quiet.agent });
+    await userEvent.type(screen.getByLabelText(strings.sessions.searchPlaceholder), 'zzz');
+
+    expect(screen.getByText(strings.sessions.noMatches)).toBeInTheDocument();
+    expect(screen.queryByText(strings.sessions.noFilterMatches)).not.toBeInTheDocument();
+  });
+
+  it('says the pair of filters in Chinese too', () => {
+    useSettings.setState({ language: 'zh-Hans' });
+    useSessions.setState({
+      sessions: index([quiet]),
+      statusFilter: 'running',
+      agentFilter: quiet.agent,
+    });
+    renderPage();
+
+    expect(screen.getByText('没有符合这些筛选条件的会话。')).toBeInTheDocument();
+    expect(document.querySelector('.empty')?.textContent).toContain('清除一个筛选条件即可查看更多会话。');
+  });
+
+  it('leaves the plain empty list as it was while no status narrows it', () => {
+    useSessions.setState({ sessions: {} });
+    renderPage();
+
+    expect(screen.getByText(strings.sessions.empty)).toBeInTheDocument();
+    expect(screen.queryByText(strings.sessions.noStatusMatches)).not.toBeInTheDocument();
+    expect(trigger()).toHaveTextContent('All states');
+  });
+
+  it('says its words in Chinese', async () => {
+    useSettings.setState({ language: 'zh-Hans' });
+    renderPage();
+
+    expect(screen.getByRole('button', { name: '按状态筛选' })).toHaveTextContent('全部状态');
+    await userEvent.click(screen.getByRole('button', { name: '按状态筛选' }));
+
+    expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual([
+      '全部状态',
+      '正在运行',
+      '正在等待',
+      '已结束',
+    ]);
+  });
+});
+
+/**
+ * While a search or a status is showing the groups they are open whatever the
+ * user folded, so a click on a header would change nothing on screen and only
+ * flip the stored choice behind their back: the headers take none, and the
+ * stored folds come back as they were once the list stops revealing.
+ */
+describe('the group headers while the list is revealing groups', () => {
+  const searchField = () => screen.getByLabelText(strings.sessions.searchPlaceholder);
+
+  const pickStatus = async (name: string) => {
+    await userEvent.click(screen.getByRole('button', { name: strings.sessions.statusFilter }));
+    await userEvent.click(screen.getByRole('option', { name }));
+  };
+
+  /** Every device and Archive header on the page. */
+  const headers = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('.group-head')];
+
+  it('take no click on a device while a search is showing it', async () => {
+    renderPage();
+    await userEvent.type(searchField(), 'flaky');
+
+    const header = deviceHeader(MAC);
+    expect(header).toHaveAttribute('aria-disabled', 'true');
+    await userEvent.click(header);
+
+    expect(useSettings.getState().collapsedDevices).toEqual([]);
+    expect(header).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Fix flaky auth test')).toBeInTheDocument();
+  });
+
+  it('hand the click back once the search is cleared', async () => {
+    renderPage();
+    await userEvent.type(searchField(), 'flaky');
+    await userEvent.click(deviceHeader(MAC));
+    await userEvent.clear(searchField());
+
+    expect(deviceHeader(MAC)).not.toHaveAttribute('aria-disabled');
+    await userEvent.click(deviceHeader(MAC));
+
+    expect(useSettings.getState().collapsedDevices).toEqual(['dev-mac']);
+    expect(screen.queryByText('Fix flaky auth test')).not.toBeInTheDocument();
+  });
+
+  it('take no click on an Archive that a search has opened', async () => {
+    renderPage();
+    await userEvent.type(searchField(), 'pairing docs');
+
+    const archive = screen.getByRole('button', { name: strings.sessions.archiveGroup(1) });
+    expect(archive).toHaveAttribute('aria-disabled', 'true');
+    expect(archive).toHaveAttribute('aria-expanded', 'true');
+    await userEvent.click(archive);
+
+    expect(useSettings.getState().archiveExpanded).toEqual([]);
+    expect(screen.getByText('Rewrite the pairing docs')).toBeInTheDocument();
+  });
+
+  it('take no click while a status is showing the groups', async () => {
+    renderPage();
+    await pickStatus('Ended');
+
+    expect(headers().length).toBeGreaterThan(0);
+    for (const header of headers()) {
+      expect(header).toHaveAttribute('aria-disabled', 'true');
+      await userEvent.click(header);
+    }
+
+    expect(useSettings.getState().collapsedDevices).toEqual([]);
+    expect(useSettings.getState().archiveExpanded).toEqual([]);
+    expect(archiveTitles()).toContain('Rewrite the pairing docs');
+  });
+
+  it('leave a folded device folded in the store while a status is unfolding it', async () => {
+    useSettings.setState({ collapsedDevices: ['dev-mac'] });
+    renderPage();
+    await pickStatus('Running');
+
+    await userEvent.click(deviceHeader(MAC));
+
+    expect(useSettings.getState().collapsedDevices).toEqual(['dev-mac']);
+    expect(screen.getByText('Fix flaky auth test')).toBeInTheDocument();
+
+    await pickStatus(strings.sessions.allStates);
+
+    expect(deviceHeader(MAC)).not.toHaveAttribute('aria-disabled');
+    expect(screen.queryByText('Fix flaky auth test')).not.toBeInTheDocument();
+  });
+
+  it('stay live while nothing but an agent or a device narrows the list', async () => {
+    renderPage();
+    await userEvent.click(screen.getByRole('button', { name: strings.sessions.agentFilter }));
+    await userEvent.click(screen.getByRole('option', { name: 'Codex' }));
+
+    expect(headers().some((header) => header.hasAttribute('aria-disabled'))).toBe(false);
+    await userEvent.click(deviceHeader(MAC));
+    expect(useSettings.getState().collapsedDevices).toEqual(['dev-mac']);
+    await userEvent.click(deviceHeader(MAC));
+
+    await userEvent.click(screen.getByRole('button', { name: strings.sessions.allDevices }));
+    await userEvent.click(screen.getByRole('option', { name: MAC }));
+
+    expect(headers().some((header) => header.hasAttribute('aria-disabled'))).toBe(false);
+    await userEvent.click(deviceHeader(MAC));
+    expect(useSettings.getState().collapsedDevices).toEqual(['dev-mac']);
+  });
+
+  it('still open and close an Archive when nothing is revealing it', async () => {
+    renderPage();
+    const archive = screen.getByRole('button', { name: strings.sessions.archiveGroup(3) });
+
+    expect(archive).not.toHaveAttribute('aria-disabled');
+    await userEvent.click(archive);
+
+    expect(useSettings.getState().archiveExpanded).toEqual(['dev-mac']);
   });
 });
 

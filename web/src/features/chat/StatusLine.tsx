@@ -84,7 +84,7 @@ function Line({
 }) {
   return (
     <p className={`status-line ${tone}`} aria-live="polite">
-      <span className={`dot ${tone === 'muted' ? '' : tone}${tone === 'running' ? ' pulse' : ''}`} aria-hidden />
+      <span className={`dot ${tone === 'muted' ? '' : tone}${tone === 'running' ? ' breathes' : ''}`} aria-hidden />
       {text}
       {children}
     </p>

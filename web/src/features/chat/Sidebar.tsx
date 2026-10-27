@@ -24,6 +24,9 @@ interface Props {
 
 export function Sidebar({ activeKey, onNewSession }: Props) {
   const sessionsRecord = useSessions((s) => s.sessions);
+  // The agent filter is shared with the Sessions page; the status filter is not.
+  // The conversation open beside this list changes status under the reader's
+  // eyes, and a filtered list would drop its row the moment it did.
   const agentFilter = useSessions((s) => s.agentFilter);
   const devices = useDevices((s) => s.devices);
   const collapsedDevices = useSettings((s) => s.collapsedDevices);
@@ -103,6 +106,7 @@ export function Sidebar({ activeKey, onNewSession }: Props) {
               online={group.device.online}
               expanded={!group.collapsed}
               onToggle={() => toggleDeviceCollapsed(group.device.device_id)}
+              locked={group.revealing}
             />
             {group.collapsed ? null : (
               <>
@@ -115,6 +119,7 @@ export function Sidebar({ activeKey, onNewSession }: Props) {
                       count={group.archive.length}
                       expanded={group.archiveExpanded}
                       onToggle={() => toggleArchiveExpanded(group.device.device_id)}
+                      locked={group.revealing}
                     />
                     {group.archiveExpanded ? (
                       <ul>{group.archive.map((session) => item(session, group.device.online))}</ul>

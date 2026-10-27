@@ -235,6 +235,22 @@ export const en = {
     allDevices: 'All devices',
     allAgents: 'All agents',
     agentFilter: 'Filter by agent',
+    /**
+     * The filter by status, a menu beside the agent and device filters. Its
+     * options read the dot a row shows: Running is the green one, Waiting both
+     * ambers and Ended the grey and the red. A status that leaves nothing says
+     * so and the way back; beside an agent or device filter it is the pair that
+     * matched nothing, and the words do not blame the status alone.
+     */
+    statusFilter: 'Filter by status',
+    allStates: 'All states',
+    statusRunning: 'Running',
+    statusWaiting: 'Waiting',
+    statusEnded: 'Ended',
+    noStatusMatches: 'Nothing matches that status.',
+    statusEmptyHint: 'Choose All states to see every session.',
+    noFilterMatches: 'No session matches these filters.',
+    filterEmptyHint: 'Clear a filter to see more sessions.',
     archiveGroup: (n: number) => `Archive · ${n}`,
     archived: 'Archived',
     /**

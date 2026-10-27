@@ -4,6 +4,7 @@ import { Plus, Search } from 'lucide-react';
 import { ArchiveGroupHeader, DeviceGroupHeader } from '../../components/GroupHeader';
 import { Button } from '../../components/Button';
 import { Menu } from '../../components/Popover';
+import { STATUS_FILTERS, type StatusFilter } from '../../components/statusFilter';
 import { strings } from '../../strings';
 import { useDevices } from '../../stores/devices';
 import { selectAgents, selectSessionLayout, useSessions } from '../../stores/sessions';
@@ -17,12 +18,49 @@ import './sessions.css';
 /** The agent filter uses this id for "no filter", so it stays a plain string. */
 const ALL = '__all__';
 
+/** The word for one option of the status filter, in the interface language. */
+function statusWord(status: StatusFilter): string {
+  switch (status) {
+    case 'all':
+      return strings.sessions.allStates;
+    case 'running':
+      return strings.sessions.statusRunning;
+    case 'waiting':
+      return strings.sessions.statusWaiting;
+    case 'ended':
+      return strings.sessions.statusEnded;
+  }
+}
+
+/**
+ * What an empty list says, from what narrowed it: a search first, then a
+ * status — on its own, where All states is the way back, or beside an agent or
+ * device filter, where the pair is what matched nothing and the status cannot
+ * be blamed alone — and otherwise there are simply no sessions yet.
+ */
+function emptyWords(
+  searching: boolean,
+  status: StatusFilter,
+  alsoFiltered: boolean,
+): { title: string; hint: string | null } {
+  if (searching) return { title: strings.sessions.noMatches, hint: null };
+  if (status !== 'all' && alsoFiltered) {
+    return { title: strings.sessions.noFilterMatches, hint: strings.sessions.filterEmptyHint };
+  }
+  if (status !== 'all') {
+    return { title: strings.sessions.noStatusMatches, hint: strings.sessions.statusEmptyHint };
+  }
+  return { title: strings.sessions.empty, hint: strings.sessions.emptyHint };
+}
+
 export function SessionsPage() {
   const sessionsRecord = useSessions((s) => s.sessions);
   const sessionsLoaded = useSessions((s) => s.loaded);
   const loadSessions = useSessions((s) => s.load);
   const agentFilter = useSessions((s) => s.agentFilter);
   const setAgentFilter = useSessions((s) => s.setAgentFilter);
+  const statusFilter = useSessions((s) => s.statusFilter);
+  const setStatusFilter = useSessions((s) => s.setStatusFilter);
   const devices = useDevices((s) => s.devices);
   const collapsedDevices = useSettings((s) => s.collapsedDevices);
   const archiveExpanded = useSettings((s) => s.archiveExpanded);
@@ -49,12 +87,23 @@ export function SessionsPage() {
       selectSessionLayout(sessionsRecord, devices, {
         deviceFilter,
         agentFilter,
+        statusFilter,
         query: needle,
         collapsedDevices,
         archiveExpanded,
       }),
-    [sessionsRecord, devices, deviceFilter, agentFilter, needle, collapsedDevices, archiveExpanded],
+    [
+      sessionsRecord,
+      devices,
+      deviceFilter,
+      agentFilter,
+      statusFilter,
+      needle,
+      collapsedDevices,
+      archiveExpanded,
+    ],
   );
+  const empty = emptyWords(needle !== '', statusFilter, agentFilter !== null || deviceFilter !== null);
 
   const openSession = (deviceId: string, sessionId: string) =>
     navigate(`/sessions/${deviceId}/${sessionId}`);
@@ -80,6 +129,16 @@ export function SessionsPage() {
             aria-label={strings.sessions.searchPlaceholder}
           />
         </label>
+        <Menu
+          ariaLabel={strings.sessions.statusFilter}
+          align="end"
+          // The "All states" row is a real option, so the menu marks it while
+          // nothing is filtered.
+          value={statusFilter}
+          onSelect={(id) => setStatusFilter(id as StatusFilter)}
+          label={statusWord(statusFilter)}
+          options={STATUS_FILTERS.map((status) => ({ id: status, label: statusWord(status) }))}
+        />
         {agents.length > 1 ? (
           <Menu
             ariaLabel={strings.sessions.agentFilter}
@@ -111,8 +170,8 @@ export function SessionsPage() {
 
       {groups.length === 0 ? (
         <div className="card empty">
-          <strong>{needle ? strings.sessions.noMatches : strings.sessions.empty}</strong>
-          {needle ? null : strings.sessions.emptyHint}
+          <strong>{empty.title}</strong>
+          {empty.hint}
         </div>
       ) : (
         groups.map((group) => (
@@ -122,6 +181,7 @@ export function SessionsPage() {
               online={group.device.online}
               expanded={!group.collapsed}
               onToggle={() => toggleDeviceCollapsed(group.device.device_id)}
+              locked={group.revealing}
             />
             {group.collapsed ? null : (
               <>
@@ -143,6 +203,7 @@ export function SessionsPage() {
                       count={group.archive.length}
                       expanded={group.archiveExpanded}
                       onToggle={() => toggleArchiveExpanded(group.device.device_id)}
+                      locked={group.revealing}
                     />
                     {group.archiveExpanded ? (
                       <ul className="session-list surface">

@@ -168,8 +168,17 @@
   transition: color var(--dur-fast) var(--ease);
 }
 
-.group-head:hover {
+.group-head:not([aria-disabled='true']):hover {
   color: var(--ink-secondary);
+}
+
+/*
+ * A header the group is held open under — a search or a status is showing it —
+ * takes no click, so it gives no hint that it would: no pointer, and no hover
+ * ink above. Nothing else about it changes.
+ */
+.group-head[aria-disabled='true'] {
+  cursor: default;
 }
 
 .group-chevron {
@@ -285,8 +294,9 @@
  * A session's dot, one tone per line of the table in docs/DESIGN.md. The tone
  * is picked by `dotTone` in dotTone.ts, never by the markup. Green means
  * working — leave it; amber means there is something for you, a finished turn
- * to read or a question to answer. Only `waiting` moves, so the one state that
- * needs the person is the one that asks for a glance.
+ * to read or a question to answer. Two things move: `waiting` pulses, so the
+ * one state that needs the person asks for a glance, and a working session
+ * breathes (`.breathes`, below), so a running one is easy to find in a list.
  */
 .dot.working {
   background: var(--running);
@@ -319,10 +329,72 @@
   }
 }
 
+/*
+ * A session at work breathes: the dot dims to 0.7 and back while a glow of its
+ * own colour swells to 2.2 times its width and fades, once in 1.8 s on a
+ * symmetric ease-in-out. Both halves move opacity and transform alone, which
+ * the compositor runs without layout or paint, so a list of running rows costs
+ * the page nothing. The glow is the dot's `::after`, out of the flow, so it
+ * never takes room from the line the dot stands in, and `background: inherit`
+ * hands it whichever green the dot wears. Only a session's own dot asks for it
+ * (`StatusDot` on a working tone, the chat status line while a turn runs): the
+ * same green also marks a connection, a tool and a device, and none of those
+ * moves.
+ */
+.dot.breathes {
+  position: relative;
+  animation: rc-breathe-core 1.8s ease-in-out infinite;
+}
+
+.dot.breathes::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: inherit;
+  opacity: 0;
+  pointer-events: none;
+  animation: rc-breathe-glow 1.8s ease-in-out infinite;
+}
+
+@keyframes rc-breathe-core {
+  0%,
+  100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes rc-breathe-glow {
+  0%,
+  100% {
+    opacity: 0;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.3;
+    transform: scale(2.2);
+  }
+}
+
+/*
+ * Reduce Motion stops every animation here. The amber alone still says what it
+ * says, and the green keeps its glow, held at rest, so a working session still
+ * looks unlike a dot that is merely green.
+ */
 @media (prefers-reduced-motion: reduce) {
   .dot.pulse,
-  .dot.waiting {
+  .dot.waiting,
+  .dot.breathes,
+  .dot.breathes::after {
     animation: none;
+  }
+
+  .dot.breathes::after {
+    opacity: 0.22;
+    transform: scale(1.8);
   }
 }
 

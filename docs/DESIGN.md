@@ -430,9 +430,13 @@ nothing else (A18); a thread it published before the rule is removed. There is n
 everything" switch — a thread no terminal is in and the apps could only resume by taking it away from
 the application that owns it would be a row that misleads on both counts.
 
-A non-empty search overrides both stored choices without writing either: it opens every device group
-that still holds a match and every Archive a match landed in. Clearing the query hands the list back
-to what was stored.
+A non-empty search, or a status filter other than All states (§ "Agents are visible and
+filterable"), overrides both stored choices without writing either: it opens every device group that
+still holds a match and every Archive a match landed in. Clearing the query or choosing All states
+hands the list back to what was stored. While either holds the groups open, the device header and
+the Archive header take no tap — folding would change nothing on screen and only flip the stored
+choice, to surface when the filter is cleared — so a header then does nothing and shows neither the
+hover ink nor the pointer where there is one, and the web marks it `aria-disabled`.
 
 **Close, then the Archive** (A39). The row action on a session the
 device is driving — `control: "remote"`, whoever created it, not archived — is **Close** (zh
@@ -455,9 +459,40 @@ already folded inside the collapsed Archive, so it read as a control that did no
 **Agents are visible and filterable.** Every row carries an agent chip on its meta line — the
 agent's name from § "Agents", falling back to the raw agent id, in the one quiet tint every agent
 shares. The Sessions page adds an agent filter: a menu of "All agents" and the agents actually
-present, each with its logo and its name, defaulting to All and not persisted. It applies before the grouping, so a device whose sessions it removes disappears with
-them. The filter lives in the store both lists read, so the page and the chat sidebar never
-disagree.
+present, each with its logo and its name, defaulting to All and not persisted. It applies before the
+grouping, so a device whose sessions it removes disappears with them. The filter lives in the store
+both lists read, so the page and the chat sidebar never disagree.
+
+**Sessions can be filtered by status.** The Sessions page also carries a status filter: a menu of
+**All states**, **Running**, **Waiting** and **Ended** (全部状态, 正在运行, 正在等待, 已结束),
+defaulting to All states and not persisted. It sits between the search and the agent filter. It
+reads the dot a row shows — `dotTone`, so what the person filters on is what they see — and the
+three options that narrow the list split the five tones between them, so every session is in
+exactly one:
+
+| Option | The dot | Tones | What the session reports |
+| --- | --- | --- | --- |
+| All states | any | all five | everything |
+| Running | green | `working` | `starting` or `running` |
+| Waiting | both ambers | `waiting`, `live` | `needs_approval` or `needs_input`; `idle` or `readonly` while `control` is not `none` |
+| Ended | grey and red | `off`, `failed` | `stopped`; `idle` or `readonly` with `control: "none"`; `error`; any state on a device that is offline or that the gateway does not list; a state this build has never heard of |
+
+Waiting is the legend's "For you": a question or an approval still to answer and a finished turn to
+read are one colour to the eye, so one option holds both. Ended holds a session on a device that is
+gone, because its dot is grey whatever the session last reported, and an errored one, because its
+dot is red. The filter applies before the grouping, together with the search, the agent filter and,
+where there is one, the device filter, so a device whose sessions all drop out is not drawn. Like a
+search it shows what it found: a device the person folded and an Archive holding a match are open
+while it is on, without writing the stored choices (Ended is mostly what an Archive holds), and
+their headers take no tap meanwhile (§ "Session lists: by device, then by activity"). It lives in
+the store the Sessions page reads, so going into a conversation and coming back keeps it; it is
+never written down, and signing out puts the search, the agent filter and the status filter back to
+a launch's, leaving the stored folds, which are the device's. The chat sidebar does not apply it:
+the conversation open beside that list changes status under the reader, and a filtered sidebar would
+drop its row the moment it did; it goes on sharing the agent filter. When nothing matches, the empty
+state blames the search first, then the status alone — "Nothing matches that status" with the way
+back, "Choose All states to see every session" — and, when an agent or device filter is on as well,
+says "No session matches these filters" (没有符合这些筛选条件的会话), since no one choice undoes a pair.
 
 ## Surfaces, rows and controls
 
@@ -945,14 +980,15 @@ The word beside the dot on a session's row is the session's **origin**, not its 
 **"Terminal"** for a session a terminal started (`origin: terminal`),
 **"Remote launch"** for one started from the phone or the browser (`origin: remote`) — one word
 for both apps, because which app pressed New session is nobody's business afterwards. The state is
-the dot's alone: green working, amber for you — pulsing while a question or a permission waits,
-solid when a turn has finished and its result is there — grey when nothing holds the session or the
-machine is offline, red on an error. "running", "idle", "terminal · attached" and "device offline"
-leave the row; a row that read "running" beside a green dot said the same thing twice, and one that
-read "terminal · attached" beside an amber dot said two different things. The word takes the
-secondary ink whatever the state; only the dot carries colour. A hand-archived row still says
-"Archived" before its origin. The chat sidebar's rows follow the same rule: their sub-line is the
-folder and the time, and the dot is the state. zh-Hans: 终端 / 远程启动.
+the dot's alone: green working, and breathing so that a running row is easy to find, amber for you —
+pulsing while a question or a permission waits, solid when a turn has finished and its result is
+there — grey when nothing holds the session or the machine is offline, red on an error. "running",
+"idle", "terminal · attached" and "device offline" leave the row; a row that read "running" beside a
+green dot said the same thing twice, and one that read "terminal · attached" beside an amber dot
+said two different things. The word takes the secondary ink whatever the state; only the dot
+carries colour. A hand-archived row still says "Archived" before its origin. The chat sidebar's rows
+follow the same rule: their sub-line is the folder and the time, and the dot is the state. zh-Hans:
+终端 / 远程启动.
 
 ### A legend, once, and quiet
 
@@ -962,8 +998,10 @@ row of the list on iOS — reading the four dots with their meanings: ● Workin
 ● Not running ● Error (运行中 / 等你处理 / 未运行 / 出错). Caption type, secondary ink, the dots at
 the size the rows use, no box, no border, no title. Four entries, not five: the pulsing amber and
 the solid amber are one colour to the eye, and "For you" covers both a question waiting and a
-finished turn to look at. It is not drawn on the chat sidebar or the Devices screen, and not when
-the list is empty, where the empty state speaks instead.
+finished turn to look at. Nothing in it moves: its working dot is the plain green, not the
+breathing one, because a key to the colours has no state of its own to announce. It is not drawn on
+the chat sidebar or the Devices screen, and not when the list is empty, where the empty state speaks
+instead.
 
 ### Messages from other agents
 
@@ -1216,24 +1254,34 @@ app to the background restores it at once.
 
 | Tone | Looks | When |
 | --- | --- | --- |
-| `working` | green, solid | `starting`, `running`: the agent is busy and needs nobody |
+| `working` | green, breathing | `starting`, `running`: the agent is busy and needs nobody |
 | `waiting` | amber, pulsing | `needs_approval`, `needs_input`: the agent is blocked on the user |
 | `live` | amber, solid | `idle` or `readonly` while `control` is `remote`, `terminal` or `shared` — the session is alive and quiet: a turn finished and its result is there to be looked at, a terminal is still open, or the device holds it |
 | `off` | grey | `stopped`, or `idle` / `readonly` with `control: "none"` (the CLI exited and the session is resumable), or the device is offline whatever the state |
 | `failed` | red, solid | `error` |
 
-The colour carries the meaning on its own, so nobody has to tell a steady dot from a pulsing one
-before deciding whether to look: **green means working — leave it; amber means there is something
-for you** — a finished turn to read, or a question to answer. Only `waiting` animates, so the one
-state that needs the person is the one that moves, and a running session is a steady green that
-asks for nothing (before this rule, `working` pulsed green and a finished
-turn was a steady green that looked the same as a running one at a glance). The pulse stops under
-Reduce Motion, where the amber alone still says it. A finished session stays amber until it runs
-again or is stopped: the apps do not track whether its result was read, and a dot that goes quiet
-because a screen was glanced at would be guessing. The dot's accessibility label stays the state
-word and its tooltip names the tone — "Working", "Waiting for you", "Done", "Off", "Failed". A device's own dot is
-not a session dot and does not follow this table: it is green when the device is online and a grey
-ring when it is not.
+The colour carries the meaning on its own, so nobody has to tell a steady dot from a moving one
+before deciding whether to look: **green means working; amber means there is something for you** — a
+finished turn to read, or a question to answer. Two dots move. `waiting` pulses, so the one state
+that needs the person asks for a glance (before this rule, `working` pulsed green and a finished
+turn was a steady green that looked the same as a running one at a glance). And a working session
+**breathes**, because a running session that asks for nothing was hard to find in a list. One breath
+is 1.8 s on a symmetric ease-in-out: the dot dims to 0.7 of its opacity and back while a glow of its
+own colour behind it, the halo, swells from the dot's own width to 2.2 times it and fades from
+nothing to 0.30 opacity and back. The halo is drawn behind the dot and out of the layout, so it
+takes no room from the row, and it costs nothing in the app's own code per frame — a CSS animation
+of opacity and transform on the web — with no timer anywhere. Only a session's own dot breathes: on
+a Sessions row, in the chat sidebar and on the chat's status line. The same green elsewhere is not a
+session at work and stands still: the legend's key, the dot beside the gateway in Settings, a
+running tool's, a pairing step's and a device's. Under reduced motion (`prefers-reduced-motion` on
+the web) nothing moves: the amber pulse stops, where the amber alone still says it, and a working
+dot keeps its halo held at rest — the dot at full opacity, the halo at 1.8 times its width and 0.22
+opacity — so a running session still looks unlike a dot that is merely green. A finished session
+stays amber until it runs again or is stopped: the apps do not track whether its result was read,
+and a dot that goes quiet because a screen was glanced at would be guessing. The dot's accessibility
+label stays the state word and its tooltip names the tone — "Working", "Waiting for you", "Done",
+"Off", "Failed". A device's own dot is not a session dot and does not follow this table: it is green
+when the device is online and a grey ring when it is not.
 
 Colour is never the only signal: the dot always sits next to the word.
 

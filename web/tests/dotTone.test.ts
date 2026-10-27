@@ -58,8 +58,19 @@ describe('dotTone', () => {
     expect(dotTone('readonly', 'shared', true)).toBe('live');
   });
 
+  it('claims nothing for a state this build has never heard of', () => {
+    // A newer device can report a state the table does not list.
+    const unknown = 'compacting' as SessionState;
+
+    for (const control of CONTROLS) {
+      expect(dotTone(unknown, control, true), control).toBe('off');
+      expect(dotTone(unknown, control, false), control).toBe('off');
+    }
+  });
+
   it('marks a blocked session differently from a running one', () => {
-    // `waiting` is the one tone that animates, so the two must not share it.
+    // A question pulses amber and a running turn breathes green, and only the
+    // first is asking for anything, so the two must not share a tone.
     expect(dotTone('running', 'remote', true)).toBe('working');
     expect(dotTone('needs_input', 'remote', true)).toBe('waiting');
     expect(dotTone('needs_approval', 'remote', true)).toBe('waiting');

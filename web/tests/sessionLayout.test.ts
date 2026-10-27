@@ -289,6 +289,216 @@ describe('selectSessionLayout', () => {
   });
 });
 
+/**
+ * The filter by status reads the dot each session shows on its own device, so
+ * `dev-b` — the offline device — shows every one of its sessions grey.
+ */
+describe('selectSessionLayout with a status filter', () => {
+  const SESSIONS = index([
+    session({ id: 'working', state: 'running', minutesAgo: 1 }),
+    session({ id: 'starting', state: 'starting', minutesAgo: 2 }),
+    session({ id: 'asking', state: 'needs_approval', minutesAgo: 3 }),
+    session({ id: 'questioning', state: 'needs_input', minutesAgo: 4 }),
+    session({ id: 'done', state: 'idle', minutesAgo: 5 }),
+    session({ id: 'terminal', state: 'readonly', control: 'terminal', minutesAgo: 6 }),
+    session({ id: 'failed', state: 'error', minutesAgo: 7 }),
+    session({ id: 'stopped', state: 'stopped', control: 'none', minutesAgo: 8 }),
+    session({ id: 'exited', state: 'idle', control: 'none', minutesAgo: 9 }),
+    session({ id: 'away', device: 'dev-b', state: 'running', minutesAgo: 10 }),
+  ]);
+
+  /** Every row a layout lets through, active and Archive, by id. */
+  const shown = (options: Parameters<typeof selectSessionLayout>[2], sessions = SESSIONS): string[] =>
+    selectSessionLayout(sessions, DEVICES, options)
+      .flatMap((group) => [...group.active, ...group.archive])
+      .map((s) => s.session_id)
+      .sort();
+
+  it('narrows every list to the sessions whose dot is in the chosen status', () => {
+    expect(shown({ statusFilter: 'all' })).toEqual([
+      'asking',
+      'away',
+      'done',
+      'exited',
+      'failed',
+      'questioning',
+      'starting',
+      'stopped',
+      'terminal',
+      'working',
+    ]);
+    expect(shown({ statusFilter: 'running' })).toEqual(['starting', 'working']);
+    expect(shown({ statusFilter: 'waiting' })).toEqual(['asking', 'done', 'questioning', 'terminal']);
+    // The one on the offline device is grey, so it is Ended, whatever it last said.
+    expect(shown({ statusFilter: 'ended' })).toEqual(['away', 'exited', 'failed', 'stopped']);
+  });
+
+  it('shows every session under exactly one narrowing status', () => {
+    const everything = shown({});
+    const narrowed = (['running', 'waiting', 'ended'] as const).flatMap((statusFilter) =>
+      shown({ statusFilter }),
+    );
+
+    expect(narrowed.sort()).toEqual(everything);
+  });
+
+  it('shows everything when no status is given', () => {
+    expect(shown({})).toEqual(shown({ statusFilter: 'all' }));
+  });
+
+  it('counts a session on a device the gateway never listed as offline', () => {
+    const orphan = index([session({ id: 'orphan', device: 'dev-gone', state: 'running' })]);
+
+    expect(shown({ statusFilter: 'running' }, orphan)).toEqual([]);
+    expect(shown({ statusFilter: 'ended' }, orphan)).toEqual(['orphan']);
+  });
+
+  it('drops a device whose sessions the status removed', () => {
+    const running = selectSessionLayout(SESSIONS, DEVICES, { statusFilter: 'running' });
+    expect(running.map((g) => g.device.device_id)).toEqual(['dev-a']);
+
+    const ended = selectSessionLayout(SESSIONS, DEVICES, { statusFilter: 'ended' });
+    expect(ended.map((g) => g.device.device_id).sort()).toEqual(['dev-a', 'dev-b']);
+  });
+
+  it('combines with the agent filter, the device filter and a search', () => {
+    const sessions = index([
+      session({ id: 'claude-run', agent: 'claude', state: 'running', title: 'Parser' }),
+      session({ id: 'codex-run', agent: 'codex', state: 'running', title: 'Parser' }),
+      session({ id: 'claude-done', agent: 'claude', state: 'idle', title: 'Parser' }),
+      session({ id: 'claude-docs', agent: 'claude', state: 'running', title: 'Docs' }),
+      session({ id: 'away-run', device: 'dev-b', agent: 'claude', state: 'running', title: 'Parser' }),
+    ]);
+    const running = { statusFilter: 'running' } as const;
+
+    expect(shown(running, sessions)).toEqual(['claude-docs', 'claude-run', 'codex-run']);
+    expect(shown({ ...running, agentFilter: 'claude' }, sessions)).toEqual(['claude-docs', 'claude-run']);
+    expect(shown({ ...running, agentFilter: 'claude', query: 'parser' }, sessions)).toEqual(['claude-run']);
+    expect(shown({ ...running, agentFilter: 'codex', query: 'docs' }, sessions)).toEqual([]);
+    expect(shown({ ...running, deviceFilter: 'dev-b' }, sessions)).toEqual([]);
+    expect(shown({ statusFilter: 'ended', deviceFilter: 'dev-b' }, sessions)).toEqual(['away-run']);
+  });
+
+  it('shows what it found, like a search: it unfolds the device and opens the Archive', () => {
+    const sessions = index([
+      session({ id: 'live', state: 'running' }),
+      session({ id: 'gone', state: 'stopped', control: 'none' }),
+    ]);
+    const collapsedDevices = ['dev-a'];
+
+    const plain = find(selectSessionLayout(sessions, DEVICES, { collapsedDevices }), 'dev-a');
+    expect(plain.collapsed).toBe(true);
+    expect(plain.archiveExpanded).toBe(false);
+
+    const ended = find(
+      selectSessionLayout(sessions, DEVICES, { collapsedDevices, statusFilter: 'ended' }),
+      'dev-a',
+    );
+    expect(ended.collapsed).toBe(false);
+    expect(ended.archiveExpanded).toBe(true);
+    expect(ids(ended.archive)).toEqual(['gone']);
+
+    // A status that finds nothing in the Archive has nothing there to open.
+    const running = find(
+      selectSessionLayout(sessions, DEVICES, { collapsedDevices, statusFilter: 'running' }),
+      'dev-a',
+    );
+    expect(running.collapsed).toBe(false);
+    expect(running.archiveExpanded).toBe(false);
+    expect(ids(running.active)).toEqual(['live']);
+    expect(collapsedDevices).toEqual(['dev-a']);
+  });
+
+  it('hands the folds back once All states is chosen, and reveals nothing under it', () => {
+    const sessions = index([
+      session({ id: 'live', state: 'running' }),
+      session({ id: 'gone', state: 'stopped', control: 'none' }),
+    ]);
+
+    const everything = find(
+      selectSessionLayout(sessions, DEVICES, {
+        collapsedDevices: ['dev-a'],
+        archiveExpanded: [],
+        statusFilter: 'all',
+      }),
+      'dev-a',
+    );
+
+    expect(everything.collapsed).toBe(true);
+    expect(everything.archiveExpanded).toBe(false);
+  });
+
+  it('keeps an Archive the reader opened open while a status narrows the list', () => {
+    const sessions = index([
+      session({ id: 'live', state: 'running' }),
+      session({ id: 'gone', state: 'stopped', control: 'none' }),
+    ]);
+
+    const group = find(
+      selectSessionLayout(sessions, DEVICES, { archiveExpanded: ['dev-a'], statusFilter: 'running' }),
+      'dev-a',
+    );
+
+    expect(group.archiveExpanded).toBe(true);
+  });
+});
+
+/**
+ * A search or a status shows its groups whatever the user folded, so a click on
+ * a group's header would change nothing on screen and only flip the stored
+ * choice: the layout says so on every group, and the headers take no click.
+ */
+describe('selectSessionLayout marking the groups a search or a status is showing', () => {
+  const SESSIONS = index([
+    session({ id: 'live', state: 'running', agent: 'claude' }),
+    session({ id: 'asking', state: 'needs_input', agent: 'claude' }),
+    session({ id: 'gone', state: 'stopped', control: 'none', agent: 'codex' }),
+    session({ id: 'away', device: 'dev-b', state: 'idle', agent: 'claude' }),
+  ]);
+
+  const groups = (options: Parameters<typeof selectSessionLayout>[2]) =>
+    selectSessionLayout(SESSIONS, DEVICES, options);
+
+  it('marks every group while a search is showing it', () => {
+    const found = groups({ query: 'a' });
+
+    expect(found.length).toBeGreaterThan(0);
+    expect(found.every((group) => group.revealing)).toBe(true);
+  });
+
+  it('marks every group while a status other than All states is showing it', () => {
+    for (const statusFilter of ['running', 'waiting', 'ended'] as const) {
+      const found = groups({ statusFilter });
+
+      expect(found.length, statusFilter).toBeGreaterThan(0);
+      expect(found.every((group) => group.revealing), statusFilter).toBe(true);
+    }
+  });
+
+  it('marks nothing while nothing but an agent or a device narrows the list', () => {
+    for (const options of [
+      {},
+      { statusFilter: 'all' },
+      { query: '   ' },
+      { agentFilter: 'claude' },
+      { deviceFilter: 'dev-a' },
+      { agentFilter: 'claude', deviceFilter: 'dev-b' },
+    ] as const) {
+      const found = groups(options);
+
+      expect(found.length, JSON.stringify(options)).toBeGreaterThan(0);
+      expect(found.some((group) => group.revealing), JSON.stringify(options)).toBe(false);
+    }
+  });
+
+  it('marks a group even when the folds the user stored say it was shut', () => {
+    const group = find(groups({ statusFilter: 'ended', collapsedDevices: ['dev-a'] }), 'dev-a');
+
+    expect(group.revealing).toBe(true);
+    expect(group.collapsed).toBe(false);
+  });
+});
+
 describe('selectAgents', () => {
   it('lists the agents the sessions actually run, once each', () => {
     const sessions = index([
