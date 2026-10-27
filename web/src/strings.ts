@@ -264,6 +264,19 @@ export const en = {
     closeBody: 'The agent is still working; what it has not finished is lost.',
     open: 'Open session',
     /**
+     * A55: renaming a session from the row's menu or the chat header. The
+     * dialog's buttons are the common words. The two refusals that mean one
+     * thing here have a sentence of their own: `conflict` is a busy terminal,
+     * and `unsupported` a session that cannot be named from an app; every other
+     * code keeps the app's words for it.
+     */
+    renameTitle: 'Rename session',
+    renameLabel: 'Session name',
+    renameEmpty: 'Enter a name.',
+    renameTooLong: (max: number) => `Names can be up to ${max} characters.`,
+    renameBusy: 'The session is busy. Try again later.',
+    renameUnsupported: "This session can't be renamed from here. Rename it in its terminal.",
+    /**
      * A47: what a screen reader hears for the red dot of a session that
      * stopped working and that nobody on the account has opened since.
      */

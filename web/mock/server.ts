@@ -72,6 +72,7 @@ import {
 import { ServedSends, needsResync, replayFor } from './replay';
 import { filesField, heldTs, hold, readQueueTs } from './queue';
 import { dirEntries, makeDir } from './dirs';
+import { planRename } from './rename';
 import { emptyPreferences, patchPreferences } from './preferences';
 import { FakeShell } from './shell';
 import { clearMark, moveState } from './unseen';
@@ -1414,14 +1415,25 @@ function handleAppFrame(conn: AppConn, frame: Record<string, unknown>): void {
           return replyError(conn, id, 'bad_request', 'unknown speed tier');
         }
       }
-      // A40: a setting the device has to type lands when the terminal has
-      // taken it, and only into a terminal that is idle. Nothing is queued.
-      if (typedSession(session, agentFor(session)) && settingKeys(frame).length > 0) {
+      // A55: the name is read and refused before anything is applied, so a
+      // refused name leaves the settings that came with it unapplied too.
+      const plan = planRename(session, agentFor(session), frame, state.sessions);
+      if (plan.outcome === 'refused') {
+        return replyError(conn, id, plan.refusal.code, plan.refusal.message);
+      }
+      const title = plan.outcome === 'rename' ? plan.title : undefined;
+      // A40, A55: a setting or a name the device has to type lands when the
+      // terminal has taken it. A busy terminal was refused above for a name,
+      // and is refused here for a setting. Nothing is queued.
+      if (
+        typedSession(session, agentFor(session)) &&
+        (settingKeys(frame).length > 0 || title !== undefined)
+      ) {
         if (terminalBusy(session)) return replyError(conn, id, 'conflict', TERMINAL_BUSY);
-        setTimeout(() => applySet(conn, id, sessionId, frame), TYPING_MS);
+        setTimeout(() => applySet(conn, id, sessionId, frame, title), TYPING_MS);
         return;
       }
-      applySet(conn, id, sessionId, frame);
+      applySet(conn, id, sessionId, frame, title);
       return;
     }
 
@@ -1740,26 +1752,34 @@ function historyEvents(all: readonly SessionEvent[], beforeSeq: number): Session
 
 /**
  * Apply what `session.set` asked for, answer with the session, and publish the
- * change as `meta` (5.11) so a second app on it sees the change without
+ * settings as `meta` (5.11) so a second app on it sees the change without
  * asking. For a typed session this runs once the terminal has taken it.
+ *
+ * A55: `title` is the name the agent will hold, which `planRename` already
+ * normalised and may have suffixed; it is applied last, after the settings. A
+ * name is the user's and moves nothing in the list, so it neither touches
+ * `updated_at` nor travels as a `meta` event (which would).
  */
 function applySet(
   conn: AppConn,
   id: unknown,
   sessionId: string,
   frame: Record<string, unknown>,
+  title?: string,
 ): void {
   const session = findSession(sessionId);
   if (!session) return replyError(conn, id, 'not_found', 'no such session');
+  const setsSettings = settingKeys(frame).length > 0;
   const setsSpeed = 'speed' in frame;
   if (setsSpeed) session.speed = frame.speed as string | null;
   if (typeof frame.model === 'string') session.model = frame.model;
   if (typeof frame.permission_mode === 'string') session.permission_mode = frame.permission_mode;
   if (typeof frame.effort === 'string') session.effort = frame.effort;
-  if (typeof frame.title === 'string') session.title = frame.title;
-  session.updated_at = Date.now();
+  if (setsSettings) session.updated_at = Date.now();
+  if (title !== undefined) session.title = title;
   broadcast({ type: 'session.updated', session });
   reply(conn, id, { session });
+  if (!setsSettings) return;
   emit(sessionId, {
     seq: nextSeq(sessionId),
     ts: Date.now(),

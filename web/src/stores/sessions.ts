@@ -48,6 +48,15 @@ interface SessionsState {
    * unowned and stopped, which is what the list then draws.
    */
   close: (session: Session) => Promise<void>;
+  /**
+   * A55: rename a session in the agent itself. Nothing is drawn ahead of the
+   * device: it normalises the name, may suffix it, and answers with the
+   * session carrying the name the agent now holds, which is what the list then
+   * draws. It rejects with the device's refusal, a `RequestError` whose code
+   * is `conflict` for a busy terminal and `unsupported` for a session that
+   * cannot be named from here.
+   */
+  rename: (sessionId: string, title: string) => Promise<Session>;
   takeover: (session: Session) => Promise<Session>;
   /**
    * A47: the person has this conversation in front of them. `session.seen`
@@ -112,6 +121,12 @@ export const useSessions = create<SessionsState>((set, get) => ({
       archived: true,
     });
     get().upsert(result.session);
+  },
+
+  rename: async (sessionId, title) => {
+    const result = await rpc('session.set', { session_id: sessionId, title });
+    get().upsert(result.session);
+    return result.session;
   },
 
   takeover: async (session) => {

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router';
 import { Plus, Search } from 'lucide-react';
 import { Mark } from '../../layout/Mark';
@@ -14,7 +15,9 @@ import {
   useSessions,
 } from '../../stores/sessions';
 import { useSettings } from '../../stores/settings';
-import type { Session } from '../../protocol/types';
+import type { Device, Session } from '../../protocol/types';
+import { SessionRenameDialog } from '../sessions/SessionRenameDialog';
+import { deviceCanRename } from '../sessions/rename';
 import { SidebarItem } from './SidebarItem';
 
 interface Props {
@@ -35,6 +38,9 @@ export function Sidebar({ activeKey, onNewSession }: Props) {
   const toggleArchiveExpanded = useSettings((s) => s.toggleArchiveExpanded);
   const front = useFront((s) => s.key);
   const [query, setQuery] = useState('');
+  // A55: the session whose Rename dialog is open, kept here and not in a row so
+  // that the dialog outlives a row that moves between lists.
+  const [renaming, setRenaming] = useState<Session | null>(null);
   const navigate = useNavigate();
 
   const needle = query.trim();
@@ -54,18 +60,19 @@ export function Sidebar({ activeKey, onNewSession }: Props) {
     [sessionsRecord],
   );
 
-  const item = (session: Session, online: boolean) => {
+  const item = (session: Session, device: Device) => {
     const key = `${session.device_id}/${session.session_id}`;
     return (
       <SidebarItem
         key={key}
         session={session}
-        online={online}
+        online={device.online}
         active={key === activeKey}
         // A47: the conversation in front of the person is being looked at, so
         // its row never shows the dot the `session.seen` on its way clears.
         unseen={showsUnseenDot(session, front)}
         onOpen={() => navigate(`/sessions/${key}`)}
+        onRename={deviceCanRename(device, session) ? setRenaming : undefined}
       />
     );
   };
@@ -111,7 +118,7 @@ export function Sidebar({ activeKey, onNewSession }: Props) {
             {group.collapsed ? null : (
               <>
                 {group.active.length > 0 ? (
-                  <ul>{group.active.map((session) => item(session, group.device.online))}</ul>
+                  <ul>{group.active.map((session) => item(session, group.device))}</ul>
                 ) : null}
                 {group.archive.length > 0 ? (
                   <>
@@ -122,7 +129,7 @@ export function Sidebar({ activeKey, onNewSession }: Props) {
                       locked={group.revealing}
                     />
                     {group.archiveExpanded ? (
-                      <ul>{group.archive.map((session) => item(session, group.device.online))}</ul>
+                      <ul>{group.archive.map((session) => item(session, group.device))}</ul>
                     ) : null}
                   </>
                 ) : null}
@@ -135,6 +142,15 @@ export function Sidebar({ activeKey, onNewSession }: Props) {
       <footer className="sidebar-foot hint">
         {strings.chat.sidebarFooter(devices.length, waiting)}
       </footer>
+
+      {/* On the body, because this pane is hidden below 1024 px and a dialog
+          inside it would go with it. */}
+      {renaming
+        ? createPortal(
+            <SessionRenameDialog session={renaming} onClose={() => setRenaming(null)} />,
+            document.body,
+          )
+        : null}
     </aside>
   );
 }

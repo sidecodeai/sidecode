@@ -51,6 +51,10 @@ export const claudeAgent: AgentInfo = {
     'history',
     // A40: the shim's pseudo-terminal takes a typed `/compact`.
     'commands',
+    // A55: the SDK's `rename_session` for a session the device drives, a typed
+    // `/rename` for one it is attached to, and rows appended to the transcript
+    // for one nothing holds.
+    'rename',
   ],
   // Amendment A10: this device installs the `claude` shim, so a terminal
   // session started through it can be attached instead of taken over.
@@ -136,6 +140,10 @@ export const codexAgent: AgentInfo = {
     'history',
     // A27: the daemon has a method behind each command in `commandsFor`.
     'commands',
+    // A55: `thread/name/set`, through the daemon or the runner. It is listed
+    // wherever the device can name a Codex session at all; a thread nothing can
+    // reach is refused with `unsupported` (`rename.ts`).
+    'rename',
   ],
   // A21: Codex's own service tier. The apps draw the lightning only because
   // this list is non-empty; Claude lists none and draws nothing.
@@ -222,7 +230,17 @@ export const grokAgent: AgentInfo = {
   // A27: Grok Build advertises its whole list over ACP when a session opens.
   // A49: its prompts take no images, so the device writes each attachment to
   // disk and the prompt names it.
-  capabilities: ['worktree', 'interrupt', 'queue', 'attachments', 'effort', 'history', 'commands'],
+  // A55: Grok Build is renamed through its leader, so only while that is ready.
+  capabilities: [
+    'worktree',
+    'interrupt',
+    'queue',
+    'attachments',
+    'effort',
+    'history',
+    'commands',
+    'rename',
+  ],
   // A28: `[cli] use_leader` is on here, so every `grok` this machine starts
   // joins the leader the device is a client of. `session/cancel` and
   // `session/set_config_option` act for everyone in the session, and since A49
@@ -240,6 +258,9 @@ export const grokAgent: AgentInfo = {
 /** A28: the same agent on a device whose config has not turned the leader on. */
 export const grokNoLeader: AgentInfo = {
   ...grokAgent,
+  // A55: with no leader the device cannot name a Grok session, so it lists no
+  // `rename` and an app offers none.
+  capabilities: grokAgent.capabilities.filter((capability) => capability !== 'rename'),
   attach_ready: false,
   shared_interrupt: false,
   shared_settings: false,
@@ -286,6 +307,8 @@ export const piAgent: AgentInfo = {
     'effort',
     'history',
     'commands',
+    // A55: RPC `set_session_name`, or the extension's `set_name` in a running pi.
+    'rename',
   ],
   attach: 'extension',
   attach_ready: true,

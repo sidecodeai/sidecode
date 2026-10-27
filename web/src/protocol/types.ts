@@ -44,6 +44,11 @@ export type Capability =
   | 'history'
   /** A27: the agent's sessions can list and run slash commands from an app. */
   | 'commands'
+  /**
+   * A55: the device can rename this agent's sessions in the agent itself
+   * (`session.set` with `title`). An app offers Rename only while it is listed.
+   */
+  | 'rename'
   | (string & {});
 
 /**

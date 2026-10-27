@@ -21,6 +21,7 @@ const header = (session: Session) =>
         session={session}
         agent={null}
         deviceName="mac-studio-office"
+        deviceOnline
         todos={[]}
         stopping={false}
         onStop={vi.fn()}

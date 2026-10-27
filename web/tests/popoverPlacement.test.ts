@@ -3,7 +3,7 @@
  * the clamp are tested here rather than through a rendered menu.
  */
 import { describe, expect, it } from 'vitest';
-import { placementFor } from '../src/components/popoverPlacement';
+import { placementAt, placementFor } from '../src/components/popoverPlacement';
 
 const VIEWPORT = { width: 1280, height: 800 };
 const PANEL = { width: 200, height: 120 };
@@ -62,5 +62,48 @@ describe('placementFor', () => {
 
     const left = placementFor(trigger(4, 100), PANEL, VIEWPORT, 'end', 'bottom');
     expect(left.left).toBe(8);
+  });
+});
+
+/** A55: a context menu opens with its corner at the pointer, as a native one does. */
+describe('placementAt', () => {
+  it('opens below and to the right of the pointer, corner on it', () => {
+    expect(placementAt({ x: 400, y: 100 }, PANEL, VIEWPORT)).toEqual({
+      left: 400,
+      top: 100,
+      bottom: null,
+    });
+  });
+
+  it('flips above the pointer when the panel does not fit below', () => {
+    const at = placementAt({ x: 400, y: 760 }, PANEL, VIEWPORT);
+
+    expect(at.top).toBeNull();
+    expect(at.bottom).toBe(40);
+  });
+
+  it('stays below when neither side fits but below has more room', () => {
+    const at = placementAt({ x: 400, y: 30 }, PANEL, { width: 1280, height: 100 });
+
+    expect(at.top).toBe(30);
+    expect(at.bottom).toBeNull();
+  });
+
+  it('goes above when neither side fits but above has more room', () => {
+    const at = placementAt({ x: 400, y: 70 }, PANEL, { width: 1280, height: 100 });
+
+    expect(at.top).toBeNull();
+    expect(at.bottom).toBe(30);
+  });
+
+  it('keeps the panel inside the viewport on both edges', () => {
+    expect(placementAt({ x: 1270, y: 100 }, PANEL, VIEWPORT).left).toBe(1072);
+    expect(placementAt({ x: 2, y: 100 }, PANEL, VIEWPORT).left).toBe(8);
+  });
+
+  it('puts a panel wider than the viewport at the edge rather than off it', () => {
+    expect(placementAt({ x: 300, y: 100 }, { width: 500, height: 40 }, { width: 400, height: 800 }).left).toBe(
+      8,
+    );
   });
 });

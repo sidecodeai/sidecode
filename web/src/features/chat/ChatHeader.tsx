@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { ArrowLeft, CheckSquare, Square } from 'lucide-react';
 import { Link } from 'react-router';
 import { Popover } from '../../components/Popover';
@@ -5,6 +6,8 @@ import { compactNumber, duration, tildePath } from '../../lib/format';
 import { sessionTitle, strings } from '../../strings';
 import { useSettings } from '../../stores/settings';
 import { useNow } from '../../lib/useNow';
+import { SessionRenameDialog } from '../sessions/SessionRenameDialog';
+import { canRename } from '../sessions/rename';
 import { canInterruptShared } from './attach';
 import type { AgentInfo, Session, TodoItem } from '../../protocol/types';
 
@@ -12,12 +15,21 @@ interface Props {
   session: Session;
   agent: AgentInfo | null;
   deviceName: string;
+  deviceOnline: boolean;
   todos: TodoItem[];
   stopping: boolean;
   onStop: () => void;
 }
 
-export function ChatHeader({ session, agent, deviceName, todos, stopping, onStop }: Props) {
+export function ChatHeader({
+  session,
+  agent,
+  deviceName,
+  deviceOnline,
+  todos,
+  stopping,
+  onStop,
+}: Props) {
   // A7: a terminal-driven turn also reports `running`, but only the terminal
   // can stop it — the user has to take over first. A10: an attached session can
   // be stopped only when the device says the attachment carries an interrupt.
@@ -32,6 +44,9 @@ export function ChatHeader({ session, agent, deviceName, todos, stopping, onStop
   const done = todos.length > 0 ? doneCount : (session.todos?.done ?? 0);
   const tokens = session.usage?.total_tokens ?? 0;
   const elapsed = session.turn ? duration(now - session.turn.started_at) : null;
+  // A55: the title is a control only while the device can rename the session.
+  const [renaming, setRenaming] = useState<Session | null>(null);
+  const offersRename = canRename(agent, deviceOnline);
 
   return (
     <header className="chat-header">
@@ -39,7 +54,21 @@ export function ChatHeader({ session, agent, deviceName, todos, stopping, onStop
         <ArrowLeft size={17} />
       </Link>
       <div className="chat-heading">
-        <h1>{sessionTitle(session)}</h1>
+        <h1 className={offersRename ? 'chat-title-editable' : undefined}>
+          {offersRename ? (
+            <button
+              type="button"
+              className="chat-title-btn"
+              title={strings.common.rename}
+              aria-haspopup="dialog"
+              onClick={() => setRenaming(session)}
+            >
+              {sessionTitle(session)}
+            </button>
+          ) : (
+            sessionTitle(session)
+          )}
+        </h1>
         <p className="mono chat-sub">
           {deviceName}:{tildePath(session.cwd)}
           {session.git ? ` · ${session.git.branch}` : ''}
@@ -85,6 +114,10 @@ export function ChatHeader({ session, agent, deviceName, todos, stopping, onStop
           </button>
         ) : null}
       </div>
+
+      {renaming ? (
+        <SessionRenameDialog session={renaming} onClose={() => setRenaming(null)} />
+      ) : null}
     </header>
   );
 }

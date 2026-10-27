@@ -9,10 +9,13 @@ import { strings } from '../../strings';
 import { useDevices } from '../../stores/devices';
 import { selectAgents, selectSessionLayout, useSessions } from '../../stores/sessions';
 import { useSettings } from '../../stores/settings';
+import type { Session } from '../../protocol/types';
 import { AgentOption } from './AgentOption';
 import { NewSessionDrawer } from './NewSessionDrawer';
 import { SessionLegend } from './SessionLegend';
+import { SessionRenameDialog } from './SessionRenameDialog';
 import { SessionRow } from './SessionRow';
+import { deviceCanRename } from './rename';
 import './sessions.css';
 
 /** The agent filter uses this id for "no filter", so it stays a plain string. */
@@ -69,6 +72,9 @@ export function SessionsPage() {
   const [query, setQuery] = useState('');
   const [deviceFilter, setDeviceFilter] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  // A55: the session whose Rename dialog is open. It lives here and not in a
+  // row, which a status change can move to another list and unmount.
+  const [renaming, setRenaming] = useState<Session | null>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -193,6 +199,7 @@ export function SessionsPage() {
                         session={session}
                         online={group.device.online}
                         onOpen={() => openSession(session.device_id, session.session_id)}
+                        onRename={deviceCanRename(group.device, session) ? setRenaming : undefined}
                       />
                     ))}
                   </ul>
@@ -213,6 +220,9 @@ export function SessionsPage() {
                             session={session}
                             online={group.device.online}
                             onOpen={() => openSession(session.device_id, session.session_id)}
+                            onRename={
+                              deviceCanRename(group.device, session) ? setRenaming : undefined
+                            }
                           />
                         ))}
                       </ul>
@@ -226,6 +236,10 @@ export function SessionsPage() {
       )}
 
       <NewSessionDrawer open={creating} onClose={() => setCreating(false)} />
+
+      {renaming ? (
+        <SessionRenameDialog session={renaming} onClose={() => setRenaming(null)} />
+      ) : null}
     </>
   );
 }

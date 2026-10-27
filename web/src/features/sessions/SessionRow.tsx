@@ -9,14 +9,21 @@ import { keyOf, showsUnseenDot } from '../../stores/sessions';
 import { DictationRowLabel } from '../voice/DictationRowLabel';
 import type { Session } from '../../protocol/types';
 import { SessionCloseButton } from './SessionCloseButton';
+import { useSessionMenu } from './useSessionMenu';
 
 interface Props {
   session: Session;
   online: boolean;
   onOpen: () => void;
+  /**
+   * A55: present only where the device can rename this session. The row then
+   * has a context menu with Rename, which opens the dialog the page owns, so
+   * the dialog outlives the row if a status change moves it.
+   */
+  onRename?: (session: Session) => void;
 }
 
-export function SessionRow({ session, online, onOpen }: Props) {
+export function SessionRow({ session, online, onOpen, onRename }: Props) {
   // A39: only a session the device drives can be closed. A terminal holds its
   // own row until it exits, and a row in the Archive comes back by being
   // written to, so neither offers anything.
@@ -28,9 +35,10 @@ export function SessionRow({ session, online, onOpen }: Props) {
   const word = session.archived ? `${strings.sessions.archived} · ${origin}` : origin;
   const unseenId = useId();
   const unseen = showsUnseenDot(session);
+  const { triggerProps, menu } = useSessionMenu(session, onRename);
 
   return (
-    <li className="session-row">
+    <li className="session-row" {...triggerProps}>
       {/* Three lines (docs/DESIGN.md § "The session row"): title and time,
           agent and origin, then the working directory alone after a folder,
           so the path has the whole width and no line says three things. */}
@@ -68,6 +76,7 @@ export function SessionRow({ session, online, onOpen }: Props) {
         </span>
       </button>
       {offersClose ? <SessionCloseButton session={session} online={online} /> : null}
+      {menu}
     </li>
   );
 }

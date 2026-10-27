@@ -209,6 +209,12 @@ export interface RequestMap {
       effort?: string;
       /** A21: a tier id from `AgentInfo.speeds`, or null for the standard speed. */
       speed?: string | null;
+      /**
+       * A55: the session's new name, sent alone. The device normalises it,
+       * refuses an empty one or one over 60 code points with `bad_request`, and
+       * answers with the session carrying the name the agent now holds, which
+       * can differ from this one.
+       */
       title?: string;
     },
     SessionResult,

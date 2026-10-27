@@ -5,6 +5,7 @@ import { cx } from '../../lib/cx';
 import { baseName, relativeTime } from '../../lib/format';
 import { sessionTitle } from '../../strings';
 import { keyOf } from '../../stores/sessions';
+import { useSessionMenu } from '../sessions/useSessionMenu';
 import { DictationRowLabel } from '../voice/DictationRowLabel';
 import type { Session } from '../../protocol/types';
 
@@ -15,13 +16,16 @@ interface Props {
   /** A47: whether the row draws the red dot. */
   unseen: boolean;
   onOpen: () => void;
+  /** A55: present only where the device can rename this session; see `SessionRow`. */
+  onRename?: (session: Session) => void;
 }
 
 /** One session in the chat sidebar. */
-export function SidebarItem({ session, online, active, unseen, onOpen }: Props) {
+export function SidebarItem({ session, online, active, unseen, onOpen, onRename }: Props) {
   const unseenId = useId();
+  const { triggerProps, menu } = useSessionMenu(session, onRename);
   return (
-    <li>
+    <li {...triggerProps}>
       <button
         type="button"
         className={cx('sidebar-item', active && 'active')}
@@ -43,6 +47,7 @@ export function SidebarItem({ session, online, active, unseen, onOpen }: Props) 
           <DictationRowLabel sessionKey={keyOf(session)} />
         </span>
       </button>
+      {menu}
     </li>
   );
 }

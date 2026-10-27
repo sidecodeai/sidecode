@@ -44,7 +44,8 @@ import {
 } from '../src/features/chat/commands';
 import { CONTEXT_LIMIT, CONTEXT_TEXT_LIMIT } from '../src/features/voice/polish';
 import { base64Size } from '../src/lib/base64';
-import { fixturesAvailable, listFixtures, readFixture } from './fixtures';
+import { canRename, checkName, codePointCount } from '../src/features/sessions/rename';
+import { fixturesAvailable, listFixtures, readFixture, readInvalidFixture } from './fixtures';
 
 const EVENT_KINDS = new Set([
   'user_message',
@@ -471,6 +472,51 @@ describe.runIf(fixturesAvailable())('protocol fixtures', () => {
     expect(printed.tool_kind).toBe('other');
     expect(printed.tool).toBe(printed.title);
     expect(printed.tool.startsWith('/')).toBe(true);
+  });
+
+  /**
+   * A55 — a session's name is the agent's. `session.set` carries `title` alone
+   * and the device answers with the session as the agent now holds it, so the
+   * name that comes back can differ from the one asked for. The browser's own
+   * check agrees with the schema's on what is too long and what is empty, and
+   * it offers Rename from the capability the agents list.
+   */
+  it('decodes the rename frames of A55', () => {
+    const ask = readFixture<RequestParams<'session.set'> & { type: string; id: string }>(
+      'app/session.set.rename.json',
+    );
+    expect(ask.type).toBe('session.set');
+    expect(Object.keys(ask).sort()).toEqual(['id', 'session_id', 'title', 'type']);
+
+    const reply = readFixture<Reply<SessionResult>>('app/reply.session.set.rename.json');
+    expect(reply.ok).toBe(true);
+    if (!reply.ok) return;
+    assertSession(reply.result.session);
+    expect(reply.id).toBe(ask.id);
+    expect(reply.result.session.session_id).toBe(ask.session_id);
+    // The agent suffixed a name another live session held, and the app draws
+    // what it holds rather than what was asked for.
+    const asked = ask.title ?? '';
+    expect(asked).not.toBe('');
+    expect(reply.result.session.title).not.toBe(asked);
+    expect(reply.result.session.title.startsWith(asked)).toBe(true);
+
+    const longest = readFixture<{ title: string }>('app/session.set.rename-max.json');
+    expect(codePointCount(longest.title)).toBe(60);
+    expect(checkName(longest.title, '')).toBe('ok');
+    const tooLong = readInvalidFixture<{ title: string }>('app__set_title_too_long.json');
+    expect(codePointCount(tooLong.title)).toBe(61);
+    expect(checkName(tooLong.title, '')).toBe('too-long');
+    const empty = readInvalidFixture<{ title: string }>('app__set_title_empty.json');
+    expect(checkName(empty.title, 'Old name')).toBe('empty');
+
+    // The capability the browser gates Rename on, on every agent that lists it.
+    for (const name of ['claude-attach', 'codex-daemon', 'grok', 'pi']) {
+      const agent = readFixture<AgentInfo>(`objects/agent.${name}.json`);
+      expect(agent.capabilities, name).toContain('rename');
+      expect(canRename(agent, true), name).toBe(true);
+      expect(canRename(agent, false), name).toBe(false);
+    }
   });
 
   it('decodes an error reply into a code the UI knows', () => {

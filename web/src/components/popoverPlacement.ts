@@ -25,6 +25,12 @@ export interface Viewport {
   height: number;
 }
 
+/** A point in viewport coordinates: where a pointer was, or where a row ends. */
+export interface Point {
+  x: number;
+  y: number;
+}
+
 /**
  * Anchors the panel to `trigger`, flipping to the other side only when the
  * asked-for one cannot hold the panel and the other one can hold more of it,
@@ -53,5 +59,32 @@ export function placementFor(
     left: Math.round(left),
     top: placeBelow ? Math.round(trigger.bottom + GAP) : null,
     bottom: placeBelow ? null : Math.round(viewport.height - trigger.top + GAP),
+  };
+}
+
+/**
+ * Opens a context menu's corner at `point`, as a native one does: below it and
+ * to its right, flipping above only when the space below cannot hold the panel
+ * and the space above holds more of it, and kept inside the viewport
+ * horizontally.
+ */
+export function placementAt(
+  point: Point,
+  panel: { width: number; height: number },
+  viewport: Viewport,
+): Placement {
+  const below = viewport.height - point.y - EDGE;
+  const above = point.y - EDGE;
+  const placeBelow = !(panel.height > below && above > below);
+
+  const left = Math.min(
+    Math.max(point.x, EDGE),
+    Math.max(EDGE, viewport.width - panel.width - EDGE),
+  );
+
+  return {
+    left: Math.round(left),
+    top: placeBelow ? Math.round(point.y) : null,
+    bottom: placeBelow ? null : Math.round(viewport.height - point.y),
   };
 }

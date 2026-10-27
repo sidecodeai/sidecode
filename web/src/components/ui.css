@@ -251,6 +251,15 @@
   line-height: 1.5;
 }
 
+/* What a field needs before it can be saved, in the secondary ink under it. A
+   refusal there is a .form-error. */
+.field-note {
+  margin-top: var(--sp-3);
+  color: var(--ink-secondary);
+  font-size: var(--fs-13);
+  line-height: 1.5;
+}
+
 /* A short stack of labelled fields in a dialog. */
 .form-stack .field + .label {
   margin-top: var(--sp-4);

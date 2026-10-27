@@ -47,7 +47,7 @@ src/
   lib/            api.ts (HTTP), ws.ts (app socket), gateway.ts (socket handle), formatters
   stores/         zustand stores: auth, connection, devices, sessions, chat, outbox, settings
                   timeline.ts is the pure event -> renderable-items reducer
-  components/     Buttons, modal/drawer, popover/menu, segmented control, switch, status dots
+  components/     Buttons, modal/drawer, popover/menu, context menu, segmented control, switch, status dots
   layout/         Top bar shell and the product mark
   features/
     login/        Password sign-in

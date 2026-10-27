@@ -33,6 +33,14 @@ export function readFixture<T>(name: string): T {
 }
 
 /**
+ * A frame the schema must refuse, from `protocol/fixtures_invalid/` beside the
+ * valid ones: the same parse, so a test can hand it to the app's own check.
+ */
+export function readInvalidFixture<T>(name: string): T {
+  return JSON.parse(readFileSync(join(FIXTURE_ROOT, '..', 'fixtures_invalid', name), 'utf8')) as T;
+}
+
+/**
  * A fixture the suite reads at module scope. Returns an empty object when
  * `protocol/fixtures/` is absent, so the package still runs on its own; every
  * suite that uses one is gated on `fixturesAvailable()`.

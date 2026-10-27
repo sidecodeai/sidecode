@@ -167,6 +167,38 @@
   white-space: nowrap;
 }
 
+/*
+ * A55: while the device can rename the session the title is a button. It reads
+ * as the title and nothing else until the pointer or the keyboard is on it; the
+ * wash is pulled out into the margin by the padding it adds, so the letters
+ * stay where they were over the path beneath. The heading then stops clipping,
+ * and the button truncates its own text.
+ */
+.chat-heading h1.chat-title-editable {
+  overflow: visible;
+}
+
+.chat-title-btn {
+  display: inline-block;
+  vertical-align: top;
+  max-width: calc(100% + var(--sp-4));
+  margin: 0 calc(-1 * var(--sp-2));
+  padding: 0 var(--sp-2);
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  letter-spacing: inherit;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.chat-title-btn:hover {
+  background: var(--hover);
+}
+
 .chat-sub {
   font-size: var(--fs-12);
   line-height: 1.45;

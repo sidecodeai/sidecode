@@ -279,6 +279,7 @@ describe.runIf(fixturesAvailable())('A10 Stop', () => {
           session={session}
           agent={agent}
           deviceName="mac-studio-office"
+          deviceOnline
           todos={[]}
           stopping={false}
           onStop={vi.fn()}
@@ -946,6 +947,7 @@ describe('A28 Grok Build on the leader', () => {
           session={grokShared}
           agent={grokAgent}
           deviceName="mac-studio-office"
+          deviceOnline
           todos={[]}
           stopping={false}
           onStop={vi.fn()}
@@ -1141,6 +1143,7 @@ describe.runIf(fixturesAvailable())('A42 Stop on an attached Claude terminal', (
           session={sharedRunning}
           agent={attachAgent}
           deviceName="mac-studio-office"
+          deviceOnline
           todos={[]}
           stopping={false}
           onStop={vi.fn()}

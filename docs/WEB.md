@@ -13,8 +13,8 @@ hand-written CSS with no framework. It talks only to the gateway and follows
 | `/devices` | Device list: a computer glyph, the name, a status line of online state, platform, session count and reach, the agents as logos, and — only while an update runs or has failed — "Updating…" or "Update failed · <reason>"; Rename and Revoke on every row, **Retry update** on a failed one; **Add device** with the copyable one-liner, the pairing code, its expiry, live handshake steps, and the scan flow beside them. The row itself opens the device |
 | `/devices/:deviceId` | One device: the machine's own facts, including the hostname and the architecture the row drops, then a card per agent it found, how each is signed in, and a meter per rate-limit window (A33) |
 | `/pair` | Claims the token a host printed as a QR code and shows the same handshake (A23) |
-| `/sessions` | Every session across every device: one collapsible group per device, its active rows and then its own collapsed **Archive**, a search, a status filter, an agent filter and a device filter, and **New session** in a right-hand drawer |
-| `/sessions/:deviceId/:sessionId` | The chat: sidebar, timeline, composer, status line |
+| `/sessions` | Every session across every device: one collapsible group per device, its active rows and then its own collapsed **Archive**, a search, a status filter, an agent filter and a device filter, and **New session** in a right-hand drawer; a right-click on a row offers **Rename** (A55) |
+| `/sessions/:deviceId/:sessionId` | The chat: sidebar, timeline, composer, status line; the title renames the session (A55) |
 | `/settings` | The Settings screen (`docs/DESIGN.md` § "The Settings screen"): an identity header — initials, username, `role · connection dot · host` — then four groups of two-line rows, **Account** (Users for the admin role, Change password for every account but `admin`, Sign out, which asks first), **While you're away** (Notify me, "Resume after the limit resets", A35), **Voice** (Transcribe, which names the gateway and offers nothing to choose, A44; polish and its model and strength) and **Reading** (language, timeline detail), and one caption line with the gateway and protocol versions |
 | `/users` | The admin's accounts screen: the registration switch, one row per account, Reset password / Disable / Delete, and **Add user** (A24). A member who types it lands on Sessions |
 
@@ -85,6 +85,19 @@ and so queues every send, starts with three queued messages, the middle one with
 Up next chip, its list and an edit can be tried at once. It also starts with the red dot of A47
 (`unseen: true`, the only session that does), and every scripted turn marks the session it plays in
 when it stops to ask or ends, the way the gateway does (`mock/unseen.ts`, below).
+`session.set` with a `title` is the A55 rename (`mock/rename.ts`): the name is normalised as §6.3
+says (control, format, surrogate, line and paragraph separator characters become spaces, the emoji
+joiners U+200C and U+200D excepted), answered at once when it is the one the session holds, and
+otherwise kept — a Claude name that another live Claude session on the device has gets a ` (2)`, so
+the reply's title differs from the request — after the 1.5 s the device needs to type it into a
+terminal it is attached to. Both refusals come from state, as on a real device, and never from the
+name that is typed: `unsupported` from "Nightly perf sweep" and "Refactor relay routing" (a live
+Claude the device cannot reach), "Bisect the ingest regression" (Codex with no daemon), "Drop the
+legacy ingest path" (an archived thread) and "Profile the wheel build" (Grok Build, which lists no
+`rename` where its leader is off); `conflict` from "Wire the channel shim" while its terminal is
+busy — send a message into it, and it waits on an approval until that is answered. A rename neither
+moves `updated_at` nor emits a `meta` row. Every agent the mock lists carries `rename` except Grok
+Build on the device whose leader is off.
 It knows two accounts (A24), `admin` / `dev` and the member `alice` / `devdevdev`, with the
 registration switch closed and the account routes of 3.9 behind the admin's role, so the sign-in
 form, registration, the Users screen and a member's Settings can all be driven with no gateway. The
@@ -127,7 +140,7 @@ src/
   protocol/    wire types and frame shapes
   lib/         HTTP client, app socket, formatters
   stores/      zustand stores; timeline.ts is the pure event -> renderable-items reducer
-  components/  buttons, modal, drawer, popover, segmented control, status dots
+  components/  buttons, modal, drawer, popover, context menu, segmented control, status dots
   layout/      the signed-in shell, the mark, and the landing rule
   features/    login, devices, sessions, chat, voice, settings, users
   push/        Web Push subscription and service worker registration
@@ -1172,6 +1185,47 @@ A state this build has never heard of — a newer device can report one — is g
   wording and the store, `tests/GroupHeader.test.tsx` the locked header and its stylesheet, and
   `tests/Sidebar.test.tsx` the sidebar that does not apply the status and whose own search locks
   its headers.
+
+## Renaming a session (A55)
+
+A session's name is the agent's. `useSessions.rename` sends `session.set` with `title` alone and
+resolves with the session the device answers with, whose title is what the agent now holds: the
+device normalises the name, and Claude Code suffixes one that another live session has. Nothing is
+drawn ahead of the reply, and the reply's title is what the row, the sidebar and the header show,
+with no "Saved as" notice. The reply keeps `updated_at`, so a renamed row keeps its place.
+
+- **When it is offered.** `canRename(agent, online)` in `features/sessions/rename.ts`: the session's
+  agent on its device lists `rename` and the device is online — the capability, never a version.
+  Terminal-held rows and rows in the Archive are offered it like any other. A device from before A55
+  lists nothing, and the app then draws no new control at all.
+- **Where.** The chat header's title is a button (`.chat-title-btn`, tooltip "Rename") only while it
+  is offered, plain text otherwise. A right-click on a Sessions row or a sidebar item, or the
+  ContextMenu key or Shift+F10 on the focused one, opens a menu of Rename alone
+  (`components/ContextMenu.tsx`, `useContextMenu.ts`, `features/sessions/useSessionMenu.tsx`): the
+  first item has focus, the arrow keys move, and Escape, Tab, a press outside, a scroll or a resize
+  closes it. Close stays the row's own control. The Sessions page and the sidebar own the dialog's
+  state, so a row that moves between lists, as one does when its CLI exits, does not take an open
+  dialog with it.
+- **The dialog** (`SessionRenameDialog.tsx`) is the device rename's dialog with one field, "Session
+  name", prefilled and selected. The name is the text trimmed as the device trims it — a text of
+  nothing but space, control and zero-width characters (U+200B, U+FEFF, U+0085) holds none, while
+  the U+200C and U+200D that join an emoji sequence stay — and it is kept to 60 code points, counted
+  as `[...s].length`, the way `maxLength` would: an edit that would grow it past that is cut there
+  (`keepToLimit`), an input method's composition when it is committed and not while it is composed,
+  and "Names can be up to 60 characters." says why. A longer name the agent already holds is shown
+  whole, with that line and Save disabled until it is shortened. Save is also disabled while the
+  trimmed text is empty ("Enter a name.") or unchanged. Enter saves, except an input method's Enter;
+  Escape and Cancel close it, except an Escape that cancels a composition. Save shows a spinner and
+  locks the field while the device answers, which a typed Claude rename takes up to about 8 s to do,
+  and focus stays in the field. A refusal stays under the field with the dialog open, and goes when
+  the name is edited: `conflict` is "The session is busy. Try again later.", `unsupported` is "This
+  session can't be renamed from here. Rename it in its terminal.", and every other code keeps the
+  app's own words (offline, timeout, the device's sentence, the generic line). Both languages are
+  in `strings*.ts`.
+- `tests/session-rename.test.ts` holds the rules and the store, `tests/SessionRenameDialog.test.tsx`
+  the dialog, `tests/session-rename-entries.test.tsx` the three entries and when each is offered,
+  `tests/ContextMenu.test.tsx` the menu, `tests/mock-rename.test.ts` the mock device and
+  `tests/protocol-fixtures.test.ts` the contract's frames.
 
 ## The device row
 

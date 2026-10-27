@@ -304,10 +304,15 @@ export function ChatPage() {
       <Sidebar activeKey={key} onNewSession={() => setCreating(true)} />
 
       <div className="chat-main">
+        {/* A55: keyed by conversation like the composer, so a Rename dialog open
+            on one is gone when the route moves to another. The two keys are
+            siblings', so they differ. */}
         <ChatHeader
+          key={`header/${key}`}
           session={session}
           agent={agent}
           deviceName={device?.name ?? deviceId}
+          deviceOnline={device?.online ?? false}
           todos={chat?.todos ?? []}
           stopping={stopping}
           onStop={onStop}
