@@ -654,7 +654,11 @@ Delivery is an outbound HTTP call to a browser vendor or to APNs, so it runs as 
 inside the frame handler that noticed the transition: awaiting it there would hold every later
 frame from that device behind a third party's response time. Whether an app is watching is decided
 at the transition, not when the call goes out, so running late cannot change the outcome. A
-shutdown gives the calls already in flight five seconds to finish before cancelling them.
+shutdown gives the calls already in flight five seconds to finish before cancelling them. That wait
+starts only after the server has given open connections up to five seconds to close
+(`timeout_graceful_shutdown`) and stopped waiting for those still open, such as a socket whose
+client has stopped reading, which would otherwise never close and keep the shutdown from getting
+this far.
 
 Every payload also carries the account's count of sessions marked `unseen` (A47) — `rc.badge`, and
 `aps.badge` on APNs — so an iPhone's home-screen badge is right after any notification it shows.

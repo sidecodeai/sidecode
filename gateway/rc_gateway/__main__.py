@@ -12,6 +12,10 @@ from .logging import configure_logging, logger, uvicorn_log_config
 
 log = logger("rc_gateway.main")
 
+#: How long uvicorn lets open connections finish once the process is told to stop, before it stops
+#: waiting and runs the application's own shutdown.
+GRACEFUL_SHUTDOWN_SECONDS = 5
+
 
 def server_config(config: Config) -> uvicorn.Config:
     """How the WebSocket server itself is set up, separately so a test can read it back."""
@@ -29,6 +33,11 @@ def server_config(config: Config) -> uvicorn.Config:
         # contract allows, but was being closed with 1011 and reported offline the same instant.
         ws_ping_interval=None,
         ws_ping_timeout=None,
+        # uvicorn waits for open connections with no limit unless told otherwise, and a WebSocket
+        # client that has stopped reading never lets go: its close frame sits behind a full send
+        # buffer. The shutdown then hangs and the application's cleanup never runs. After this long
+        # uvicorn stops waiting, cancels the tasks still running and runs it.
+        timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_SECONDS,
         proxy_headers=False,
         # The gateway advertises no version banner; SecurityHeaders sets the rest.
         server_header=False,
