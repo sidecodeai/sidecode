@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '../../components/Button';
 import { Modal } from '../../components/Modal';
 import { api, type PairingResponse } from '../../lib/api';
@@ -54,13 +54,22 @@ function AddDevice({ onClose }: { onClose: () => void }) {
 
   const { connected } = usePairingProgress(pairing?.code ?? null);
 
+  // The install command is what the person does next, so its Copy takes focus
+  // the moment a code arrives, a new one included. The dialog puts focus on the
+  // first control that is enabled when it opens, which cannot be this one: it is
+  // disabled until there is something to copy.
+  const copyCommand = useRef<HTMLButtonElement>(null);
+  const command = installCommand(pairing);
+  useEffect(() => {
+    if (command) copyCommand.current?.focus();
+  }, [command]);
+
   const close = useCallback(() => {
     if (pairing && !connected) void api.cancelPairing(pairing.code).catch(() => undefined);
     clearPairing();
     onClose();
   }, [pairing, connected, clearPairing, onClose]);
 
-  const command = installCommand(pairing);
   // `expires_at` is a gateway timestamp, so compare it against the gateway clock.
   const serverNow = now + clockSkewMs;
   const remaining = pairing ? Math.max(0, pairing.expires_at - serverNow) : 0;
@@ -90,6 +99,7 @@ function AddDevice({ onClose }: { onClose: () => void }) {
         <div className="pair-command-top">
           <code>{command || ' '}</code>
           <Button
+            ref={copyCommand}
             small
             disabled={!command}
             onClick={async () => {

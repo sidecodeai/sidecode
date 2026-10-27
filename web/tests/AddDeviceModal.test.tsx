@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AddDeviceModal } from '../src/features/devices/AddDeviceModal';
 import { useConnection } from '../src/stores/connection';
@@ -140,6 +140,79 @@ describe('AddDeviceModal', () => {
     await screen.findByText(PAIR_COMMAND);
     await user.click(screen.getByRole('button', { name: 'Manual install' }));
     expect(screen.getByText(/rc-client pair --gateway/)).toHaveTextContent(CODE);
+  });
+
+  /**
+   * The dialog puts focus on the first control that is enabled when it opens,
+   * which is the scan flow's Copy: the one-liner's own is disabled until a code
+   * has arrived. Once it has, that Copy is what the person does next.
+   */
+  describe('focus', () => {
+    const commandCopy = (): HTMLElement =>
+      within(document.querySelector('.pair-command-top') as HTMLElement).getByRole('button', {
+        name: 'Copy',
+      });
+
+    it('goes to the one-liner’s Copy when the code arrives, and not to Cancel', async () => {
+      render(<AddDeviceModal open onClose={vi.fn()} />);
+      await screen.findByText(PAIR_COMMAND);
+
+      await waitFor(() => expect(commandCopy()).toHaveFocus());
+      expect(screen.getByRole('button', { name: 'Cancel' })).not.toHaveFocus();
+    });
+
+    it('leaves it where the person put it when the handshake moves on', async () => {
+      render(<AddDeviceModal open onClose={vi.fn()} />);
+      await screen.findByText(PAIR_COMMAND);
+      await waitFor(() => expect(commandCopy()).toHaveFocus());
+      const cancel = screen.getByRole('button', { name: 'Cancel' });
+      cancel.focus();
+
+      act(() => {
+        useConnection.setState({ pairing: { code: CODE, step: 'enrolled' } });
+      });
+      act(() => {
+        useConnection.setState({ pairing: { code: CODE, step: 'online', device: pairedDevice } });
+      });
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+
+      expect(cancel).toHaveFocus();
+    });
+
+    it('goes back to it when a new code replaces one that expired', async () => {
+      const NEXT = 'RC-9ZZZ-AAAA';
+      let issued = 0;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          if (url.endsWith('/api/devices/pairing') && init?.method === 'POST') {
+            issued += 1;
+            const code = issued === 1 ? CODE : NEXT;
+            return new Response(
+              JSON.stringify({
+                code,
+                // The first code runs out within a second, so the link to ask for another appears.
+                expires_at: Date.now() + (issued === 1 ? 700 : 10 * 60_000),
+                install: { macos: `curl -fsSL https://rc.example.com/install.sh | sh -s -- --pair ${code}`, linux: '' },
+              }),
+              { status: 200, headers: { 'Content-Type': 'application/json' } },
+            );
+          }
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        }),
+      );
+      const user = userEvent.setup();
+      render(<AddDeviceModal open onClose={vi.fn()} />);
+      await screen.findByText(PAIR_COMMAND);
+      await waitFor(() => expect(commandCopy()).toHaveFocus());
+
+      await user.click(await screen.findByRole('button', { name: 'New code' }, { timeout: 4000 }));
+      // The code is on screen twice: inside the one-liner and on its own below it.
+      await screen.findAllByText(new RegExp(NEXT), undefined, { timeout: 4000 });
+
+      await waitFor(() => expect(commandCopy()).toHaveFocus());
+    }, 10_000);
   });
 
   it('cancels an unclaimed code when the dialog is dismissed', async () => {

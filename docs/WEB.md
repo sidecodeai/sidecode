@@ -568,6 +568,15 @@ Nothing of this reaches the gateway.
   later, and a `compositionstart` or `compositionend` arriving in that moment cancels it. The
   command menu's Enter takes the same path, so a command runs a moment after the keystroke; the
   tests wait for it. `keyCode === 229` joins the checks for good measure.
+- **An overlay arms its focus once.** `useOverlay` in `src/components/Modal.tsx` — the effect behind
+  `Modal`, `Drawer` and `ConfirmDialog` that focuses the first control, locks the page's scroll,
+  listens for Escape and gives focus back on close — keeps the latest `onClose` in a ref and
+  depends on `open` alone. A parent that re-renders with a new inline `onClose`, as every list page
+  does on each session update, therefore neither moves focus nor ends an input method's
+  composition, and Escape calls the latest callback. A dialog that wants focus somewhere later puts
+  it there itself: the Add device modal moves it to the one-liner's Copy when a code arrives, a new
+  one included. `tests/Modal.test.tsx` holds the effect and `tests/AddDeviceModal.test.tsx` the
+  dialog.
 - **Settings are the account's (A41).** `src/stores/settings.ts` keeps its shape, because the
   rest of the app reads it, but for five of the six preferences of A41 — interface language,
   polish on/off, model and strength, timeline detail — it is the cache of the account's value, not

@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import type { ButtonHTMLAttributes, ReactNode, Ref } from 'react';
 import { cx } from '../lib/cx';
 
 type Variant = 'default' | 'primary' | 'danger' | 'ghost';
@@ -9,6 +9,8 @@ interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
   block?: boolean;
   busy?: boolean;
   children?: ReactNode;
+  /** The button element, for a caller that has to move focus to it. */
+  ref?: Ref<HTMLButtonElement>;
 }
 
 export function Button({

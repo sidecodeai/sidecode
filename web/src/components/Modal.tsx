@@ -99,6 +99,17 @@ function useOverlay(
   onClose: () => void,
   panelRef: React.RefObject<HTMLDivElement | null>,
 ): void {
+  // The latest `onClose`, in a ref: a parent that re-renders hands a new one
+  // every time, as an inline arrow does, and an effect that depended on it
+  // would be torn down and set up again — focus given back to the opener and
+  // then to the first field, in the middle of what the person is typing, an
+  // input method's composition included. The effect below runs on open and on
+  // close alone.
+  const latestClose = useRef(onClose);
+  useEffect(() => {
+    latestClose.current = onClose;
+  });
+
   useEffect(() => {
     if (!open) return;
     const token = Symbol('overlay');
@@ -107,7 +118,7 @@ function useOverlay(
       if (e.key !== 'Escape') return;
       if (overlayStack.at(-1) !== token) return;
       e.stopPropagation();
-      onClose();
+      latestClose.current();
     };
     document.addEventListener('keydown', onKey);
     const previous = document.activeElement as HTMLElement | null;
@@ -124,7 +135,7 @@ function useOverlay(
       document.body.style.overflow = overflow;
       previous?.focus?.();
     };
-  }, [open, onClose, panelRef]);
+  }, [open, panelRef]);
 }
 
 interface ConfirmProps {
