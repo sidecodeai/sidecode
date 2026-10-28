@@ -1,4 +1,4 @@
-"""The live assistant's routes: whether it is on for the caller, and ``WS /ws/live``."""
+"""The live assistant's routes: what it is for the caller, and ``WS /ws/live``."""
 
 from __future__ import annotations
 
@@ -31,7 +31,8 @@ def _service(source: Request | WebSocket) -> LiveService:
 
 @router.get("/api/live/status")
 async def status(request: Request, credential: Credential = Depends(require_user)) -> JSONResponse:
-    return JSONResponse(_service(request).status(credential.username), headers=NO_STORE)
+    answer = await _service(request).status(credential.username)
+    return JSONResponse(answer, headers=NO_STORE)
 
 
 @router.websocket("/ws/live")

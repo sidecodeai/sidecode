@@ -6,7 +6,8 @@ once; when the Live API socket drops, the browser is told why and closed; when t
 both are. Neither side can hold the other up: the browser's farewell and the Live API's close run
 side by side, each bounded. Nothing said or transcribed is stored or logged. A transcript event
 only tells the call that someone is speaking, and is passed on to the browser (when it asked for
-captions) and dropped.
+captions) and dropped. The call also reports its open time to a meter (``meter.py``), which can end
+it, and whatever the meter has to pay for is paid when the call ends, however it ends.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from .errors import LiveError, safe_code
 from .focus import parse_focus
 from .gate import ConfirmGate
 from .limits import MAX_COMMANDS_IN_FLIGHT, CommandGate
+from .meter import CallMeter, NoMeter
 from .playback import Playback
 from .protocol import (
     FLUSH_MESSAGE,
@@ -92,6 +94,7 @@ class LiveCall:
         drafts: DraftBox,
         gate: ConfirmGate,
         on_end: OnEnd,
+        meter: CallMeter | None = None,
         budget_seconds: float | None = None,
         clock: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], float] = time.time,
@@ -112,6 +115,7 @@ class LiveCall:
         self._tools = tools
         self._gate = gate
         self._on_end = on_end
+        self._meter = meter if meter is not None else NoMeter()
         self._clock = clock
         self._watch_interval = watch_interval
         self._close_grace = close_grace
@@ -148,6 +152,7 @@ class LiveCall:
         self._answered: set[str] = set()
         self._upstream_closed = asyncio.Event()
         self._done = asyncio.Event()
+        self._meter.start(self.call_id)
 
     @property
     def active(self) -> bool:
@@ -205,8 +210,27 @@ class LiveCall:
                 ),
             )
         finally:
+            await self._close_books()
+
+    async def _close_books(self) -> None:
+        """The last step, whatever went before it: pay for the open seconds, then say what it cost.
+
+        The meter is stopped first and without waiting, so even a call whose ending was cut short
+        pays for the time it was open. Its answer is waited for, bounded, only so that the usage
+        line can say how the last payment came out.
+        """
+        try:
+            self._stop_meter()
+            await self._attempt(self._meter.settled(), self._step_timeout)
+        finally:
             self._log_usage()
             self._done.set()
+
+    def _stop_meter(self) -> None:
+        try:
+            self._meter.stop(self.duration())
+        except Exception as exc:
+            log.warning("live meter failed to stop", call_id=self.call_id, error=type(exc).__name__)
 
     async def _attempt(self, step: Awaitable[None], timeout: float) -> None:
         try:
@@ -256,6 +280,7 @@ class LiveCall:
             **self._input.record(),
             **self._work.record(),
             **self._browser_playback.record(),
+            **self._meter.record(),
         )
 
     def _ready(self) -> dict[str, Any]:
@@ -542,6 +567,11 @@ class LiveCall:
         while True:
             await asyncio.sleep(self._watch_interval)
             now = self._clock()
+            self._meter.tick(now - self._started)
+            reason = self._meter.verdict()
+            if reason is not None:
+                self.request_finish(reason)
+                return
             if now >= self._deadline:
                 self.request_finish(self._limit_reason)
                 return

@@ -1069,6 +1069,8 @@ async def test_one_usage_line_carries_ids_seconds_and_what_openai_reported(
         "browser_delay_ms",
         "speech_ms",
         "input_transcripts",
+        "billed_seconds",
+        "billing",
     }
     assert record["session_id"] == "live_sess_test"
     assert record["voice_seconds"] == 42.0  # the final figure the service sent on closing

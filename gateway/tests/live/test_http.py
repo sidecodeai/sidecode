@@ -14,11 +14,23 @@ from fastapi.testclient import TestClient
 from rc_gateway import live
 from rc_gateway.app import create_app
 from rc_gateway.live.config import LiveConfig, LiveConfigError, load_live_config
+from rc_gateway.live.meter import NoMeter
+from rc_gateway.live.policy import Admission, LiveStatus
 from rc_gateway.state import GatewayState
 
 from ..conftest import PASSWORD, add_member, sign_in
 
 BASE = {"LIVE_ASSISTANT_ENABLED": "1", "LIVE_OPENAI_API_KEY": "k"}
+
+
+class OpenPolicy:
+    """A stand-in for a gateway's own policy: whoever asks is let in, and nothing is metered."""
+
+    async def status(self, username: str) -> LiveStatus:
+        return LiveStatus(enabled=True, available=True, reason=None)
+
+    async def admit(self, username: str) -> Admission:
+        return Admission(NoMeter())
 
 
 def test_the_feature_is_off_unless_enabled_and_given_a_key() -> None:
@@ -164,7 +176,7 @@ def live_paths(app: FastAPI) -> list[str]:
     return [path for path in app.openapi()["paths"] if "live" in path]
 
 
-def test_a_gateway_with_a_paid_service_never_mounts_it() -> None:
+def test_a_gateway_with_a_paid_service_mounts_it_only_under_a_policy_of_its_own() -> None:
     # A stand-in for the official gateway's state, so this test needs no paid package; the real
     # hosted state is checked in the paid tree's own tests.
     app = FastAPI()
@@ -172,6 +184,12 @@ def test_a_gateway_with_a_paid_service_never_mounts_it() -> None:
     assert live.mount_live(app, hosted, config=LiveConfig(api_key="k")) is None
     assert not hasattr(app.state, "live")
     assert live_paths(app) == []
+
+    governed = FastAPI()
+    service = live.mount_live(governed, hosted, config=LiveConfig(api_key="k"), policy=OpenPolicy())
+    assert service is not None
+    assert governed.state.live is service
+    assert live_paths(governed) == ["/api/live/status"]
 
 
 def test_a_state_that_has_no_paid_attribute_at_all_is_a_self_hosted_one() -> None:
@@ -200,17 +218,21 @@ def test_the_status_route_needs_a_login(enabled: TestClient) -> None:
     assert enabled.get("/api/live/status").status_code == 401
 
 
-def test_the_status_says_on_for_a_listed_account(enabled: TestClient) -> None:
+def test_the_status_says_available_for_a_listed_account(enabled: TestClient) -> None:
     headers = {"Authorization": f"Bearer {sign_in(enabled, 'admin', PASSWORD)}"}
     response = enabled.get("/api/live/status", headers=headers)
-    assert response.json() == {"enabled": True}
+    assert response.json() == {"enabled": True, "available": True, "reason": None}
     assert response.headers["cache-control"] == "no-store"
 
 
 def test_the_status_says_off_for_an_account_that_is_not_listed(enabled: TestClient) -> None:
     admin = {"Authorization": f"Bearer {sign_in(enabled, 'admin', PASSWORD)}"}
     erin = add_member(enabled, admin, "erin")
-    assert enabled.get("/api/live/status", headers=erin).json() == {"enabled": False}
+    assert enabled.get("/api/live/status", headers=erin).json() == {
+        "enabled": False,
+        "available": False,
+        "reason": "not_allowed",
+    }
 
 
 def test_an_empty_allowlist_means_nobody(
@@ -221,4 +243,4 @@ def test_an_empty_allowlist_means_nobody(
     monkeypatch.delenv("LIVE_ALLOWED_USERS", raising=False)
     with TestClient(create_app(state)) as client:
         headers = {"Authorization": f"Bearer {sign_in(client, 'admin', PASSWORD)}"}
-        assert client.get("/api/live/status", headers=headers).json() == {"enabled": False}
+        assert client.get("/api/live/status", headers=headers).json()["enabled"] is False

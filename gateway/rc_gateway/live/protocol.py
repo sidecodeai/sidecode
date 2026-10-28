@@ -21,6 +21,15 @@ sends the draft sends it too, with ``ok`` true, and a refused or failed spoken s
 either way it comes before the ``draft`` update that clears the draft), ``flush``, ``notice
 {code}`` (the Live API reported an error; the code only, never its text), ``time {seconds_left}``
 and, last, ``ended {reason}`` before the socket closes.
+
+A call on a gateway that bills its calls can be refused, or ended, for what it costs:
+``subscription_required`` (the account's plan does not include the assistant, or no longer does;
+close 4402), ``quota_exceeded`` (the allowance is used up, found before the call or while it runs;
+close 4402) and ``billing_not_configured`` (billing cannot be asked right now, or failed twice in
+a row while a call runs; close 4503). A refusal comes before ``ready``: the socket's only message
+is ``ended {reason}``, and nothing is dialled for it. ``GET /api/live/status`` answers
+``{enabled, available, reason}``: whether the entry is shown, whether a call can start now, and
+the reason it cannot (one of the reasons above, or ``not_allowed``).
 """
 
 from __future__ import annotations
@@ -43,13 +52,18 @@ CLOSE_NORMAL = 1000
 CLOSE_GOING_AWAY = 1001
 CLOSE_PROTOCOL_ERROR = 1008
 CLOSE_INTERNAL = 1011
+CLOSE_PAYMENT_REQUIRED = 4402
 CLOSE_NOT_ALLOWED = 4403
 CLOSE_CALL_ACTIVE = 4409
 CLOSE_BUSY = 4429
 CLOSE_UPSTREAM = 4502
+CLOSE_BILLING = 4503
 
 #: Refusals and failures that end a call before or without a normal hang-up, by reason.
 CLOSE_CODES = {
+    "subscription_required": CLOSE_PAYMENT_REQUIRED,
+    "quota_exceeded": CLOSE_PAYMENT_REQUIRED,
+    "billing_not_configured": CLOSE_BILLING,
     "not_allowed": CLOSE_NOT_ALLOWED,
     "call_active": CLOSE_CALL_ACTIVE,
     "cooldown": CLOSE_BUSY,

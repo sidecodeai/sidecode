@@ -15,6 +15,8 @@ from fastapi import WebSocket
 from rc_gateway.live.budget import DailyBudget
 from rc_gateway.live.config import LiveConfig
 from rc_gateway.live.errors import LiveError
+from rc_gateway.live.meter import NoMeter
+from rc_gateway.live.policy import Admission, AllowlistPolicy, LivePolicy, LiveStatus
 from rc_gateway.live.service import LiveService
 from rc_gateway.live.upstream import UpstreamLink
 from rc_gateway.security import Credential
@@ -132,6 +134,7 @@ def make_service(
     *,
     clock: Callable[[], float] = time.monotonic,
     budget: DailyBudget | None = None,
+    policy: LivePolicy | None = None,
     close_timeout: float = 8.0,
     **settings: Any,
 ) -> LiveService:
@@ -142,7 +145,7 @@ def make_service(
         config,
         connector if connector is not None else Connector(),
         clock=clock,
-        budget=budget,
+        policy=policy if policy is not None else AllowlistPolicy(config, budget),
         close_timeout=close_timeout,
     )
 
@@ -267,6 +270,129 @@ async def test_an_account_that_is_not_listed_is_refused() -> None:
     assert refused.sent == [{"type": "ended", "reason": "not_allowed"}]
     assert refused.closed == 4403
     assert connector.dialled == 0
+
+
+# ---- a policy of its own ----
+
+
+class ScriptedPolicy:
+    """A gateway's own policy, as a test writes it: who is refused and why, and the day's cap."""
+
+    def __init__(self, *, refuse: dict[str, Exception] | None = None) -> None:
+        self.refuse = refuse or {}
+        self.asked: list[str] = []
+        self.meters: list[NoMeter] = []
+        self.budget_seconds: float | None = None
+        self.hold: asyncio.Event | None = None
+
+    async def status(self, username: str) -> LiveStatus:
+        error = self.refuse.get(username)
+        reason = error.code if isinstance(error, LiveError) else None
+        return LiveStatus(enabled=True, available=error is None, reason=reason)
+
+    async def admit(self, username: str) -> Admission:
+        self.asked.append(username)
+        if self.hold is not None and username == "admin":
+            await self.hold.wait()
+        if username in self.refuse:
+            raise self.refuse[username]
+        meter = NoMeter()
+        self.meters.append(meter)
+        return Admission(meter, budget_seconds=self.budget_seconds)
+
+
+@pytest.mark.parametrize(
+    ("reason", "code"),
+    [("subscription_required", 4402), ("quota_exceeded", 4402), ("billing_not_configured", 4503)],
+)
+async def test_a_refusal_from_the_policy_is_the_reason_and_nothing_is_dialled(
+    reason: str, code: int
+) -> None:
+    connector = Connector()
+    policy = ScriptedPolicy(refuse={"admin": LiveError(reason)})
+    service = make_service(connector, policy=policy)
+    refused = await place_call(service)
+    assert refused.sent == [{"type": "ended", "reason": reason}]
+    assert refused.closed == code
+    assert connector.dialled == 0
+    # Another account is another question.
+    assert (await place_call(service, "dana")).types()[0] == "ready"
+
+
+async def test_a_policy_that_fails_unexpectedly_is_an_internal_error_and_holds_no_slot() -> None:
+    policy = ScriptedPolicy(refuse={"admin": RuntimeError("the billing service fell over")})
+    connector = Connector()
+    service = make_service(connector, policy=policy, max_concurrent_calls=1)
+    refused = await place_call(service)
+    assert refused.sent == [{"type": "ended", "reason": "internal_error"}]
+    assert refused.closed == 1011
+    assert connector.dialled == 0
+    assert (await place_call(service, "dana")).types()[0] == "ready"
+
+
+async def test_the_meter_a_policy_admits_is_the_meter_of_the_call() -> None:
+    policy = ScriptedPolicy()
+    service = make_service(policy=policy)
+    await place_call(service)
+    assert policy.asked == ["admin"]
+    assert len(policy.meters) == 1
+
+
+async def test_a_policy_with_no_cap_leaves_the_call_its_whole_length() -> None:
+    policy = ScriptedPolicy()
+    service = make_service(policy=policy, clock=FakeClock(), max_call_seconds=900.0)
+    socket, run = start_call(service)
+    await until(lambda: socket.types() == ["ready"])
+    assert socket.sent[0]["seconds_left"] == 900
+    socket.command(type="hangup")
+    await asyncio.wait_for(run, 5)
+
+
+async def test_a_policy_cap_bounds_the_call() -> None:
+    policy = ScriptedPolicy()
+    policy.budget_seconds = 45.0
+    service = make_service(policy=policy, clock=FakeClock())
+    socket, run = start_call(service)
+    await until(lambda: socket.types() == ["ready"])
+    assert socket.sent[0]["seconds_left"] == 45
+    socket.command(type="hangup")
+    await asyncio.wait_for(run, 5)
+
+
+async def test_a_slow_admission_does_not_hold_up_another_accounts_call() -> None:
+    policy = ScriptedPolicy()
+    policy.hold = asyncio.Event()
+    service = make_service(policy=policy)
+    slow, slow_run = start_call(service, "admin")
+    await until(lambda: policy.asked == ["admin"])
+    other = await place_call(service, "dana")
+    assert other.types()[0] == "ready"
+    assert slow.sent == []
+    policy.hold.set()
+    await until(lambda: slow.types() == ["ready"])
+    slow.command(type="hangup")
+    await asyncio.wait_for(slow_run, 5)
+
+
+def test_a_gateway_that_bills_its_calls_cannot_build_the_service_without_a_policy() -> None:
+    config = LiveConfig(api_key=API_KEY)
+    billing = cast(GatewayState, SimpleNamespace(paid=object()))
+    with pytest.raises(ValueError, match="needs a policy"):
+        LiveService(billing, config, Connector())
+    # With a policy of its own it is built, and a gateway that bills nothing needs none.
+    assert LiveService(billing, config, Connector(), policy=AllowlistPolicy(config))
+    assert LiveService(fake_state(), config, Connector())
+
+
+async def test_the_status_is_the_policys() -> None:
+    policy = ScriptedPolicy(refuse={"admin": LiveError("subscription_required")})
+    service = make_service(policy=policy)
+    assert await service.status("admin") == {
+        "enabled": True,
+        "available": False,
+        "reason": "subscription_required",
+    }
+    assert await service.status("dana") == {"enabled": True, "available": True, "reason": None}
 
 
 # ---- stopping the gateway ----
