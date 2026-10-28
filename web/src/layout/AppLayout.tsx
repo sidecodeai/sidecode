@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from 'react-router';
+import { LiveEntry } from '../features/live/LiveEntry';
 import { cx } from '../lib/cx';
 import { gatewayHost, initials } from '../lib/identity';
 import { strings } from '../strings';
@@ -42,6 +43,7 @@ export function AppLayout() {
             ))}
           </nav>
           <div className="topbar-right">
+            <LiveEntry />
             {status !== 'open' ? (
               <span className="conn-chip" title={strings.connection.reconnecting}>
                 <span className="spinner" aria-hidden />

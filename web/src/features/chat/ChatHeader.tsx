@@ -6,6 +6,7 @@ import { compactNumber, duration, tildePath } from '../../lib/format';
 import { sessionTitle, strings } from '../../strings';
 import { useSettings } from '../../stores/settings';
 import { useNow } from '../../lib/useNow';
+import { LiveEntry } from '../live/LiveEntry';
 import { SessionRenameDialog } from '../sessions/SessionRenameDialog';
 import { canRename } from '../sessions/rename';
 import { canInterruptShared } from './attach';
@@ -113,6 +114,8 @@ export function ChatHeader({
             {stopping ? strings.chat.stopping : strings.chat.stop}
           </button>
         ) : null}
+
+        <LiveEntry />
       </div>
 
       {renaming ? (

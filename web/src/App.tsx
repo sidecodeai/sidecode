@@ -10,6 +10,7 @@ import { SessionsPage } from './features/sessions/SessionsPage';
 import { ChatPage } from './features/chat/ChatPage';
 import { SettingsPage } from './features/settings/SettingsPage';
 import { UsersPage } from './features/users/UsersPage';
+import { useLiveHost } from './features/live/useLiveHost';
 import { useAppBadge } from './push/useAppBadge';
 import { useServiceWorkerNavigation } from './push/useServiceWorkerNavigation';
 import { useAuth } from './stores/auth';
@@ -41,6 +42,8 @@ export function App() {
 
   useServiceWorkerNavigation();
   useAppBadge();
+  // The experimental voice assistant's call belongs to the page, not to a screen.
+  useLiveHost();
 
   useEffect(() => {
     document.documentElement.lang = language;

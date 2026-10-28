@@ -15,6 +15,7 @@ import { Button } from '../../components/Button';
 import { cx } from '../../lib/cx';
 import { strings } from '../../strings';
 import { selectDevice, useDevices } from '../../stores/devices';
+import { LiveEntry } from '../live/LiveEntry';
 import { useTerminal, type TerminalStatus } from './useTerminal';
 import '@xterm/xterm/css/xterm.css';
 import './terminal.css';
@@ -73,6 +74,7 @@ export function TerminalPage() {
             />
           ) : null}
         </div>
+        <LiveEntry />
         <Button
           small
           onClick={() => {

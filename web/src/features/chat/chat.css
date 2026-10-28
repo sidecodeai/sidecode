@@ -221,6 +221,16 @@
   color: var(--ink-tertiary);
 }
 
+/*
+ * The voice assistant's entry (features/live) takes a button's width in this row. On a phone the
+ * usage chip, the quietest thing in it, gives way so the title keeps its room.
+ */
+@media (max-width: 480px) {
+  .chat-header-actions:has(.live-entry) .usage-chip {
+    display: none;
+  }
+}
+
 .todo-list {
   list-style: none;
   margin: 0;

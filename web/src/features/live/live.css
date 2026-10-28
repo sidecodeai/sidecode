@@ -1,0 +1,404 @@
+/*
+ * The experimental voice assistant: a button in the top bar and in the chat and terminal headers,
+ * and a floating card, light and quiet.
+ */
+
+.live-entry {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--ink-secondary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.live-entry:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.live-entry[data-active='true'] {
+  color: var(--running);
+  background: var(--running-soft);
+}
+
+/* Muted: the call is on and nothing of the person is heard, which the button says before anything. */
+.live-entry[data-muted='true'] {
+  color: var(--attention);
+  background: var(--attention-soft);
+}
+
+/* The dot that says a call is on, with the panel closed; it takes the colour of who is speaking. */
+.live-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-pill);
+  background: var(--running);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
+.live-dot[data-speaker='user'] {
+  background: var(--attention);
+}
+
+.live-dot[data-speaker='assistant'] {
+  background: var(--ink);
+}
+
+/*
+ * A portal on the body, hung under the button that opened it (`--live-top` is set from the button).
+ * Its height stops short of the foot of the screen by `--live-reserve`, which is where a chat
+ * page's composer is, so the card never covers it; the conversation inside scrolls instead.
+ */
+.live-panel {
+  --live-reserve: 132px;
+  position: fixed;
+  top: var(--live-top, calc(var(--header-h) + var(--sp-2)));
+  right: var(--sp-4);
+  z-index: var(--z-popover);
+  width: min(360px, calc(100vw - 2 * var(--sp-4)));
+  max-height: max(
+    300px,
+    min(640px, calc(100dvh - var(--live-top, calc(var(--header-h) + var(--sp-2))) - var(--live-reserve)))
+  );
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-5);
+  overflow-y: auto;
+  background: var(--surface);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-pop);
+}
+
+.live-panel > * {
+  flex: none;
+}
+
+/* What gives way when the card is short: the conversation, never the buttons. */
+.live-panel > .live-transcript,
+.live-panel > .live-history {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.live-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.live-title {
+  margin: 0;
+  font-size: var(--fs-16);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.live-tag {
+  font-size: var(--fs-12);
+  color: var(--ink-tertiary);
+}
+
+.live-close {
+  display: inline-flex;
+  border: none;
+  background: transparent;
+  color: var(--ink-secondary);
+  padding: var(--sp-1);
+  border-radius: var(--r-pill);
+}
+
+.live-close:hover {
+  background: var(--surface-hover);
+}
+
+.live-note {
+  margin: 0;
+  font-size: var(--fs-14);
+  color: var(--ink-secondary);
+  line-height: 1.5;
+}
+
+.live-notice {
+  margin: 0;
+  font-size: var(--fs-13);
+  color: var(--attention);
+}
+
+.live-status {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--fs-14);
+}
+
+.live-orb {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--r-pill);
+  background: var(--idle);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.live-status[data-speaker='none'] .live-orb {
+  background: var(--running);
+}
+
+.live-status[data-speaker='user'] .live-orb {
+  background: var(--attention);
+  box-shadow: 0 0 0 4px rgba(176, 124, 0, 0.16);
+}
+
+.live-status[data-speaker='assistant'] .live-orb {
+  background: var(--ink);
+  box-shadow: 0 0 0 4px rgba(17, 17, 17, 0.1);
+}
+
+.live-status[data-muted='true'][data-speaker='none'] .live-orb {
+  background: var(--attention);
+}
+
+.live-left {
+  margin-left: auto;
+  font-size: var(--fs-12);
+  color: var(--ink-tertiary);
+}
+
+/* The conversation: it takes the room the card has, and scrolls inside it. */
+.live-transcript {
+  flex: 1 1 auto;
+  min-height: 96px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: var(--r-md);
+  background: var(--surface-sunken);
+}
+
+.live-transcript-empty {
+  margin: auto 0;
+  font-size: var(--fs-13);
+  line-height: 1.5;
+  color: var(--ink-tertiary);
+  text-align: center;
+}
+
+.live-turn {
+  margin: 0;
+  font-size: var(--fs-13);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.live-turn-user {
+  color: var(--ink-secondary);
+}
+
+.live-who {
+  display: block;
+  font-size: var(--fs-11);
+  color: var(--ink-tertiary);
+}
+
+/* A message the assistant sent to a session, set apart from the talk around it. */
+.live-sent-entry {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-sm);
+  background: var(--running-soft);
+}
+
+.live-sent-entry .live-who {
+  color: var(--ink-secondary);
+}
+
+.live-sent-entry p {
+  margin: 0;
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.live-draft {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  border-radius: var(--r-md);
+  background: var(--attention-soft);
+}
+
+.live-draft-title {
+  font-size: var(--fs-12);
+  font-weight: 600;
+  color: var(--attention);
+}
+
+.live-draft-to {
+  font-size: var(--fs-13);
+  color: var(--ink-secondary);
+}
+
+.live-draft-text {
+  margin: 0;
+  font-size: var(--fs-14);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.live-draft-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
+.live-error {
+  margin: 0;
+  font-size: var(--fs-13);
+  color: var(--danger);
+}
+
+.live-sent {
+  color: var(--running);
+}
+
+.live-actions {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.live-actions .btn {
+  height: 44px;
+  font-size: var(--fs-15);
+}
+
+.live-hangup {
+  flex: 1;
+}
+
+/* With no call on: the latest conversation, the calls kept, and what clearing them does. */
+.live-history {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.live-history > * {
+  flex: none;
+}
+
+.live-history > .live-record {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.live-section {
+  margin: 0;
+  font-size: var(--fs-12);
+  font-weight: 600;
+  color: var(--ink-secondary);
+}
+
+.live-record {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.live-record > * {
+  flex: none;
+}
+
+.live-record-when,
+.live-record-note {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--ink-tertiary);
+}
+
+.live-record > .live-record-transcript {
+  flex: 1 1 auto;
+  min-height: 96px;
+  max-height: 200px;
+}
+
+.live-calls {
+  list-style: none;
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  max-height: 132px;
+  overflow-y: auto;
+}
+
+.live-call {
+  width: 100%;
+  padding: 6px var(--sp-2);
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink-secondary);
+  font-size: var(--fs-13);
+  text-align: left;
+}
+
+.live-call:hover {
+  background: var(--hover);
+}
+
+.live-call[aria-current='true'] {
+  background: var(--surface-muted);
+  color: var(--ink);
+}
+
+.live-clear {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--ink-secondary);
+  font-size: var(--fs-13);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.live-clear:hover {
+  color: var(--ink);
+}
+
+.live-clear-ask {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-13);
+  color: var(--ink-secondary);
+}
+
+.live-clear-ask span {
+  flex: 1 1 100%;
+}
+
+.live-history-foot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.live-kept {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--ink-tertiary);
+}
