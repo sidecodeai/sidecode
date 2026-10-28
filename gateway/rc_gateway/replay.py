@@ -53,6 +53,11 @@ class ReplayBuffer:
             self._bytes -= dropped
         return True
 
+    def tail(self, limit: int) -> list[Event]:
+        """The newest ``limit`` events, oldest first."""
+        events = [event for _, event, _ in self._events]
+        return events[-limit:] if limit > 0 else []
+
     def replay_from(self, since_seq: int | None) -> tuple[list[Event], bool]:
         """Return ``(events, resync)`` for an app cursor.
 

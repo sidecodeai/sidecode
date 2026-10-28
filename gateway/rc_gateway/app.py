@@ -24,6 +24,7 @@ from .devices import DeviceStore
 from .headers import SecurityHeaders
 from .hub import Hub
 from .index import SessionIndex
+from .live import mount_live
 from .logging import logger
 from .polish import PolishClient, Polisher
 from .preference_store import PreferenceStore
@@ -148,6 +149,10 @@ def create_app(state: GatewayState | None = None) -> FastAPI:
         try:
             yield
         finally:
+            live = getattr(app.state, "live", None)
+            if live is not None:
+                # Calls first: each closes both of its sockets while the hub can still answer.
+                await live.close()
             # The hub first: it lets the notifications already on their way out finish, which
             # needs the push service still running. The index last, so the sequence numbers those
             # frames recorded reach the disk.
@@ -179,6 +184,7 @@ def create_app(state: GatewayState | None = None) -> FastAPI:
     app.include_router(device_ws.router)
     app.include_router(app_ws.router)
     app.include_router(stt_ws.router)
+    mount_live(app, resolved)
     app.include_router(static_routes.router)
 
     # Ahead of routing: FastAPI would otherwise spool the whole multipart body before the route's

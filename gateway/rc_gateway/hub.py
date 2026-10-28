@@ -216,6 +216,17 @@ class _GatewayRequest:
     waiter: asyncio.Future[Frame]
 
 
+@dataclass(frozen=True)
+class _Origin:
+    """Whom a forwarded request is for: an app socket, or the gateway acting for an account."""
+
+    id: str
+    username: str
+    reply: Callable[[Frame], Awaitable[None]]
+    #: Read under ``Hub._lock``, in the same block as the device slot, so the two agree.
+    alive: Callable[[], bool]
+
+
 @dataclass
 class _Grace:
     """A device whose link dropped, still reported online while it might come back (A13)."""
@@ -268,6 +279,8 @@ class Hub:
         self._queues: dict[str, Frame] = {}
         self._pending: dict[tuple[str, str], _Pending] = {}
         self._gateway_pending: dict[str, _GatewayRequest] = {}
+        #: Internal requesters (``send_session_as``) waiting for a reply, by origin id.
+        self._sinks: dict[str, Callable[[Frame], Awaitable[None]]] = {}
         self._backfills: set[asyncio.Task[None]] = set()
         self._notifications: set[asyncio.Task[None]] = set()
         self._grace: dict[str, _Grace] = {}
@@ -321,6 +334,7 @@ class Hub:
             if pending.timer is not None:
                 pending.timer.cancel()
         self._pending.clear()
+        self._sinks.clear()
         for connection in [*self._devices.values(), *self._apps.values()]:
             await connection.stop(code=1001, reason="gateway shutting down")
         self._devices.clear()
@@ -921,6 +935,45 @@ class Hub:
                 )
                 await self._drop_device(connection)
 
+    async def send_session_as(self, username: str, session_id: str, text: str) -> Frame:
+        """Send ``text`` to a session as the account's own app would, and return the reply.
+
+        The same checks and side effects as an app's ``session.send`` (mode ``auto``) through
+        ``_forward_from``, but with no socket behind it: the reply comes back by an internal id,
+        so no app connection is attached, evicted or fanned out to. Used by the live assistant.
+        """
+        origin_id = f"internal:{uuid.uuid4().hex}"
+        identifier = str(uuid.uuid4())
+        waiter: asyncio.Future[Frame] = asyncio.get_running_loop().create_future()
+
+        async def reply(frame: Frame) -> None:
+            if not waiter.done():
+                waiter.set_result(frame)
+
+        self._sinks[origin_id] = reply
+        frame: Frame = {
+            "type": "session.send",
+            "id": identifier,
+            "session_id": session_id,
+            "text": text,
+            "mode": "auto",
+        }
+        try:
+            await self._forward_from(_Origin(origin_id, username, reply, lambda: True), frame)
+            return await asyncio.wait_for(waiter, timeout=self.request_timeout + 5)
+        except TimeoutError:
+            return error_reply(identifier, ERROR_TIMEOUT, "device did not reply in time")
+        finally:
+            self._sinks.pop(origin_id, None)
+            pending = self._pending.pop((origin_id, identifier), None)
+            if pending is not None and pending.timer is not None:
+                pending.timer.cancel()
+
+    def session_tail(self, session_id: str, limit: int) -> list[Frame]:
+        """The newest ``limit`` buffered events of a session, oldest first (no ownership check)."""
+        buffer = self._buffers.get(session_id)
+        return [] if buffer is None else buffer.tail(limit)
+
     # ---- pairing progress ----
 
     async def pairing_started(self, code: str, username: str) -> None:
@@ -991,6 +1044,17 @@ class Hub:
     # ---- forwarding ----
 
     async def _forward(self, connection: AppConnection, frame: Frame) -> None:
+        await self._forward_from(self._app_origin(connection), frame)
+
+    def _app_origin(self, connection: AppConnection) -> _Origin:
+        return _Origin(
+            connection.id,
+            connection.username,
+            partial(self._send_app, connection),
+            lambda: self._apps.get(connection.id) is connection,
+        )
+
+    async def _forward_from(self, origin: _Origin, frame: Frame) -> None:
         identifier = request_id(frame)
         if not identifier:
             log.debug("forwardable frame without id dropped", kind=frame_type(frame))
@@ -998,34 +1062,30 @@ class Hub:
         kind = frame_type(frame)
         oversized = _attachments_over_limit(frame)
         if oversized is not None:
-            await self._send_app(connection, error_reply(identifier, ERROR_TOO_LARGE, oversized))
+            await origin.reply(error_reply(identifier, ERROR_TOO_LARGE, oversized))
             return
         outgoing = dict(frame)
         if kind in FORWARDED_BY_DEVICE:
             device_id = text_field(frame, "device_id")
             if not device_id:
-                await self._send_app(
-                    connection, error_reply(identifier, ERROR_BAD_REQUEST, "device_id is required")
+                await origin.reply(
+                    error_reply(identifier, ERROR_BAD_REQUEST, "device_id is required")
                 )
                 return
-            if not await self._reaches(connection, device_id):
-                await self._send_app(
-                    connection, error_reply(identifier, ERROR_NOT_FOUND, "unknown device")
-                )
+            if await self.device_owner(device_id) != origin.username:
+                await origin.reply(error_reply(identifier, ERROR_NOT_FOUND, "unknown device"))
                 return
         else:
             session_id = text_field(frame, "session_id")
             # Only the owning device is needed to route, and that is in memory: reading the whole
             # summary back from SQLite would put a disk read in front of every message an app sends.
             owner = await self._owner_of(session_id) if session_id else None
-            if owner is None or not await self._reaches(connection, owner):
-                await self._send_app(
-                    connection, error_reply(identifier, ERROR_NOT_FOUND, "unknown session")
-                )
+            if owner is None or await self.device_owner(owner) != origin.username:
+                await origin.reply(error_reply(identifier, ERROR_NOT_FOUND, "unknown session"))
                 return
             device_id = owner
             outgoing["device_id"] = device_id
-        outgoing["from"] = connection.id
+        outgoing["from"] = origin.id
 
         # Outside the send lock: a device inside its grace period is waited for, and holding the
         # lock across that would stall every other device's forwarding for the whole period.
@@ -1034,13 +1094,12 @@ class Hub:
         async with self._send_lock:
             async with self._lock:
                 device = self._devices.get(device_id)
-                still_connected = self._apps.get(connection.id) is connection
+                still_connected = origin.alive()
             if not still_connected:
                 return
             if device is None:
-                await self._send_app(
-                    connection,
-                    error_reply(identifier, ERROR_DEVICE_OFFLINE, "device is not connected"),
+                await origin.reply(
+                    error_reply(identifier, ERROR_DEVICE_OFFLINE, "device is not connected")
                 )
                 return
             if not self._budget.claim(payload):
@@ -1050,9 +1109,7 @@ class Hub:
                     bytes=payload,
                     held=self._budget.held,
                 )
-                await self._send_app(
-                    connection, error_reply(identifier, ERROR_TOO_LARGE, FORWARD_BUSY_MESSAGE)
-                )
+                await origin.reply(error_reply(identifier, ERROR_TOO_LARGE, FORWARD_BUSY_MESSAGE))
                 return
             try:
                 # The connection owns the release from here: it gives the budget back when the
@@ -1061,13 +1118,12 @@ class Hub:
             except (SlowClientError, ConnectionError) as exc:
                 log.warning("forward to device failed", device_id=device_id, error=str(exc))
                 await self._drop_device(device)
-                await self._send_app(
-                    connection,
-                    error_reply(identifier, ERROR_DEVICE_OFFLINE, "device link broken"),
+                await origin.reply(
+                    error_reply(identifier, ERROR_DEVICE_OFFLINE, "device link broken")
                 )
                 return
         self._track_pending(
-            connection,
+            origin.id,
             identifier,
             device_id,
             kind,
@@ -1077,20 +1133,20 @@ class Hub:
 
     def _track_pending(
         self,
-        connection: AppConnection,
+        origin_id: str,
         identifier: str,
         device_id: str,
         kind: str,
         terminal_id: str = "",
         closing: str = "",
     ) -> None:
-        key = (connection.id, identifier)
+        key = (origin_id, identifier)
         existing = self._pending.get(key)
         if existing is not None and existing.timer is not None:
             existing.timer.cancel()
         pending = _Pending(
             device_id=device_id,
-            connection_id=connection.id,
+            connection_id=origin_id,
             kind=kind,
             terminal_id=terminal_id,
             closing=closing,
@@ -1105,12 +1161,9 @@ class Hub:
             return
         if self._pending.pop(key, None) is None:
             return
-        async with self._lock:
-            connection = self._apps.get(key[0])
-        if connection is not None:
-            await self._send_app(
-                connection, error_reply(identifier, ERROR_TIMEOUT, "device did not reply in time")
-            )
+        await self._deliver(
+            key[0], error_reply(identifier, ERROR_TIMEOUT, "device did not reply in time")
+        )
 
     async def _route_reply(self, device: DeviceConnection, frame: Frame) -> None:
         identifier = request_id(frame)
@@ -1151,7 +1204,8 @@ class Hub:
         held = self._note_terminal_reply(device.device_id, pending, frame)
         async with self._lock:
             connection = self._apps.get(target)
-        if connection is None:
+        sink = self._sinks.get(target)
+        if connection is None and sink is None:
             # The socket that asked for the terminal closed before its reply arrived, so nobody
             # will ever read it: detach now rather than after a first output frame nobody takes.
             if held:
@@ -1161,7 +1215,21 @@ class Hub:
         reply = {key_: value for key_, value in frame.items() if key_ != "from"}
         if pending.kind in SESSION_RESULT_TYPES:
             reply = await self._reply_with_mark(device.device_id, reply)
-        await self._send_app(connection, reply)
+        if connection is not None:
+            await self._send_app(connection, reply)
+        elif sink is not None:
+            await sink(reply)
+
+    async def _deliver(self, origin_id: str, frame: Frame) -> None:
+        """Hand a gateway-made frame to whoever the request came from, if they are still there."""
+        async with self._lock:
+            connection = self._apps.get(origin_id)
+        if connection is not None:
+            await self._send_app(connection, frame)
+            return
+        sink = self._sinks.get(origin_id)
+        if sink is not None:
+            await sink(frame)
 
     async def _fail_pending_for_device(self, device_id: str, code: str) -> None:
         for key in [key for key, item in self._pending.items() if item.device_id == device_id]:
@@ -1170,12 +1238,7 @@ class Hub:
                 continue
             if pending.timer is not None:
                 pending.timer.cancel()
-            async with self._lock:
-                connection = self._apps.get(key[0])
-            if connection is not None:
-                await self._send_app(
-                    connection, error_reply(key[1], code, "device is not connected")
-                )
+            await self._deliver(key[0], error_reply(key[1], code, "device is not connected"))
 
     # ---- subscriptions and events ----
 
