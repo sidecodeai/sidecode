@@ -546,16 +546,19 @@ it was.
 
 ## The voice assistant
 
-An experiment (`docs/LIVE_ASSISTANT.md`), off unless switched on in `.env`. A panel in the web app
-talks to the gateway on `WS /ws/live`, and the gateway alone holds the one WebSocket to OpenAI's Live
-API with the operator's key, so neither the key nor the audio path reaches a browser. The model's
-tool calls run in the gateway as the signed-in account: every read and write starts from that
-account's own devices, and a session that is not theirs is answered as if it did not exist. The tools
-list the sessions and their pending decisions, read a bounded tail of one session's replay buffer
-(`ReplayBuffer.tail`), and draft a message that the hub sends as the account's own app would
-(`Hub.send_session_as`), but only after the assistant has read it back and the person has said yes or
-pressed Send. The gateway stores nothing of a call, neither the audio nor the transcripts nor what a
-tool returned, and its one log line per call holds ids, counts and timings.
+An experiment (`docs/LIVE_ASSISTANT.md`), off unless switched on in `.env`. A client, the web
+app's panel or an app's call screen, talks to the gateway on `WS /ws/live`, and the gateway alone
+holds the one WebSocket to OpenAI's Live API with the operator's key, so neither the key nor the
+audio path reaches a browser or an app. The model's tool calls run in the gateway as the signed-in
+account: every read and write starts from that account's own devices, and a session that is not
+theirs is answered as if it did not exist. The tools list the sessions and their pending
+decisions, read a bounded tail of one session's replay buffer (`ReplayBuffer.tail`), and draft a
+message that the hub sends as the account's own app would (`Hub.send_session_as`), but only after
+the assistant has read it back and the person has said yes or pressed Send. The gateway stores
+nothing of a call, neither the audio nor the transcripts nor what a tool returned, and its one log
+line per call holds ids, counts and timings. A client holds its own side of a call, the socket, the
+microphone and speaker and the saved conversations, which stay on its device; the gateway sees one
+socket.
 Who may call, and what a call costs, are a policy the service is given (`live/policy.py`): the
 default is the `LIVE_ALLOWED_USERS` allowlist with a daily cap on call time, and nothing billed.
 

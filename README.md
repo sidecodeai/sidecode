@@ -218,11 +218,11 @@ The checks every change has to pass, and a smoke flow for a release, are in
 - **Voice** — dictation through the gateway's speech-to-text proxy, streamed as 16 kHz PCM16 with
   live partial transcripts, and optional polish of the dictated text through an OpenAI-compatible
   model of yours. The result is always an editable draft; sending stays a separate action.
-- **Voice assistant (experimental)** — a call in the web app that tells you what your sessions are
-  doing and what is waiting for you, and drafts a message to one of them. A message is sent only
-  after the assistant has read it back and you have said yes, or pressed Send. It is off until you
-  switch it on in `.env` with an OpenAI key of your own, and only the usernames you list may use it;
-  see [docs/LIVE_ASSISTANT.md](docs/LIVE_ASSISTANT.md).
+- **Voice assistant (experimental)** — a call in the web app and in the apps that tells you what
+  your sessions are doing and what is waiting for you, and drafts a message to one of them. A
+  message is sent only after the assistant has read it back and you have said yes, or pressed
+  Send. It is off until you switch it on in `.env` with an OpenAI key of your own, and only the
+  usernames you list may use it; see [docs/LIVE_ASSISTANT.md](docs/LIVE_ASSISTANT.md).
 - **Accounts** — an operator account, member accounts with their own devices and sessions, optional
   self-registration, and account deletion by the operator or, through `DELETE /api/account`, by
   the account itself.

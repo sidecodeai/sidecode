@@ -420,10 +420,11 @@ Only the polish feature uses this key: the gateway still runs no agent and holds
 
 ## Voice assistant (experimental)
 
-A voice assistant in the web app ([LIVE_ASSISTANT.md](LIVE_ASSISTANT.md)) that tells an account what
-its sessions are doing and drafts messages to them. The gateway holds the one WebSocket to OpenAI's
-Live API with a key of its own, so no browser ever sees the key. It is off until the first two
-settings below are set, and no account may use it until `LIVE_ALLOWED_USERS` names it:
+A voice assistant in the web app and in the apps ([LIVE_ASSISTANT.md](LIVE_ASSISTANT.md)) that tells
+an account what its sessions are doing and drafts messages to them. The gateway holds the one
+WebSocket to OpenAI's Live API with a key of its own, so no client ever sees the key. It is off
+until the first two settings below are set, and no account may use it until `LIVE_ALLOWED_USERS`
+names it:
 
 ```
 LIVE_ASSISTANT_ENABLED=true
@@ -434,15 +435,20 @@ LIVE_ALLOWED_USERS=admin        # comma-separated usernames; empty means nobody
 Every open call is a session OpenAI bills to that key, silence included, whoever is calling.
 `LIVE_MAX_CONCURRENT_CALLS` (`2`) caps the calls open at once on the whole gateway,
 `LIVE_MAX_CALL_SECONDS` (`1200`) caps one call and `LIVE_IDLE_TIMEOUT_SECONDS` (`90`) hangs up a call
-nobody is speaking in. `LIVE_DAILY_SECONDS` (`7200`) caps an account's call time per UTC day, counted
-in memory so that a restart starts the day afresh, and `LIVE_COOLDOWN_SECONDS` (`10`) is the pause
-before it may call again. While a call is open the microphone's audio goes to OpenAI, and so does
+nobody is speaking in; silence is billed to your key, and a phone keeps a call going with the screen
+locked, so a call forgotten in a pocket lasts until that timeout ends it: lower it rather than
+raise it. `LIVE_DAILY_SECONDS` (`7200`) caps an account's call time per UTC day, counted in memory
+so that a restart starts the day afresh, and `LIVE_COOLDOWN_SECONDS` (`10`) is the pause before it
+may call again. While a call is open the microphone's audio goes to OpenAI, and so does
 what the assistant's tools return when it asks for it: session titles, project folders, pending
 decisions and a short excerpt of a session's latest messages. The gateway stores none of it. What
 leaves the gateway and the rest of the settings are in the document above and in `.env.example`.
 
 The reverse proxy needs nothing new: `/ws/live` is under `/ws/`, so the Websockets Support that
-`/ws/app` needs covers it.
+`/ws/app` needs covers it, for the apps as well as the web app. The apps need no setting of their
+own: they read `GET /api/live/status`, so a gateway with the feature off shows no trace of it in an
+app, and an app asks the person's permission before the first call on any gateway, yours included,
+and keeps the conversations on its device.
 
 ## App compatibility
 

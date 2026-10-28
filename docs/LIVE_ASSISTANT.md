@@ -7,13 +7,20 @@ and a deployment that bills its calls gives the service a policy of its own (see
 been tried on real calls (see "What real calls showed"); apart from what those showed, every
 behavior is tested against a fake server written from the documents listed at the end.
 
+Clients: the web panel and the iOS, Android, Mac and Windows apps (closed source) are clients of the
+same socket and the same status route. The web panel is the reference and is described under "The
+web panel"; an app does what the panel does, with its words. Where a sentence is about the wire,
+"the browser" is the client end of the socket, the web page or an app's call, and the wire's own
+names keep the word (`browser_closed`, `browser_silent`, `browser_underruns`); what is only true of
+the web says "the page".
+
 ## What it does
 
-A developer with several coding-agent sessions opens the assistant in the web app, taps to start and
-talks. It answers what is running and in what state, what is waiting for a decision (project,
-decision, options), short summaries of a session's recent context, and drafts a message to a
-session. It supervises; it never codes, and it cannot approve or answer anything in v1. When the
-web app says which session's page is open, "this session" means that one.
+A developer with several coding-agent sessions opens the assistant in the web app or in one of the
+apps, taps to start and talks. It answers what is running and in what state, what is waiting for a
+decision (project, decision, options), short summaries of a session's recent context, and drafts a
+message to a session. It supervises; it never codes, and it cannot approve or answer anything in
+v1. When the client says which session's page is open, "this session" means that one.
 
 ## What leaves the gateway
 
@@ -41,7 +48,7 @@ browser <== WS /ws/live ==> gateway <== wss://api.openai.com/v1/live/sessions ==
   + small JSON messages       barge-in, usage record         + the Live API's events
 ```
 
-The browser never talks to OpenAI. The gateway holds one WebSocket to the Live API for the whole
+No client talks to OpenAI. The gateway holds one WebSocket to the Live API for the whole
 call (the Live API's "primary WebSocket" transport), authenticated with `LIVE_OPENAI_API_KEY`; the
 session lives exactly as long as that socket, so there is no separately created session that could
 be left behind. Tools run in the gateway, on that same connection, as the calling account.
@@ -199,10 +206,11 @@ Without an event to react to, the gateway listens for itself:
   model doesn't know what the user heard").
 - The same detector and the transcripts drive the idle hang-up; the guide warns that gaps between
   transcript events are not silence.
-- **Echo.** The browser's own echo cancellation, noise suppression and level control are on. If a
-  speaker's echo still makes the assistant cut itself off, set `LIVE_BARGE_IN=false`: the assistant
-  is never cut off by the gateway then (the model's own handling of an interruption still applies,
-  but queued audio is no longer flushed). The thresholds are guesses until tried on real devices.
+- **Echo.** The client's own echo cancellation, noise suppression and level control are on (the
+  browser's, or an app's own). If a speaker's echo still makes the assistant cut itself off, set
+  `LIVE_BARGE_IN=false`: the assistant is never cut off by the gateway then (the model's own
+  handling of an interruption still applies, but queued audio is no longer flushed). The thresholds
+  are guesses until tried on real devices.
 
 ### Tools and drafts
 
@@ -642,17 +650,20 @@ apart.
 
 ## Known limits
 
-- Web only; no wake word. Reloading the page or closing the tab ends the call, and nothing resumes
-  it. A phone browser that suspends the page in the background is likely to stop the microphone
-  frames, and the gateway then drops the call after 15 s of silence from it.
+- No wake word. Reloading the page or closing the tab ends a web call, and nothing resumes it. A
+  phone browser that suspends the page in the background is likely to stop the microphone frames,
+  and the gateway then drops the call after 15 s of silence from it. The apps keep an open call
+  going where the platform allows it, a phone with the screen locked or another app in front and a
+  computer with its window minimized; hanging up, closing the last window, quitting or locking the
+  app ends a call, and nothing resumes one that dropped.
 - The spoken-yes gate is soft: it checks the shape of an answer, not the words. A transcript can
   lag the audio it transcribes, and the assistant is not told what the person actually heard of an
   interrupted reply.
 - Captions go through the gateway while they are on, and the gateway never stores them. The
-  conversation history is the browser's own: per browser and per account name, never shared and
-  never sent to the gateway.
-- Dictation on the chat page is heard by the assistant unless the person mutes; nothing mutes it
-  for them.
+  conversation history is the client's own: per browser or per app install, and per account, never
+  shared and never sent to the gateway.
+- On the web, dictation on the chat page is heard by the assistant unless the person mutes; nothing
+  mutes it for them. The apps keep the two apart: a dictation and a call exclude each other.
 - A chat page for a session that does not exist shows no header, and so no entry, though a call
   that is on goes on.
 - `starved` is the gateway's estimate: the pacer assumes the browser plays in real time from the
@@ -660,5 +671,8 @@ apart.
   browser's own playout delay report (400 ms is assumed until it comes).
 - The assistant reads the gateway's in-memory replay buffer, so right after a restart a pending
   decision's options may be unavailable until the device sends events again.
-- One call per account, so a second tab is refused rather than taking over. With the default policy
-  the day's call time is in memory and starts over with the gateway.
+- One call per account, so a second tab or a second device is refused rather than taking over. With
+  the default policy the day's call time is in memory and starts over with the gateway.
+- A phone keeps an open call going in the background and Mute sends silence, so a call forgotten in
+  a pocket stays open, and OpenAI bills it, silence included, until the idle hang-up
+  (`LIVE_IDLE_TIMEOUT_SECONDS`, 90 s by default) ends it.
