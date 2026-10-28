@@ -9,6 +9,7 @@ These documents go deeper.
 | [DEPLOY.md](DEPLOY.md) | Deploy or operate the gateway: every `.env` variable, TLS, upgrades, backups, speech-to-text, push, troubleshooting |
 | [CLIENT.md](CLIENT.md) | Install, run or debug the device daemon: the installer, `rc-client` commands, services, agent discovery, terminal mirroring, the `claude` shim, the shared Codex daemon and attached sessions |
 | [WEB.md](WEB.md) | Build, run or change the browser app, including its mock gateway |
+| [LIVE_ASSISTANT.md](LIVE_ASSISTANT.md) | Run, change or remove the experimental voice assistant: what it does, what leaves the gateway, its call protocol, limits and removal steps |
 | [DESIGN.md](DESIGN.md) | Change the interface: the screens, composer semantics, approval rules, status vocabulary, design tokens |
 | [VALIDATION.md](VALIDATION.md) | Run the checks every change needs, and the end-to-end smoke flow before a release |
 

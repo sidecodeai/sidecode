@@ -22,7 +22,7 @@ docker build -f gateway/Dockerfile -t rc-gateway:check .
 | Check | What it covers |
 | --- | --- |
 | `validate_fixtures.py` | Every fixture against its JSON Schema, the rules the schema cannot express, the invalid fixtures, and coverage of every frame, event and HTTP body |
-| Gateway | Lint, formatting, types and the unit and integration tests, including the protocol fixtures replayed against the real routes |
+| Gateway | Lint, formatting, types and the unit and integration tests, including the protocol fixtures replayed against the real routes and the voice assistant's calls against a fake Live API |
 | Client | The same for the device daemon, with the agents' recorded transcripts and handshakes as fixtures |
 | Web | The component and store tests, the TypeScript check, lint and the production build |
 | Image | The release image: the web build, the `rc_client` wheel and the gateway in one container |

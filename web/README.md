@@ -55,6 +55,7 @@ src/
     sessions/     Session list, New session drawer, directory browser and probe
     chat/         Sidebar, header, timeline and blocks, composer, status line
     voice/        Mic capture, 16 kHz PCM16 conversion, live transcription panel
+    live/         Voice assistant: the entry, the panel, the call and its saved history
     settings/     Account, web push, voice, about
   push/           Web Push subscription and service worker registration
   styles/         tokens.css (design tokens) and base.css

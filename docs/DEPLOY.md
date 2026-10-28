@@ -138,6 +138,7 @@ names the missing one.
 | `POLISH_API_KEY` | empty | Bearer token for that provider. Both this and the base URL are needed to enable polish |
 | `POLISH_MODELS` | empty | Optional comma-separated allowlist of model ids: it narrows and orders the list the apps offer, stands in for a provider that serves no `/models`, and makes `POST /api/polish` refuse any other model with `400` |
 | `POLISH_TIMEOUT_SECONDS` | `20` | How long one polish request may take before the gateway answers `502` |
+| `LIVE_ASSISTANT_ENABLED` | `false` | Switches on the experimental voice assistant, which also needs `LIVE_OPENAI_API_KEY`, and `LIVE_ALLOWED_USERS` to name who may use it; these and the other `LIVE_*` settings are described under [Voice assistant](#voice-assistant-experimental) |
 | `IOS_MIN_APP_VERSION` | the build's own constant | Overrides the oldest iOS app this gateway supports (`major.minor.patch`, A31). Normally left unset: the constant `IOS_MINIMUM_APP_VERSION` in `rc_gateway/compat.py` is raised in the release that breaks compatibility |
 | `IOS_UPDATE_URL` | empty | Where the iPhone app's "Update required" screen sends people, such as the app's App Store page, `https://` only |
 | `MACOS_MIN_APP_VERSION` | the build's own constant | Overrides the oldest Mac app this gateway supports (`major.minor.patch`, A45). Normally left unset: the constant `MACOS_MINIMUM_APP_VERSION` in `rc_gateway/compat.py` is raised in the release that breaks the Mac app's compatibility, apart from the iOS one |
@@ -416,6 +417,32 @@ them, sent to your provider with the operator's key; the gateway stores nothing 
 provider that is down or slow answers the app with `502`, and the dictation stays as it was spoken;
 more than thirty polish requests a minute from one address answer `429`.
 Only the polish feature uses this key: the gateway still runs no agent and holds no agent credential.
+
+## Voice assistant (experimental)
+
+A voice assistant in the web app ([LIVE_ASSISTANT.md](LIVE_ASSISTANT.md)) that tells an account what
+its sessions are doing and drafts messages to them. The gateway holds the one WebSocket to OpenAI's
+Live API with a key of its own, so no browser ever sees the key. It is off until the first two
+settings below are set, and no account may use it until `LIVE_ALLOWED_USERS` names it:
+
+```
+LIVE_ASSISTANT_ENABLED=true
+LIVE_OPENAI_API_KEY=sk-…        # a key made for this gateway; set its spend limit in OpenAI's console
+LIVE_ALLOWED_USERS=admin        # comma-separated usernames; empty means nobody
+```
+
+Every open call is a session OpenAI bills to that key, silence included, whoever is calling.
+`LIVE_MAX_CONCURRENT_CALLS` (`2`) caps the calls open at once on the whole gateway,
+`LIVE_MAX_CALL_SECONDS` (`1200`) caps one call and `LIVE_IDLE_TIMEOUT_SECONDS` (`90`) hangs up a call
+nobody is speaking in. `LIVE_DAILY_SECONDS` (`7200`) caps an account's call time per UTC day, counted
+in memory so that a restart starts the day afresh, and `LIVE_COOLDOWN_SECONDS` (`10`) is the pause
+before it may call again. While a call is open the microphone's audio goes to OpenAI, and so does
+what the assistant's tools return when it asks for it: session titles, project folders, pending
+decisions and a short excerpt of a session's latest messages. The gateway stores none of it. What
+leaves the gateway and the rest of the settings are in the document above and in `.env.example`.
+
+The reverse proxy needs nothing new: `/ws/live` is under `/ws/`, so the Websockets Support that
+`/ws/app` needs covers it.
 
 ## App compatibility
 

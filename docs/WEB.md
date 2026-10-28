@@ -142,7 +142,7 @@ src/
   stores/      zustand stores; timeline.ts is the pure event -> renderable-items reducer
   components/  buttons, modal, drawer, popover, context menu, segmented control, status dots
   layout/      the signed-in shell, the mark, and the landing rule
-  features/    login, devices, sessions, chat, voice, settings, users
+  features/    login, devices, sessions, chat, voice, live, settings, users
   push/        Web Push subscription and service worker registration
   styles/      tokens.css and base.css
 mock/          the mock gateway
@@ -297,6 +297,20 @@ can be watched; its speech-to-text final transcript carries fillers on purpose. 
 helpers, the slot over every pair of phases, the composer flow (success, failure, the slot and the
 Enter key while the request is out, a typed edit that drops it, undo, both disabled cases), the
 settings group in both gateway states, the per-account keys and the three protocol fixtures.
+
+## The voice assistant
+
+`src/features/live/` is the panel of the experimental voice assistant (`docs/LIVE_ASSISTANT.md`,
+§ "The web panel" has the detail). Its entry is a button in the top bar and in the chat and
+terminal headers, and it renders nothing unless `GET /api/live/status` says the assistant is enabled
+for the account; Start is offered only when the status also says a call can start, and an account
+that cannot have one is told why in place of Start. The call (the microphone, the audio context and
+`WS /ws/live`) is page-level state in `liveCall.ts` and a store, not a screen's, so a change of route
+leaves it alone, and it ends when the person hangs up, the gateway ends it, the account changes or
+signs out, or the page is closed. Each call's conversation is kept in this browser's `localStorage`
+under the signed-in account, the newest 20, and never goes to the gateway. The player (`player.ts`)
+is the only jitter buffer in the path, since the Live API's audio arrives at real time. Tests are in
+`tests/live/`; they run the panel against a fake socket and fake audio.
 
 ## No dictation language on the web (A44)
 

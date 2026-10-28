@@ -526,12 +526,13 @@ sense with the screen in front of the speaker — "the green blinking thing" for
 status dot. Sent as-is it makes the agent guess. So the gateway can hold one more key of the
 operator's (A29): `POLISH_BASE_URL` and `POLISH_API_KEY` name an OpenAI-compatible provider, and
 with them set the gateway serves that provider's models at `GET /api/polish/models` and polishes a
-dictation at `POST /api/polish`. This is the only language model the gateway ever calls, it does so
-only when an app asks, and the request is the app's own words: the dictated text, the model and
-strength the user chose in Settings, a language hint, and up to twenty of the conversation's most
-recent user and assistant messages exactly as the app shows them. The gateway never reads a device's
-history for this, stores nothing from the call, and hands the answer back to the app alone — it is
-a draft in the composer, and sending it is still the person's action.
+dictation at `POST /api/polish`. Apart from the voice assistant below, this is the only language
+model the gateway calls, it does so only when an app asks, and the request is the app's own words:
+the dictated text, the model and strength the user chose in Settings, a language hint, and up to
+twenty of the conversation's most recent user and assistant messages exactly as the app shows them.
+The gateway never reads a device's history for this, stores nothing from the call, and hands the
+answer back to the app alone — it is a draft in the composer, and sending it is still the person's
+action.
 
 Two strengths, fixed in the protocol so both apps and the prompt agree. *Moderate* removes fillers,
 false starts and repetitions, corrects what the recogniser plainly misheard, punctuates, and keeps
@@ -542,6 +543,21 @@ in and return text only; the gateway wraps the dictated text so a model cannot r
 instruction. `hello` and `GET /api/config` carry `polish.enabled`, which is what lets an app show
 the setting or disable it with a note. Without the two variables everything about dictation is as
 it was.
+
+## The voice assistant
+
+An experiment (`docs/LIVE_ASSISTANT.md`), off unless switched on in `.env`. A panel in the web app
+talks to the gateway on `WS /ws/live`, and the gateway alone holds the one WebSocket to OpenAI's Live
+API with the operator's key, so neither the key nor the audio path reaches a browser. The model's
+tool calls run in the gateway as the signed-in account: every read and write starts from that
+account's own devices, and a session that is not theirs is answered as if it did not exist. The tools
+list the sessions and their pending decisions, read a bounded tail of one session's replay buffer
+(`ReplayBuffer.tail`), and draft a message that the hub sends as the account's own app would
+(`Hub.send_session_as`), but only after the assistant has read it back and the person has said yes or
+pressed Send. The gateway stores nothing of a call, neither the audio nor the transcripts nor what a
+tool returned, and its one log line per call holds ids, counts and timings.
+Who may call, and what a call costs, are a policy the service is given (`live/policy.py`): the
+default is the `LIVE_ALLOWED_USERS` allowlist with a daily cap on call time, and nothing billed.
 
 ## A terminal on a device
 

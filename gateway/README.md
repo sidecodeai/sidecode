@@ -54,7 +54,7 @@ uv run pytest -q
 ```
 
 The tests exercise the real ASGI app through Starlette's `TestClient`, including WebSockets. They
-never reach the network: the STT backend, Web Push and APNs senders are injected fakes.
+never reach the network: the STT backend, the Live API, Web Push and APNs senders are injected fakes.
 
 ## Layout
 
@@ -74,6 +74,7 @@ never reach the network: the STT backend, Web Push and APNs senders are injected
 | `rc_gateway/push*.py`, `apns.py` | Web Push and APNs |
 | `rc_gateway/badge.py` | the A47 badge-only APNs push, sent once an account's count has been still for 3 s |
 | `rc_gateway/stt.py` | OpenAI-compatible transcription client |
+| `rc_gateway/live/` | the experimental voice assistant: `WS /ws/live`, the one WebSocket to the Live API, its tools, limits and policy (`docs/LIVE_ASSISTANT.md`) |
 
 ## Docker
 
