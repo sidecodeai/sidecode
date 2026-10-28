@@ -240,8 +240,10 @@ not apply to them; project and local settings do. Change it with `[claude] setti
 
 - **The device dials out.** Nothing listens on a developer machine, so no inbound port, no SSH key
   and no tunnel is involved.
-- **Credentials stay where they belong.** The agents' model credentials never leave the device. The
-  gateway has no model API key and cannot run an agent.
+- **Credentials stay where they belong.** The agents' model credentials never leave the device, and
+  the gateway cannot run an agent. The only model API keys it can hold are the operator's own, for
+  speech-to-text, dictation polish and the experimental voice assistant, and each is used for that
+  feature alone.
 - **The gateway forwards, it does not read.** It parses the routing envelope and the session
   summaries it indexes; message text, tool input and tool output pass through opaquely.
 - **Accounts are separate.** Every device, session, pairing code and notification belongs to one
