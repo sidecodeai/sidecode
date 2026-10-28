@@ -17,8 +17,8 @@ export interface LiveStatusHook {
  * What the gateway says of the assistant for this account: nothing until it has said, and an
  * answer given for another account is never taken for this one. The gateway is asked once per
  * page load, so remounting the top bar shows the button at once and asks nothing. The exceptions
- * are a "not now", which opening the panel asks about again so a plan bought elsewhere or a month
- * that turned needs no reload, and whatever the caller asks `refresh` for.
+ * are a "not now", which opening the panel asks about again so an account change made elsewhere
+ * or a month that turned needs no reload, and whatever the caller asks `refresh` for.
  */
 export function useLiveStatus(username: string, open: boolean): LiveStatusHook {
   const [answer, setAnswer] = useState<Answer | null>(() => {

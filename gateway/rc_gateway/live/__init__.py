@@ -33,9 +33,8 @@ def mount_live(
 ) -> LiveService | None:
     """Register the routes when the feature is on, under ``policy`` (the self-hosted one if none).
 
-    A state with a paid service is the official gateway, whose calls are billed: without a policy
-    that bills them the feature stays off, rather than run for nothing. One without the attribute
-    at all (the open-source tree has no paid package) is a self-hosted one.
+    A gateway with a hosted service bills its calls: without a policy that bills them the feature
+    stays off, rather than run for nothing. A state with no such service is a self-hosted one.
     """
     if getattr(state, "paid", None) is not None and policy is None:
         return None

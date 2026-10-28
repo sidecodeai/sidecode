@@ -176,9 +176,9 @@ def live_paths(app: FastAPI) -> list[str]:
     return [path for path in app.openapi()["paths"] if "live" in path]
 
 
-def test_a_gateway_with_a_paid_service_mounts_it_only_under_a_policy_of_its_own() -> None:
-    # A stand-in for the official gateway's state, so this test needs no paid package; the real
-    # hosted state is checked in the paid tree's own tests.
+def test_a_gateway_with_a_hosted_service_mounts_it_only_under_a_policy_of_its_own() -> None:
+    # A stand-in for the state of a gateway with a hosted service, so this test needs none of its
+    # code; that gateway's own tests check the real state.
     app = FastAPI()
     hosted = cast(GatewayState, SimpleNamespace(paid=object()))
     assert live.mount_live(app, hosted, config=LiveConfig(api_key="k")) is None
@@ -192,7 +192,7 @@ def test_a_gateway_with_a_paid_service_mounts_it_only_under_a_policy_of_its_own(
     assert live_paths(governed) == ["/api/live/status"]
 
 
-def test_a_state_that_has_no_paid_attribute_at_all_is_a_self_hosted_one() -> None:
+def test_a_state_with_no_hosted_service_at_all_is_a_self_hosted_one() -> None:
     app = FastAPI()
     state = cast(GatewayState, SimpleNamespace())
     service = live.mount_live(app, state, config=LiveConfig(api_key="k"))

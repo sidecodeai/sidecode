@@ -85,8 +85,8 @@ export function fetchLiveStatus(username: string): Promise<LiveStatus> {
 }
 
 /**
- * Ask again, whatever was kept: a "not now" can stop being true while the page is open (a plan
- * bought elsewhere, a month that turned). A failure keeps the answer given before.
+ * Ask again, whatever was kept: a "not now" can stop being true while the page is open (an
+ * account change made elsewhere, a month that turned). A failure keeps the answer given before.
  */
 export function refreshLiveStatus(username: string): Promise<LiveStatus> {
   return request(username);
