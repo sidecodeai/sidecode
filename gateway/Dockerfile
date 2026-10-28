@@ -12,6 +12,8 @@ FROM node:22-alpine AS web-build
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json* ./
 RUN npm ci
+# tsc needs about 440 MB of heap, and Node's default limit is lower on small hosts.
+ENV NODE_OPTIONS=--max-old-space-size=768
 COPY web/ ./
 RUN npm run build
 
