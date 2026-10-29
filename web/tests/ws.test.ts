@@ -196,6 +196,90 @@ describe('AppSocket', () => {
     socket.stop();
   });
 
+  describe('after a gateway restart (close code 1012)', () => {
+    /** Advance the clock until the next socket is created; returns how long that took. */
+    const untilNextSocket = (): number => {
+      const before = FakeSocket.instances.length;
+      let waited = 0;
+      while (FakeSocket.instances.length === before && waited < 60_000) {
+        vi.advanceTimersByTime(10);
+        waited += 10;
+      }
+      return waited;
+    };
+
+    it('retries every second for thirty seconds, then backs off as usual', () => {
+      const { socket } = makeSocket({ random: () => 0.5 });
+      socket.start();
+      latest().open();
+      latest().fail(1012);
+
+      const delays: number[] = [];
+      for (let i = 0; i < 36; i += 1) {
+        delays.push(untilNextSocket());
+        // The gateway is still down: the socket never opens.
+        latest().fail(1006);
+      }
+
+      expect(delays.slice(0, 30)).toEqual(Array(30).fill(1_000));
+      expect(delays.slice(30)).toEqual([250, 500, 1_000, 2_000, 4_000, 5_000]);
+      socket.stop();
+    });
+
+    it('spreads the one-second retries by fifteen percent either way', () => {
+      for (const [random, expected] of [
+        [0, 850],
+        [1, 1_150],
+      ] as const) {
+        FakeSocket.instances = [];
+        const { socket } = makeSocket({ random: () => random });
+        socket.start();
+        latest().open();
+        latest().fail(1012);
+        expect(untilNextSocket()).toBe(expected);
+        socket.stop();
+      }
+    });
+
+    it('goes back to the usual backoff once a hello shows the gateway is up', () => {
+      const { socket } = makeSocket({ random: () => 0.5 });
+      socket.start();
+      latest().open();
+      latest().fail(1012);
+      untilNextSocket();
+      latest().open();
+      latest().receive({ type: 'hello', protocol: 1, devices: [], sessions: [] });
+
+      latest().fail(1006);
+      expect(untilNextSocket()).toBe(250);
+      socket.stop();
+    });
+
+    it('does not report a plain drop as a restart', () => {
+      const { socket } = makeSocket({ random: () => 0.5 });
+      socket.start();
+      latest().open();
+      latest().fail(1006);
+      expect(untilNextSocket()).toBe(250);
+      latest().fail(1006);
+      expect(untilNextSocket()).toBe(500);
+      socket.stop();
+    });
+
+    it('stays "reconnecting" between the one-second attempts', () => {
+      const { socket, statuses } = makeSocket({ random: () => 0.5 });
+      socket.start();
+      latest().open();
+      latest().fail(1012);
+      for (let i = 0; i < 3; i += 1) {
+        untilNextSocket();
+        latest().fail(1006);
+      }
+      expect(statuses).toEqual(['connecting', 'open', 'reconnecting']);
+      socket.stop();
+    });
+  });
+
   it('treats sixty seconds of total silence as a half-open socket', () => {
     const { socket } = makeSocket();
     socket.start();

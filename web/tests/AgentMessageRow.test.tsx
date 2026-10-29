@@ -69,6 +69,10 @@ const renderTimeline = (timeline: TimelineState) =>
       timeline={timeline}
       historyLoading={false}
       historyHasMore={false}
+      historyLoaded
+      repairing={false}
+      error={null}
+      onRetry={vi.fn()}
       onOpenFull={vi.fn().mockResolvedValue(undefined)}
       onApprove={vi.fn().mockResolvedValue(undefined)}
       onAnswer={vi.fn().mockResolvedValue(undefined)}

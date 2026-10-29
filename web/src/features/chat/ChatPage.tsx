@@ -23,6 +23,7 @@ import { applyOptions, type SessionOptions } from './sessionOptions';
 import { StatusLine } from './StatusLine';
 import { Timeline } from './Timeline';
 import { useFrontConversation } from './useFrontConversation';
+import { useHistoryRetry } from './useHistoryRetry';
 import type { AttachmentDraft } from './attachments';
 import './chat.css';
 
@@ -47,6 +48,7 @@ export function ChatPage() {
   const answerQuestion = useChat((s) => s.answer);
   const expandBlock = useChat((s) => s.expandBlock);
   const loadOlder = useChat((s) => s.loadOlder);
+  const retryLoad = useChat((s) => s.retry);
   const removeQueued = useChat((s) => s.removeQueued);
   const runCommand = useChat((s) => s.runCommand);
   const commands = useCommands(commandsOf(sessionId));
@@ -84,6 +86,10 @@ export function ChatPage() {
 
   // A47: an open conversation is a seen one only while the page is in front.
   useFrontConversation(deviceId, sessionId);
+
+  // A conversation that could not be read is asked for again by itself: when its
+  // device comes online, and on a short backoff while it is.
+  useHistoryRetry(key, (chat?.error ?? null) !== null, device?.online ?? false, retryLoad);
 
   // A27: the list is fetched when the conversation opens, so the panel is on
   // screen the moment `/` is typed. An agent without the capability is never
@@ -260,6 +266,7 @@ export function ChatPage() {
   );
 
   const onLoadOlder = useCallback(() => void loadOlder(key), [loadOlder, key]);
+  const onRetryLoad = useCallback(() => retryLoad(key), [retryLoad, key]);
 
   /**
    * A35: both resume actions answer with the session, so the notice follows the
@@ -334,6 +341,10 @@ export function ChatPage() {
           timeline={timeline}
           historyLoading={chat?.historyLoading ?? false}
           historyHasMore={chat?.historyHasMore ?? false}
+          historyLoaded={chat?.historyLoaded ?? false}
+          repairing={chat?.repairing ?? false}
+          error={chat?.error ?? null}
+          onRetry={onRetryLoad}
           onOpenFull={onOpenFull}
           onApprove={onApprove}
           onAnswer={onAnswer}

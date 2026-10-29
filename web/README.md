@@ -74,12 +74,26 @@ Every user-visible string lives in `src/strings.ts` so the app can be localised 
 
 - **Reconnect** — the app socket backs off exponentially, capped at 5 s, replies to `ping`, and
   treats 60 s without any frame as a half-open connection (mobile NAT never delivers `onclose`).
-  Subscriptions are re-issued after every reconnect with the latest `since_seq`.
+  After a `1012` close (the gateway restarting) it asks again every second, spread by 15 %, for
+  30 s before the usual backoff takes over. Subscriptions are re-issued after every reconnect
+  with the latest `since_seq`.
 - **Timeline** — a later event with the same `block_id` replaces the earlier one, except
-  streaming `delta` events, which append. Events with a `seq` at or below the last applied one
-  are dropped. `status`, `meta`, `queue` and `todos` are session state, not timeline rows, so
-  they are folded separately from live frames, from a subscribe replay, and from the newest
-  history page (amendment A6 also carries a `queue` snapshot on the subscribe reply).
+  streaming `delta` events, which append. An event with a `seq` at or below the last applied one
+  is dropped unless it carries a block the timeline does not hold or a newer version of one it
+  does: that is an event that arrived behind newer ones, and it is merged where it belongs.
+  `status`, `meta`, `queue` and `todos` are session state, not timeline rows, so they are folded
+  separately from live frames, from a subscribe replay, and from the newest history page
+  (amendment A6 also carries a `queue` snapshot on the subscribe reply).
+- **Holes and resync** — a live event that skips a `seq` leaves a hole: the timeline keeps the
+  last contiguous `seq` beside `lastSeq`, and the chat store asks the device for everything after
+  it (`session.history` with `after_seq`, amendment A9) and merges the pages by block id, the
+  newer copy of a block winning. A `resync` keeps the transcript the same way: the rows stay
+  while the device is asked for what follows the cursor. A jump inside a subscribe reply is not a
+  hole, because the gateway may answer from the device's history.
+- **Unreadable conversations** — a conversation that could not be read shows why, with a Retry,
+  and never "No messages yet", which is only said after a read succeeded and found none. It is
+  asked for again by itself when its device comes online and, while it is online, after 2, 4, 8,
+  15 and 15 s.
 - **Sending** — the composer always sends `mode:"auto"` and lets the device decide: send now
   when idle, steer when the agent advertises `steer`, queue otherwise. The button label follows
   that decision. "Interrupt & send" is a separate, explicit action. The one exception is a queued
@@ -96,8 +110,8 @@ Every user-visible string lives in `src/strings.ts` so the app can be localised 
   finishes long after it started keeps its place, live and after a reload.
 - **Truncated output** — rows fold beyond 20 lines; `output_truncated` adds "Open full output",
   which fetches the untruncated block with `session.block`.
-- **Close codes** — 4401 and 4403 end the session and return to login (amendment A4); every
-  other close code reconnects with backoff.
+- **Close codes** — 4401 and 4403 end the session and return to login (amendment A4); 1012
+  retries every second for 30 s; every other close code reconnects with backoff.
 - **Failed actions** — stop, approve, answer, expand, dequeue and setting changes all report
   their failure in a dismissible banner above the composer instead of rejecting silently.
 
@@ -125,6 +139,11 @@ shell. Push payloads carry only `{rc: {kind, device_id, session_id, device_name}
 notification text is generic and a click focuses or opens
 `/sessions/<device_id>/<session_id>` — an already-open tab is routed by the `rc.navigate`
 message the app listens for.
+
+A tab opened before a deploy keeps its old entry file, and the first lazy chunk it asks for
+afterwards is gone: the gateway answers 404 for a missing `/assets/` file, `vite:preloadError`
+and the `ChunkBoundary` around every lazy part keep the page standing, and a floating notice asks
+for a reload. Nothing reloads by itself, because drafts live in memory only.
 
 ## Responsive
 

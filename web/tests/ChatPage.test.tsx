@@ -5,8 +5,8 @@
  * except on a session a terminal shares, where A40 has it follow the terminal
  * rather than run ahead of it.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { ChatPage } from '../src/features/chat/ChatPage';
@@ -332,11 +332,16 @@ describe('Stop on an attached Claude terminal', () => {
           sessionId: session.session_id,
           timeline: emptyTimeline(),
           todos: [],
+          todosSeq: 0,
           queue: [],
+          queueSeq: 0,
           usage: null,
           ready: true,
           historyLoading: false,
           historyHasMore: false,
+          historyLoaded: true,
+          repairing: false,
+          generation: 0,
           error: null,
           closedSeq: null,
         },
@@ -370,5 +375,73 @@ describe('Stop on an attached Claude terminal', () => {
     // The canned conflict sentence would send the reader to Take over, which
     // a shared session does not even offer.
     expect(screen.queryByText(strings.errors.conflictTerminal)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * `docs/DESIGN.md` § "When the history cannot be read": the page says why a
+ * conversation could not be read, never that it is empty, and asks again by
+ * itself when its device comes online.
+ */
+describe('a conversation that could not be read', () => {
+  const realRetry = useChat.getState().retry;
+  const retry = vi.fn();
+
+  const failed = () => {
+    useChat.setState({
+      retry,
+      sessions: {
+        [key]: {
+          key,
+          deviceId: session.device_id,
+          sessionId: session.session_id,
+          timeline: emptyTimeline(),
+          todos: [],
+          todosSeq: 0,
+          queue: [],
+          queueSeq: 0,
+          usage: null,
+          ready: true,
+          historyLoading: false,
+          historyHasMore: true,
+          historyLoaded: false,
+          repairing: false,
+          generation: 0,
+          error: strings.errors.deviceOffline,
+          closedSeq: null,
+        },
+      },
+    });
+  };
+
+  beforeEach(() => {
+    retry.mockReset();
+    useDevices.setState({ devices: [{ ...device, online: false }], loaded: true, updateErrors: {} });
+    failed();
+  });
+
+  afterEach(() => {
+    useChat.setState({ retry: realRetry });
+  });
+
+  it('says why, with a Retry, and never that there are no messages', async () => {
+    renderChat();
+
+    expect(await screen.findByText(strings.errors.deviceOffline)).toBeInTheDocument();
+    expect(screen.queryByText(strings.chat.emptyTimeline)).not.toBeInTheDocument();
+
+    await userEvent.setup().click(screen.getByRole('button', { name: strings.common.retry }));
+    expect(retry).toHaveBeenCalledWith(key);
+  });
+
+  it('asks again by itself when the device comes online', async () => {
+    renderChat();
+    await screen.findByText(strings.errors.deviceOffline);
+    expect(retry).not.toHaveBeenCalled();
+
+    act(() => useDevices.setState({ devices: [{ ...device, online: true }] }));
+
+    await waitFor(() => expect(retry).toHaveBeenCalledWith(key));
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 });

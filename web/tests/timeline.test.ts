@@ -5,12 +5,18 @@ import {
   addOptimistic,
   applyEvent,
   applyEvents,
+  beginRepair,
+  coverThrough,
   dropQueued,
   emptyTimeline,
+  hasGap,
   isUnconfirmed,
   keepOptimistic,
   mergeHistory,
+  mergeMissed,
+  mergeNewestPage,
   removeOptimistic,
+  reopenGap,
   replaceBlock,
   selectView,
   type OptimisticBlock,
@@ -422,6 +428,32 @@ describe('optimistic sends (A12)', () => {
     expect(roots.map((item) => item.key)).toEqual(['dev-99']);
   });
 
+  // A page of history after a reconnect holds the conversation's older messages, and the
+  // person's next message is often one they said before ("continue"). Matching the words
+  // took the older message for the echo and took the pending row, with its Retry, away.
+  it('never takes a page of history for the echo by its words, only by its id', () => {
+    let state = addOptimistic(emptyTimeline(), pending('req-1', 'continue'));
+    state = mergeMissed(state, [userMessage(4, 'earlier', 'continue')]);
+    expect(state.optimistic.map((b) => b.id)).toEqual(['req-1']);
+    state = mergeHistory(state, [userMessage(2, 'earlier-still', 'continue')]);
+    expect(state.optimistic.map((b) => b.id)).toEqual(['req-1']);
+
+    state = mergeMissed(state, [userMessage(9, 'req-1', 'continue')]);
+    expect(state.optimistic).toEqual([]);
+  });
+
+  it('does not take an older message with the same words, pushed live after a restart, for the echo', () => {
+    let state = applyEvent(emptyTimeline(), text(1000, 'earlier', true));
+    state = addOptimistic(state, pending('req-1', 'continue'));
+    // The rows start again from the newest page; the pending row stays.
+    state = keepOptimistic(state);
+
+    state = applyEvent(state, userMessage(900, 'older', 'continue'));
+    expect(state.optimistic.map((b) => b.id)).toEqual(['req-1']);
+    state = applyEvent(state, userMessage(1001, 'dev-1', 'continue'));
+    expect(state.optimistic).toEqual([]);
+  });
+
   it('reconciles one pending row per event and leaves the rest', () => {
     let state = addOptimistic(emptyTimeline(), pending('req-1', 'same words'));
     state = addOptimistic(state, pending('req-2', 'same words'));
@@ -667,5 +699,271 @@ describe('the history cursor', () => {
 
       expect(live.oldestSeq).toBe(history.oldestSeq);
     }
+  });
+});
+
+/**
+ * A live event that skips a `seq` leaves a hole. The web used to move its
+ * cursor over it and say nothing, so the hole stayed for good; now the
+ * timeline remembers the last event below it, which is where a repair asks the
+ * device to start.
+ */
+describe('holes', () => {
+  const block = (seq: number): SessionEvent =>
+    ({ seq, ts: seq, kind: 'assistant_text', block_id: `b${seq}`, text: `t${seq}`, done: true }) as SessionEvent;
+
+  it('follows lastSeq while events arrive in order, the first one included', () => {
+    let state = emptyTimeline();
+    // A first event has nothing before it to skip, whatever its number.
+    state = applyEvent(state, block(40));
+    expect([state.lastSeq, state.contiguousSeq, hasGap(state)]).toEqual([40, 40, false]);
+    state = applyEvent(state, block(41));
+    expect([state.lastSeq, state.contiguousSeq, hasGap(state)]).toEqual([41, 41, false]);
+  });
+
+  it('stays behind lastSeq once an event skips a seq, and the hole stays open', () => {
+    let state = applyEvents(emptyTimeline(), [block(1), block(2)]);
+    state = applyEvent(state, block(5));
+    expect([state.lastSeq, state.contiguousSeq, hasGap(state)]).toEqual([5, 2, true]);
+
+    // Events that follow in order do not close it: only a repair can.
+    state = applyEvent(state, block(6));
+    expect([state.lastSeq, state.contiguousSeq, hasGap(state)]).toEqual([6, 2, true]);
+  });
+
+  it('takes a jump inside a batch the gateway vouches for to be no hole', () => {
+    const state = applyEvents(emptyTimeline(), [block(1), block(2), block(9), block(14)]);
+    expect([state.lastSeq, state.contiguousSeq, hasGap(state)]).toEqual([14, 14, false]);
+  });
+
+  it('counts a hole as handled while its repair runs, and a new skip opens a new one', () => {
+    let state = applyEvents(emptyTimeline(), [block(1), block(2)]);
+    state = applyEvent(state, block(5));
+    state = beginRepair(state);
+    expect([state.contiguousSeq, hasGap(state)]).toEqual([5, false]);
+
+    state = applyEvent(state, block(6));
+    expect([state.contiguousSeq, hasGap(state)]).toEqual([6, false]);
+    state = applyEvent(state, block(9));
+    expect([state.contiguousSeq, hasGap(state)]).toEqual([6, true]);
+  });
+
+  it('opens the hole again, back at its start, when the repair fails', () => {
+    let state = applyEvents(emptyTimeline(), [block(1), block(2)]);
+    state = beginRepair(applyEvent(state, block(5)));
+
+    state = reopenGap(state, 2);
+    expect([state.contiguousSeq, hasGap(state)]).toEqual([2, true]);
+    // Never forward: a later, smaller hole does not close a bigger one.
+    expect(reopenGap(state, 4)).toBe(state);
+  });
+});
+
+/**
+ * The gateway fans out what a device reconnect backfilled once live events are
+ * already flowing, so an event can arrive behind newer ones. It used to be
+ * dropped as late, which left the hole for good.
+ */
+describe('events behind the cursor', () => {
+  const full = (seq: number, blockId: string, body: string): SessionEvent =>
+    ({ seq, ts: seq, kind: 'assistant_text', block_id: blockId, text: body, done: true }) as SessionEvent;
+
+  it('merge where they belong, and move neither cursor', () => {
+    let state = applyEvents(emptyTimeline(), [full(1, 'a', 'one'), full(9, 'c', 'three')]);
+    state = applyEvent(state, full(4, 'b', 'two'));
+
+    expect(state.order).toEqual(['a', 'b', 'c']);
+    expect([state.lastSeq, state.contiguousSeq]).toEqual([9, 9]);
+  });
+
+  it('replace a block they carry a newer version of', () => {
+    let state = applyEvents(emptyTimeline(), [tool(2, 'running', 'partial'), full(9, 'z', 'later')]);
+    state = applyEvent(state, tool(6, 'succeeded', 'final'));
+
+    const event = state.items.t1?.event;
+    expect(event?.kind === 'tool_call' && event.status).toBe('succeeded');
+    expect(state.order).toEqual(['t1', 'z']);
+  });
+
+  it('are dropped as the same state when the timeline already has them', () => {
+    const state = applyEvents(emptyTimeline(), [full(3, 'a', 'one'), full(9, 'b', 'two')]);
+    expect(applyEvent(state, full(3, 'a', 'one again'))).toBe(state);
+    // An older version of a block it holds newer is no news either.
+    expect(applyEvent(state, full(5, 'b', 'older'))).toBe(state);
+  });
+
+  it('are dropped when they are a fragment: the final event carries the whole text', () => {
+    const state = applyEvents(emptyTimeline(), [text(5, 'kept'), full(9, 'z', 'later')]);
+    expect(applyEvent(state, text(3, 'late fragment'))).toBe(state);
+  });
+});
+
+/**
+ * What the device holds for a stretch the timeline missed. Unlike a page of
+ * older history, which only fills in below what is shown, the newer copy of a
+ * block wins here.
+ */
+describe('merging what a repair fetched', () => {
+  const full = (seq: number, blockId: string, body: string): SessionEvent =>
+    ({ seq, ts: seq, kind: 'assistant_text', block_id: blockId, text: body, done: true }) as SessionEvent;
+
+  it('lets the newer copy of a block replace the older one, in the older one’s place', () => {
+    let state = applyEvents(emptyTimeline(), [full(1, 'a', 'one'), tool(2, 'running', 'partial')]);
+    state = applyEvent(state, full(6, 'z', 'later'));
+    state = mergeMissed(state, [tool(4, 'succeeded', 'final')]);
+
+    const event = state.items.t1?.event;
+    expect(event?.kind === 'tool_call' && event.output).toBe('final');
+    expect(state.order).toEqual(['a', 't1', 'z']);
+  });
+
+  it('adds the rows of the stretch and moves both lines when no hole is open', () => {
+    let state = applyEvents(emptyTimeline(), [full(1, 'a', 'one'), full(2, 'b', 'two')]);
+    state = mergeMissed(state, [full(3, 'c', 'three'), full(5, 'd', 'four')]);
+
+    expect(state.order).toEqual(['a', 'b', 'c', 'd']);
+    expect([state.lastSeq, state.contiguousSeq]).toEqual([5, 5]);
+  });
+
+  it('leaves a hole that is still open open', () => {
+    let state = applyEvents(emptyTimeline(), [full(1, 'a', 'one'), full(2, 'b', 'two')]);
+    state = applyEvent(state, full(9, 'z', 'jumped'));
+    state = mergeMissed(state, [full(3, 'c', 'three')]);
+
+    expect(state.order).toEqual(['a', 'b', 'c', 'z']);
+    expect([state.lastSeq, state.contiguousSeq, hasGap(state)]).toEqual([9, 2, true]);
+  });
+
+  it('never overwrites what is shown with an older copy', () => {
+    let state = applyEvents(emptyTimeline(), [tool(9, 'succeeded', 'final')]);
+    state = mergeMissed(state, [tool(2, 'running', 'stale')]);
+
+    const event = state.items.t1?.event;
+    expect(event?.kind === 'tool_call' && event.output).toBe('final');
+  });
+
+  it('retires the pending row the device’s copy of a send confirms', () => {
+    let state = addOptimistic(emptyTimeline(), {
+      id: 'req-1',
+      text: 'run the tests',
+      attachments: [],
+      at: 1,
+    });
+    state = mergeMissed(state, [
+      { seq: 4, ts: 4, kind: 'user_message', block_id: 'req-1', text: 'run the tests', source: 'remote' } as SessionEvent,
+    ]);
+
+    expect(state.optimistic).toEqual([]);
+    expect(state.order).toEqual(['req-1']);
+  });
+
+  it('is the same state when there is nothing new', () => {
+    const state = applyEvents(emptyTimeline(), [full(1, 'a', 'one'), full(2, 'b', 'two')]);
+    expect(mergeMissed(state, [])).toBe(state);
+    expect(mergeMissed(state, [full(2, 'b', 'two')])).toBe(state);
+  });
+
+  it('keeps to the row cap', () => {
+    const rows = Array.from({ length: MAX_TIMELINE_ITEMS }, (_, i) => full(i + 1, `r${i + 1}`, 'x'));
+    let state = applyEvents(emptyTimeline(), rows);
+    state = mergeMissed(state, [full(MAX_TIMELINE_ITEMS + 1, 'new', 'x')]);
+
+    expect(state.order).toHaveLength(MAX_TIMELINE_ITEMS);
+    expect(state.dropped).toBe(1);
+    expect(state.order.at(-1)).toBe('new');
+  });
+});
+
+/**
+ * The device keeps only the latest event of each block, and a `status` or a
+ * `meta` it does not keep at all. After a complete read the last events of an
+ * idle conversation are therefore ones nobody can fetch; they are not missing.
+ */
+describe('what the device never stored', () => {
+  const block = (seq: number): SessionEvent =>
+    ({ seq, ts: seq, kind: 'assistant_text', block_id: `b${seq}`, text: 't', done: true }) as SessionEvent;
+
+  it('is counted as read once the device says its last event came after the last one read', () => {
+    let state = mergeHistory(emptyTimeline(), [block(109), block(110)]);
+    state = coverThrough(state, 112);
+    expect([state.lastSeq, state.contiguousSeq, hasGap(state)]).toEqual([112, 112, false]);
+
+    // So the first live event after it is the next one, not a skip.
+    state = applyEvent(state, block(113));
+    expect(hasGap(state)).toBe(false);
+  });
+
+  it('leaves a hole that is still open open', () => {
+    let state = applyEvents(emptyTimeline(), [block(1), block(2)]);
+    state = applyEvent(state, block(9));
+    state = coverThrough(state, 12);
+    expect([state.lastSeq, state.contiguousSeq, hasGap(state)]).toEqual([12, 2, true]);
+  });
+
+  it('changes nothing when the device’s count is not ahead', () => {
+    const state = applyEvents(emptyTimeline(), [block(1), block(2)]);
+    expect(coverThrough(state, 2)).toBe(state);
+    expect(coverThrough(state, 0)).toBe(state);
+  });
+});
+
+/**
+ * `session.history` pages back from `oldestSeq`. An event that arrives behind
+ * newer ones — a backfill another client's cursor made the gateway fetch — is
+ * merged as a row, but it must not move that edge: paging back from its seq
+ * would skip everything between it and the rows the timeline holds.
+ */
+describe('the edge of the history window', () => {
+  const block = (seq: number): SessionEvent =>
+    ({ seq, ts: seq, kind: 'assistant_text', block_id: `b${seq}`, text: 't', done: true }) as SessionEvent;
+  const range = (from: number, to: number): SessionEvent[] =>
+    Array.from({ length: to - from + 1 }, (_, i) => block(from + i));
+
+  it('is not lowered by an event that arrives behind newer ones', () => {
+    let state = mergeHistory(emptyTimeline(), range(5000, 5099));
+    state = applyEvent(state, block(4001));
+
+    expect(state.order[0]).toBe('b4001');
+    expect(state.oldestSeq).toBe(5000);
+  });
+
+  it('is not lowered by a page of a repair either', () => {
+    let state = mergeHistory(emptyTimeline(), range(5000, 5099));
+    state = mergeMissed(state, [block(4001), block(4002)]);
+    expect(state.oldestSeq).toBe(5000);
+  });
+
+  it('is the lowest seq of the first batch merged into a timeline with none, in whatever order', () => {
+    const state = mergeMissed(emptyTimeline(), [block(7), block(5), block(6)]);
+    expect(state.oldestSeq).toBe(5);
+  });
+
+  it('is still lowered by a page of older history', () => {
+    let state = mergeHistory(emptyTimeline(), range(5000, 5099));
+    state = mergeHistory(state, range(4800, 4999));
+    expect(state.oldestSeq).toBe(4800);
+  });
+
+  // On a cold open the same stray events can arrive before the newest page does, while
+  // the timeline is still empty, and then they are the first events it has seen.
+  it('is the newest page’s own lowest seq, whatever arrived live below it before the page', () => {
+    let state = applyEvent(emptyTimeline(), block(4001));
+    state = applyEvent(state, block(4002));
+    expect(state.oldestSeq).toBe(4001);
+
+    state = mergeNewestPage(state, range(5000, 5099));
+
+    expect(state.oldestSeq).toBe(5000);
+    // The stray rows stay where they are; the page that reaches them takes them for duplicates.
+    expect(state.order.slice(0, 3)).toEqual(['b4001', 'b4002', 'b5000']);
+  });
+
+  it('is what live events made it when the newest page is empty', () => {
+    const state = mergeNewestPage(applyEvent(emptyTimeline(), block(4001)), []);
+    expect(state.oldestSeq).toBe(4001);
+  });
+
+  it('is the newest page’s lowest seq when nothing arrived before it', () => {
+    expect(mergeNewestPage(emptyTimeline(), range(5000, 5099)).oldestSeq).toBe(5000);
   });
 });

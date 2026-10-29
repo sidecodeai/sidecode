@@ -607,6 +607,15 @@ export const en = {
     restored: 'Reconnected',
   },
 
+  /**
+   * A tab opened before a deploy: the files it was loaded from are gone, and it
+   * asks for a reload (`docs/DESIGN.md` § "A tab older than the server").
+   */
+  appUpdate: {
+    stale: 'SideCode was updated. Reload to continue.',
+    reload: 'Reload',
+  },
+
   errors: {
     generic: 'Something went wrong.',
     stopFailed: 'Could not stop the turn.',
@@ -622,6 +631,8 @@ export const en = {
     notFound: 'Not found.',
     sessionMissing: 'This session is no longer available.',
     deviceOffline: 'That device is offline.',
+    /** The conversation could not be read from its device and no more precise reason is known. */
+    historyFailed: 'Could not load this conversation.',
     conflictTerminal: 'This session is controlled by the terminal. Take over first.',
     timeout: 'The device did not answer in time.',
     unsupported: 'Not supported by this device.',

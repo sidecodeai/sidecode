@@ -25,7 +25,8 @@ import {
   canSteer,
 } from '../src/features/chat/attach';
 import { addOptimistic, applyEvent, emptyTimeline, selectView } from '../src/stores/timeline';
-import { foldChat, foldSession, type ChatSession } from '../src/stores/chat';
+import type { ChatSession } from '../src/stores/chat';
+import { foldChat, foldSession } from '../src/stores/chatFold';
 import { emptyDraft, useAnswers } from '../src/stores/answers';
 import { refusalText } from '../src/lib/errors';
 import { RequestError } from '../src/lib/ws';
@@ -692,11 +693,16 @@ describe.runIf(fixturesAvailable())('A19 a held message is a queue entry', () =>
         at: 1788946148000,
       }),
       todos: [],
+      todosSeq: 0,
       queue: [],
+      queueSeq: 0,
       usage: null,
       ready: true,
       historyLoading: false,
       historyHasMore: false,
+      historyLoaded: true,
+      repairing: false,
+      generation: 0,
       error: null,
       closedSeq: null,
     };

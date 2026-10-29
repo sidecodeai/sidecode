@@ -508,6 +508,11 @@ export const zhHans: StringTable = {
     restored: '已重新连接',
   },
 
+  appUpdate: {
+    stale: '随码已更新，请重新加载以继续。',
+    reload: '重新加载',
+  },
+
   errors: {
     generic: '出了点问题。',
     stopFailed: '无法停止本轮任务。',
@@ -522,6 +527,7 @@ export const zhHans: StringTable = {
     notFound: '未找到。',
     sessionMissing: '该会话已不存在。',
     deviceOffline: '该设备已离线。',
+    historyFailed: '无法加载此对话。',
     conflictTerminal: '该会话由终端控制。请先接管。',
     timeout: '设备未在规定时间内响应。',
     unsupported: '此设备不支持。',

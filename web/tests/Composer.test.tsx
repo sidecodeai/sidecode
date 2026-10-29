@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { Composer } from '../src/features/chat/Composer';
 import { SEND_DELAY_MS } from '../src/features/chat/useImeGuard';
-import { foldSession } from '../src/stores/chat';
+import { foldSession } from '../src/stores/chatFold';
 import { strings } from '../src/strings';
 import { claudeAgent, codexAgent } from '../mock/fixtures';
 import type { AgentInfo, Session, SessionEvent, SessionState } from '../src/protocol/types';

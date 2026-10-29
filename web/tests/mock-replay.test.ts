@@ -22,7 +22,7 @@ describe('the replay bound', () => {
     const all = events(REPLAY_EVENTS + 10);
 
     expect(needsResync(all, 1)).toBe(true);
-    // A resync carries no events: the app blanks the timeline and reloads.
+    // A resync carries no events: the app keeps its transcript and asks the device for what follows its cursor.
     expect(replayFor(all, 1)).toEqual([]);
   });
 

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { StatusLine } from '../src/features/chat/StatusLine';
 import { claudeAgent, codexAgent } from '../mock/fixtures';
-import { foldSession } from '../src/stores/chat';
+import { foldSession } from '../src/stores/chatFold';
 import type { Session, SessionEvent, SessionState } from '../src/protocol/types';
 
 const base: Session = {

@@ -16,6 +16,7 @@ import type {
   TurnCompletedEvent,
   UserMessageEvent,
 } from '../../protocol/types';
+import { HistoryNotice } from './HistoryNotice';
 import { MarkdownText } from './MarkdownText';
 import { ApprovalCard } from './blocks/ApprovalCard';
 import { ErrorRow, NoticeRow, ResumeRow, TurnEndRow } from './blocks/NoticeRow';
@@ -37,6 +38,13 @@ interface Props extends TimelineHandlers {
   timeline: TimelineState;
   historyLoading: boolean;
   historyHasMore: boolean;
+  /** Whether the newest page was read: before that, empty means unknown, not "no messages". */
+  historyLoaded: boolean;
+  /** Whether a repair is asking the device for what was missed: empty is not known either. */
+  repairing: boolean;
+  /** Why the conversation could not be read, or null. */
+  error: string | null;
+  onRetry: () => void;
   footer?: ReactNode;
 }
 
@@ -44,11 +52,15 @@ export function Timeline({
   timeline,
   historyLoading,
   historyHasMore,
+  historyLoaded,
+  repairing,
+  error,
   footer,
   onOpenFull,
   onApprove,
   onAnswer,
   onLoadOlder,
+  onRetry,
 }: Props) {
   const detail = useSettings((s) => s.timelineDetail);
   const view = useMemo(() => selectView(timeline, detail), [timeline, detail]);
@@ -84,7 +96,12 @@ export function Timeline({
             <p className="timeline-note">{strings.chat.historyStart}</p>
           ) : null}
 
-          {timeline.order.length === 0 && !historyLoading ? (
+          {/* Said only once a read has succeeded and nothing is being fetched: a pending or a failed read, or a repair under way, says nothing is known. */}
+          {timeline.order.length === 0 &&
+          historyLoaded &&
+          !historyLoading &&
+          !repairing &&
+          error === null ? (
             <p className="timeline-empty hint">{strings.chat.emptyTimeline}</p>
           ) : null}
 
@@ -96,6 +113,7 @@ export function Timeline({
               nested={view.children[item.key]}
             />
           ))}
+          {error === null ? null : <HistoryNotice message={error} onRetry={onRetry} />}
           {footer}
         </div>
       </div>

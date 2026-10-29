@@ -1,5 +1,6 @@
-import { Suspense, lazy, useCallback, useEffect } from 'react';
+import { lazy, useCallback, useEffect, type ReactNode } from 'react';
 import { Route, Routes, useLocation, useNavigate } from 'react-router';
+import { ChunkBoundary } from './components/ChunkBoundary';
 import { AppLayout } from './layout/AppLayout';
 import { Landing } from './layout/Landing';
 import { LoginPage } from './features/login/LoginPage';
@@ -26,6 +27,19 @@ import { readSettingsFor, useSettings } from './stores/settings';
 const TerminalPage = lazy(() =>
   import('./features/devices/TerminalPage').then((m) => ({ default: m.TerminalPage })),
 );
+
+/**
+ * A page fetched when its route opens: the boot canvas while it arrives, and
+ * the same canvas if it never does — the page-wide notice says why
+ * (`stores/staleBuild.ts`).
+ */
+function LazyPage({ children }: { children: ReactNode }) {
+  return (
+    <ChunkBoundary loading={<div className="boot" aria-busy="true" />} failed={<div className="boot" />}>
+      {children}
+    </ChunkBoundary>
+  );
+}
 
 export function App() {
   const status = useAuth((s) => s.status);
@@ -101,9 +115,9 @@ export function App() {
       <Route
         path="/devices/:deviceId/terminal"
         element={
-          <Suspense fallback={<div className="boot" aria-busy="true" />}>
+          <LazyPage>
             <TerminalPage />
-          </Suspense>
+          </LazyPage>
         }
       />
       <Route element={<AppLayout />}>

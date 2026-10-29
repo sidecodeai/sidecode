@@ -305,6 +305,26 @@
 }
 
 /*
+ * The transcript could not be read from its device, or part of it could not be
+ * mended. It stands where the missing rows would be and reads as a pause rather
+ * than an alarm: the device is usually asleep, and the app asks again by itself.
+ * A quiet card on the canvas, lifted by its shadow alone, so the Retry button —
+ * which is the muted surface — shows against it.
+ */
+.history-notice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+  color: var(--ink-secondary);
+  font-size: var(--fs-13);
+}
+
+/*
  * A round button centred at the foot of the timeline, there whenever the reader
  * is away from the tail. A floating control lifts off the transcript on the
  * shadow alone, never on an edge, and widens into a capsule around that centre

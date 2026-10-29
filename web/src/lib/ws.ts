@@ -1,11 +1,12 @@
 /**
  * App socket (`WS /ws/app`, PROTOCOL-FROZEN.md §5).
  *
- * Responsibilities: one connection with exponential backoff capped at 5 s,
- * application-level liveness (reply to `ping`, treat 60 s of total silence as a
- * half-open socket), request/reply correlation with timeouts, and subscription
- * bookkeeping so `session.subscribe` is replayed with the right `since_seq`
- * after every reconnect.
+ * Responsibilities: one connection with exponential backoff capped at 5 s (and
+ * a steady one-second retry for thirty seconds after the gateway says it is
+ * restarting), application-level liveness (reply to `ping`, treat 60 s of total
+ * silence as a half-open socket), request/reply correlation with timeouts, and
+ * subscription bookkeeping so `session.subscribe` is replayed with the right
+ * `since_seq` after every reconnect.
  */
 import type { PushFrame, Reply, RequestParams, RequestResult, RequestType, ServerFrame } from '../protocol/frames';
 import type { WireError } from '../protocol/types';
@@ -42,6 +43,8 @@ export interface AppSocketOptions {
   /** Injected for tests. */
   factory?: (url: string) => SocketLike;
   now?: () => number;
+  /** In [0, 1); spreads the retries that follow a gateway restart. */
+  random?: () => number;
   setTimeout?: (fn: () => void, ms: number) => number;
   clearTimeout?: (handle: number) => void;
   onFrame: (frame: PushFrame) => void;
@@ -70,6 +73,18 @@ const REQUEST_TIMEOUT_MS = 65_000;
 const MAX_BACKOFF_MS = 5_000;
 const AUTH_CLOSE_CODES = new Set([4401, 4403]);
 
+/**
+ * Close code 1012 is the gateway announcing a restart: it is back within
+ * seconds, so doubling the wait only adds dead time on top of the outage. For
+ * `RESTART_WINDOW_MS` after one, the socket asks again every second, spread by
+ * `RESTART_JITTER` so a crowd of tabs does not knock together, and after that
+ * the usual backoff takes over.
+ */
+const RESTART_CLOSE_CODE = 1012;
+const RESTART_RETRY_MS = 1_000;
+const RESTART_JITTER = 0.15;
+const RESTART_WINDOW_MS = 30_000;
+
 const defaultFactory = (url: string): SocketLike => new WebSocket(url) as unknown as SocketLike;
 
 export class AppSocket {
@@ -80,6 +95,8 @@ export class AppSocket {
   private pending = new Map<string, Pending>();
   private subscriptions = new Map<string, Subscription>();
   private backoffMs = 250;
+  /** Until when a retry follows the restart schedule rather than the backoff. */
+  private restartUntil = 0;
   private reconnectTimer: number | null = null;
   private livenessTimer: number | null = null;
   private lastFrameAt = 0;
@@ -89,6 +106,7 @@ export class AppSocket {
     this.opts = {
       factory: defaultFactory,
       now: () => Date.now(),
+      random: () => Math.random(),
       setTimeout: (fn, ms) => globalThis.setTimeout(fn, ms) as unknown as number,
       clearTimeout: (h) => globalThis.clearTimeout(h),
       ...options,
@@ -177,7 +195,7 @@ export class AppSocket {
   private open(): void {
     if (this.stopped) return;
     this.clearTimer('reconnectTimer');
-    this.setStatus(this.backoffMs > 250 ? 'reconnecting' : 'connecting');
+    this.setStatus(this.status === 'reconnecting' ? 'reconnecting' : 'connecting');
     let socket: SocketLike;
     try {
       socket = this.opts.factory(this.opts.url);
@@ -216,6 +234,7 @@ export class AppSocket {
         this.opts.onUnauthorized?.();
         return;
       }
+      if (code === RESTART_CLOSE_CODE) this.restartUntil = this.opts.now() + RESTART_WINDOW_MS;
       this.scheduleReconnect();
     };
   }
@@ -235,7 +254,10 @@ export class AppSocket {
       this.socket?.send(JSON.stringify({ type: 'pong' }));
       return;
     }
-    if (frame.type === 'hello') this.backoffMs = 250;
+    if (frame.type === 'hello') {
+      this.backoffMs = 250;
+      this.restartUntil = 0;
+    }
     this.opts.onFrame(frame);
   }
 
@@ -283,9 +305,20 @@ export class AppSocket {
   private scheduleReconnect(): void {
     if (this.stopped) return;
     this.setStatus('reconnecting');
+    const restarting = this.opts.now() < this.restartUntil;
+    const delay = restarting ? this.restartDelay() : this.nextBackoff();
+    this.reconnectTimer = this.opts.setTimeout(() => this.open(), delay);
+  }
+
+  private restartDelay(): number {
+    const spread = (this.opts.random() * 2 - 1) * RESTART_JITTER;
+    return Math.round(RESTART_RETRY_MS * (1 + spread));
+  }
+
+  private nextBackoff(): number {
     const delay = this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 2, MAX_BACKOFF_MS);
-    this.reconnectTimer = this.opts.setTimeout(() => this.open(), delay);
+    return delay;
   }
 
   private failAllPending(error: unknown): void {

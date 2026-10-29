@@ -8,30 +8,37 @@
  */
 import { create } from 'zustand';
 import { base64Size } from '../lib/base64';
+import { errorText } from '../lib/errors';
 import { requestId } from '../lib/ids';
 import { rpc, getSocket } from '../lib/gateway';
 import { RequestError } from '../lib/ws';
+import { strings } from '../strings';
 import type { SendMode, SendResult } from '../protocol/frames';
 import type {
   Attachment,
   OutgoingAttachment,
   QuestionAnswers,
   QueuedMessage,
-  Session,
   SessionEvent,
   TodoItem,
   Usage,
 } from '../protocol/types';
+import { foldChat, foldLate, foldPage, foldSession } from './chatFold';
+import { REPAIR_PAGES, absorbMissed, adopt, owedAfterSubscribe, restart } from './chatSync';
 import {
   addOptimistic,
   applyEvent,
   applyEvents,
+  beginRepair,
+  coverThrough,
   dropQueued,
   emptyTimeline,
-  keepOptimistic,
+  hasGap,
   markAccepted,
   mergeHistory,
+  mergeNewestPage,
   removeOptimistic,
+  reopenGap,
   replaceBlock,
   type TimelineState,
 } from './timeline';
@@ -56,11 +63,41 @@ export interface ChatSession {
   sessionId: string;
   timeline: TimelineState;
   todos: TodoItem[];
+  /** The `seq` of the todos snapshot held: a snapshot not newer than it is stale. */
+  todosSeq: number;
   queue: QueuedMessage[];
+  /**
+   * The `seq` of the queue snapshot held. History never carries a queue event
+   * (PROTOCOL 6.4), so the timeline's cursor can pass one that is still on its
+   * way; it is judged by this instead.
+   */
+  queueSeq: number;
   usage: Usage | null;
   ready: boolean;
   historyLoading: boolean;
   historyHasMore: boolean;
+  /**
+   * Whether the newest page of history has been read. Until then an empty
+   * timeline says nothing about the conversation, and a failure to read it is
+   * the one the reader is told about.
+   */
+  historyLoaded: boolean;
+  /**
+   * Whether a repair is asking the device for what the transcript missed. A
+   * conversation with no rows is not known to be empty while it runs.
+   */
+  repairing: boolean;
+  /**
+   * How many times the rows were started again from the newest page. A page read
+   * that began in an earlier generation belongs to rows that are gone, and its
+   * answer is dropped.
+   */
+  generation: number;
+  /**
+   * Why the latest state of the conversation could not be read — the subscribe,
+   * its newest page or the repair of a gap failed — in the app's words, or null.
+   * An older page that fails is not reported: scrolling up asks for it again.
+   */
   error: string | null;
   /**
    * When the view was left, as a monotonic stamp rather than a clock: several
@@ -77,19 +114,37 @@ function blank(deviceId: string, sessionId: string): ChatSession {
     sessionId,
     timeline: emptyTimeline(),
     todos: [],
+    todosSeq: 0,
     queue: [],
+    queueSeq: 0,
     usage: null,
     ready: false,
     historyLoading: false,
     historyHasMore: true,
+    historyLoaded: false,
+    repairing: false,
+    generation: 0,
     error: null,
     closedSeq: null,
   };
 }
 
+/**
+ * Asks for a hole nobody is fetching: one noticed while a failure held the
+ * repair back, or while another repair was under way. A failure waits for its
+ * retry rather than being asked again by every event.
+ */
+function repairIfOpen(get: () => ChatState, key: string): void {
+  const chat = get().sessions[key];
+  if (chat && hasGap(chat.timeline) && chat.error === null) void get().repair(key);
+}
+
 /** Bumped by every `close`, so the order conversations were left in is exact. */
 let closeTick = 0;
 let epoch = 0;
+
+/** The conversations with a repair in flight: a burst of skipped events asks once. */
+const repairsInFlight = new Set<string>();
 
 /**
  * Keep the open conversations and the `KEEP_CLOSED` most recently left ones.
@@ -115,6 +170,20 @@ interface ChatState {
   close: (deviceId: string, sessionId: string) => void;
   ingestEvent: (sessionId: string, event: SessionEvent, deviceId?: string) => void;
   loadOlder: (key: string) => Promise<void>;
+  /**
+   * Fill what the transcript is missing: ask the device for everything after the
+   * last contiguous event (`session.history` with `after_seq`, A9) and merge it
+   * by block, whatever the cause — a live event that skipped a `seq`, or a
+   * cursor the gateway could not serve from its buffer (`resync`), in which case
+   * the rows on screen stay while the device is asked.
+   */
+  repair: (key: string) => Promise<void>;
+  /**
+   * Try again whatever failed: subscribe afresh, which reads the newest page if
+   * none was read and repairs what is missing. A load or a repair already on
+   * its way is left to finish.
+   */
+  retry: (key: string) => void;
   expandBlock: (key: string, blockId: string) => Promise<void>;
   send: (
     key: string,
@@ -149,74 +218,6 @@ function patch(
   });
 }
 
-/** Fold one state-only event into the chat's own side state. Pure. */
-export function foldChat(chat: ChatSession, event: SessionEvent): ChatSession {
-  switch (event.kind) {
-    case 'todos':
-      return { ...chat, todos: event.items };
-    case 'queue':
-      // A12: a queued item keeps the request id, so it names the pending row it
-      // takes over from.
-      return {
-        ...chat,
-        queue: event.pending,
-        timeline: dropQueued(chat.timeline, event.pending.map((item) => item.id)),
-      };
-    case 'turn_completed':
-      return event.usage ? { ...chat, usage: event.usage } : chat;
-    default:
-      return chat;
-  }
-}
-
-/** Fold live state-only events into a single Session summary patch. Pure. */
-export function foldSession(session: Session, events: readonly SessionEvent[]): Session {
-  let next = session;
-  for (const event of events) {
-    switch (event.kind) {
-      case 'todos':
-        next = {
-          ...next,
-          todos: {
-            total: event.items.length,
-            done: event.items.filter((i) => i.status === 'completed').length,
-          },
-        };
-        break;
-      case 'queue':
-        next = { ...next, queued: event.pending.length };
-        break;
-      case 'status':
-        next = { ...next, state: event.state, state_detail: event.detail ?? null };
-        break;
-      case 'meta':
-        next = {
-          ...next,
-          ...(event.title !== undefined ? { title: event.title } : {}),
-          ...(event.model !== undefined ? { model: event.model } : {}),
-          ...(event.permission_mode !== undefined
-            ? { permission_mode: event.permission_mode }
-            : {}),
-          ...(event.effort !== undefined ? { effort: event.effort } : {}),
-          ...(event.speed !== undefined ? { speed: event.speed } : {}),
-          ...(event.cwd !== undefined ? { cwd: event.cwd } : {}),
-          ...(event.git !== undefined ? { git: event.git } : {}),
-          ...(event.control !== undefined ? { control: event.control } : {}),
-        };
-        break;
-      case 'turn_started':
-        next = { ...next, turn: { turn_id: event.turn_id, started_at: event.ts } };
-        break;
-      case 'turn_completed':
-        next = { ...next, turn: null, ...(event.usage ? { usage: event.usage } : {}) };
-        break;
-      default:
-        break;
-    }
-  }
-  return next;
-}
-
 /** Apply live events to the session summary with a single store write. */
 function upsertSessionFrom(key: string, events: readonly SessionEvent[]): void {
   const sessions = useSessions.getState();
@@ -247,10 +248,14 @@ export const useChat = create<ChatState>((set, get) => ({
         // last_seq is an event cursor, not a version of the summary's state.
         useSessions.getState().upsert(result.session);
         patch(set, key, (chat) => {
-          // A resync starts the timeline again but keeps the unconfirmed sends.
-          const base = result.resync
-            ? { ...blank(deviceId, sessionId), timeline: keepOptimistic(chat.timeline) }
-            : chat;
+          // A resync no longer clears the transcript: the rows stay where the
+          // reader left them, and `repair` joins what the device holds after the
+          // cursor. Only a conversation with nothing to keep asks for the newest
+          // page afresh, which wants `historyHasMore` back.
+          const base =
+            result.resync && chat.timeline.order.length === 0
+              ? { ...chat, historyHasMore: true, historyLoaded: false }
+              : chat;
           // Buffered events carry todos and queue snapshots the timeline drops.
           const folded = result.events.reduce(foldChat, base);
           // Amendment A6: an explicit queue snapshot wins over replayed events.
@@ -259,27 +264,28 @@ export const useChat = create<ChatState>((set, get) => ({
             applyEvents(folded.timeline, result.events),
             queue.map((item) => item.id),
           );
-          return {
-            ...folded,
-            timeline,
-            historyHasMore: folded.historyHasMore || timeline.dropped > folded.timeline.dropped,
+          const next = {
+            ...adopt(folded, timeline),
             queue,
             usage: result.session.usage ?? folded.usage,
             ready: true,
-            error: null,
           };
+          // The subscribe worked. A failure of what it still owes from the
+          // device stays in view until that is paid.
+          return owedAfterSubscribe(next, result.resync) === null ? { ...next, error: null } : next;
         });
         const chat = get().sessions[key];
-        const needsHistory =
-          result.resync || (chat !== undefined && chat.timeline.order.length === 0);
-        if (needsHistory) void get().loadOlder(key);
+        if (chat === undefined) return;
+        const owed = owedAfterSubscribe(chat, result.resync);
+        if (owed === 'newest') void get().loadOlder(key);
+        else if (owed === 'repair') void get().repair(key);
       },
       onError: (err) => {
         if (sent !== epoch) return;
         patch(set, key, (chat) => ({
           ...chat,
           ready: true,
-          error: err instanceof Error ? err.message : 'subscribe failed',
+          error: errorText(err, strings.errors.historyFailed),
         }));
       },
     });
@@ -313,30 +319,44 @@ export const useChat = create<ChatState>((set, get) => ({
       : Object.values(state.sessions).find((c) => c.sessionId === sessionId);
     if (!entry) return;
     const key = entry.key;
-    if (event.seq <= entry.timeline.lastSeq) return;
+    // At or below the cursor an event moves no cursor and leaves the session's
+    // state alone. It can be a block the transcript is missing, which the reducer
+    // merges, or a todos or queue snapshot newer than the one held.
+    if (event.seq <= entry.timeline.lastSeq) {
+      patch(set, key, (chat) => {
+        const folded = foldLate(chat, event);
+        const timeline = applyEvent(folded.timeline, event);
+        return timeline === folded.timeline ? folded : adopt(folded, timeline);
+      });
+      return;
+    }
     getSocket()?.updateCursor(sessionId, event.seq);
     patch(set, key, (chat) => {
       const folded = foldChat(chat, event);
-      const timeline = applyEvent(folded.timeline, event);
-      return {
-        ...folded,
-        timeline,
-        // The cap dropped the oldest rows, so there is older history again
-        // even where the last page said there was none.
-        historyHasMore: folded.historyHasMore || timeline.dropped > folded.timeline.dropped,
-      };
+      return adopt(folded, applyEvent(folded.timeline, event));
     });
     upsertSessionFrom(key, [event]);
+    // A skipped `seq` is asked for at once.
+    repairIfOpen(get, key);
   },
 
   loadOlder: async (key) => {
     const chat = get().sessions[key];
     if (!chat || chat.historyLoading || !chat.historyHasMore) return;
     const sent = epoch;
+    // The rows this page is for: if they are started again before it answers,
+    // it has nothing to join and is dropped.
+    const generation = chat.generation;
     // Only the first page restores details, and only until a live event arrives.
     // History never changes the authoritative session summary.
     const isNewestPage = chat.timeline.oldestSeq === null;
+    // Until the newest page has been read, a failure is the one the reader is
+    // told about; an older page that fails is asked for again by scrolling up.
+    const first = !chat.historyLoaded;
     const requestedSeq = chat.timeline.lastSeq;
+    // What the device counted as its last event when the newest page was asked
+    // for: the page holds everything stored up to it.
+    const counted = isNewestPage ? (useSessions.getState().sessions[key]?.last_seq ?? 0) : 0;
     patch(set, key, (c) => ({ ...c, historyLoading: true }));
     try {
       const params: { session_id: string; before_seq?: number; limit: number } = {
@@ -347,25 +367,98 @@ export const useChat = create<ChatState>((set, get) => ({
       const result = await rpc('session.history', params);
       if (sent !== epoch) return;
       patch(set, key, (c) => {
-        const folded =
-          isNewestPage && c.timeline.lastSeq === requestedSeq
-            ? result.events.reduce(foldChat, c)
-            : c;
+        if (c.generation !== generation) return c;
+        const folded = foldPage(c, result.events, isNewestPage && c.timeline.lastSeq === requestedSeq);
         return {
           ...folded,
-          timeline: mergeHistory(folded.timeline, result.events),
+          timeline: coverThrough(
+            isNewestPage
+              ? mergeNewestPage(folded.timeline, result.events)
+              : mergeHistory(folded.timeline, result.events),
+            counted,
+          ),
           historyLoading: false,
           historyHasMore: result.has_more,
+          historyLoaded: true,
+          error: first ? null : c.error,
         };
       });
+      // A hole noticed while the failure held the repair back is asked for now.
+      repairIfOpen(get, key);
+    } catch (err) {
+      if (sent !== epoch) return;
+      patch(set, key, (c) =>
+        c.generation !== generation
+          ? c
+          : {
+              ...c,
+              historyLoading: false,
+              error: first ? errorText(err, strings.errors.historyFailed) : c.error,
+            },
+      );
+    }
+  },
+
+  repair: async (key) => {
+    const chat = get().sessions[key];
+    if (!chat || repairsInFlight.has(key)) return;
+    const sent = epoch;
+    const after = chat.timeline.contiguousSeq;
+    // What the device counted as its last event when the repair began: once the
+    // walk is complete, nothing is missing up to it.
+    const counted = useSessions.getState().sessions[key]?.last_seq ?? 0;
+    repairsInFlight.add(key);
+    patch(set, key, (c) => ({ ...c, repairing: true, timeline: beginRepair(c.timeline) }));
+    try {
+      let cursor = after;
+      for (let page = 0; page < REPAIR_PAGES; page += 1) {
+        const requested = get().sessions[key]?.timeline.lastSeq ?? 0;
+        const result = await rpc('session.history', {
+          session_id: chat.sessionId,
+          after_seq: cursor,
+          limit: HISTORY_PAGE,
+        });
+        if (sent !== epoch) return;
+        // A live event that arrived while the page was on its way is newer than
+        // anything the page says about the session's state.
+        patch(set, key, (c) => absorbMissed(c, result.events, c.timeline.lastSeq === requested));
+        const last = result.events.at(-1);
+        if (!result.has_more || !last) {
+          patch(set, key, (c) => ({
+            ...c,
+            timeline: coverThrough(c.timeline, counted),
+            error: null,
+          }));
+          break;
+        }
+        cursor = last.seq;
+        if (page === REPAIR_PAGES - 1) {
+          // Too much to join: start the transcript again from the newest page.
+          patch(set, key, restart);
+          void get().loadOlder(key);
+          return;
+        }
+      }
     } catch (err) {
       if (sent !== epoch) return;
       patch(set, key, (c) => ({
         ...c,
-        historyLoading: false,
-        error: err instanceof Error ? err.message : 'history failed',
+        timeline: reopenGap(c.timeline, after),
+        error: errorText(err, strings.errors.historyFailed),
       }));
+      return;
+    } finally {
+      repairsInFlight.delete(key);
+      patch(set, key, (c) => (c.repairing ? { ...c, repairing: false } : c));
     }
+    // A skip noticed while the pages were on their way opened a new hole.
+    repairIfOpen(get, key);
+  },
+
+  retry: (key) => {
+    const chat = get().sessions[key];
+    if (!chat || chat.historyLoading || repairsInFlight.has(key)) return;
+    get().open(chat.deviceId, chat.sessionId);
   },
 
   expandBlock: async (key, blockId) => {

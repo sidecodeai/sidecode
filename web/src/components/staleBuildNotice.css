@@ -1,0 +1,27 @@
+/*
+ * The notice a tab shows once a deploy has replaced the files it was loaded
+ * from. A floating control lifts off the page on its shadow alone, and this one
+ * takes no room from the page: a half-typed message stays where it is.
+ */
+.stale-notice {
+  position: fixed;
+  top: var(--sp-4);
+  left: 50%;
+  translate: -50% 0;
+  z-index: var(--z-popover);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: max-content;
+  max-width: calc(100% - 2 * var(--sp-4));
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--fs-13);
+  box-shadow: var(--shadow-pop);
+}
+
+.stale-notice > .btn {
+  flex: none;
+}

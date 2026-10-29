@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { act, cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Timeline } from '../src/features/chat/Timeline';
+import { en } from '../src/strings';
 import { useSettings } from '../src/stores/settings';
 import { applyEvent, emptyTimeline, mergeHistory, type TimelineState } from '../src/stores/timeline';
 import type { SessionEvent } from '../src/protocol/types';
@@ -92,6 +93,10 @@ function setup(initial: TimelineState) {
       timeline={timeline}
       historyLoading={false}
       historyHasMore
+      historyLoaded
+      repairing={false}
+      error={null}
+      onRetry={vi.fn()}
       onOpenFull={vi.fn().mockResolvedValue(undefined)}
       onApprove={vi.fn().mockResolvedValue(undefined)}
       onAnswer={vi.fn().mockResolvedValue(undefined)}
@@ -347,5 +352,88 @@ describe('a session the usage limit stopped', () => {
     expect(screen.getByText(/Ended at the usage limit/)).toBeInTheDocument();
     expect(screen.getByText(/Resume scheduled for/)).toBeInTheDocument();
     expect(screen.getByText('Sent for you after the limit reset')).toBeInTheDocument();
+  });
+});
+
+/**
+ * `docs/DESIGN.md` § "When the history cannot be read": a read that is pending
+ * or has failed never says the conversation is empty. It says what happened,
+ * with a Retry; "No messages yet" is for a read that succeeded and found none.
+ */
+describe('a conversation that is not read yet', () => {
+  function show(overrides: Partial<Parameters<typeof Timeline>[0]> = {}) {
+    const onRetry = vi.fn();
+    render(
+      <Timeline
+        timeline={emptyTimeline()}
+        historyLoading={false}
+        historyHasMore
+        historyLoaded={false}
+        repairing={false}
+        error={null}
+        onRetry={onRetry}
+        onOpenFull={vi.fn().mockResolvedValue(undefined)}
+        onApprove={vi.fn().mockResolvedValue(undefined)}
+        onAnswer={vi.fn().mockResolvedValue(undefined)}
+        onLoadOlder={vi.fn()}
+        footer={<p>footer</p>}
+        {...overrides}
+      />,
+    );
+    return { onRetry };
+  }
+
+  const NO_MESSAGES = en.chat.emptyTimeline;
+
+  it('says nothing is known while the first read has not come back', () => {
+    show();
+    expect(screen.queryByText(NO_MESSAGES)).toBeNull();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('shows the read that is under way, and still no "No messages yet"', () => {
+    show({ historyLoading: true });
+    expect(screen.getByText(en.chat.loadingHistory)).toBeInTheDocument();
+    expect(screen.queryByText(NO_MESSAGES)).toBeNull();
+  });
+
+  it('says there are no messages once a read has succeeded and found none', () => {
+    show({ historyHasMore: false, historyLoaded: true });
+    expect(screen.getByText(NO_MESSAGES)).toBeInTheDocument();
+  });
+
+  it('says nothing is known while a repair is under way, though the first read succeeded', () => {
+    show({ historyHasMore: false, historyLoaded: true, repairing: true });
+    expect(screen.queryByText(NO_MESSAGES)).toBeNull();
+  });
+
+  it('says why a read failed instead, with a Retry that asks again', async () => {
+    const { onRetry } = show({ error: en.errors.deviceOffline });
+
+    expect(screen.getByRole('status')).toHaveTextContent(en.errors.deviceOffline);
+    expect(screen.queryByText(NO_MESSAGES)).toBeNull();
+
+    await userEvent.setup().click(screen.getByRole('button', { name: en.common.retry }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('never says "No messages yet" next to a failure, even for a conversation read before', () => {
+    show({ historyLoaded: true, historyHasMore: false, error: en.errors.timeout });
+    expect(screen.queryByText(NO_MESSAGES)).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent(en.errors.timeout);
+  });
+
+  it('puts a failure after the rows it is about and before the footer', () => {
+    show({
+      timeline: stateOf(notice(1, 'a row of the transcript')),
+      historyLoaded: true,
+      error: en.errors.historyFailed,
+    });
+
+    const row = screen.getByText('a row of the transcript');
+    const failure = screen.getByRole('status');
+    const footer = screen.getByText('footer');
+    expect(row.compareDocumentPosition(failure) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(failure.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

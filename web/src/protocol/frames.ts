@@ -229,8 +229,13 @@ export interface RequestMap {
     { session_id: string; name: string; argument?: string },
     Record<string, never>,
   ];
+  /**
+   * `before_seq` pages back from the newest event; `after_seq` (A9) walks forward
+   * from a cursor, oldest first, which is how a gap in a transcript is filled.
+   * The two are mutually exclusive.
+   */
   'session.history': [
-    { session_id: string; before_seq?: number; limit?: number },
+    { session_id: string; before_seq?: number; after_seq?: number; limit?: number },
     HistoryResult,
   ];
   'session.block': [{ session_id: string; block_id: string }, BlockResult];

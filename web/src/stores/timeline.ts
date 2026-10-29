@@ -4,7 +4,12 @@
  * Contract rules implemented here (PROTOCOL-FROZEN.md §4, §7, A8):
  *  - a later event with the same `block_id` fully replaces the earlier one,
  *    except `delta` events on `assistant_text` / `thinking`, which append;
- *  - events whose `seq` is not greater than the last applied one are dropped;
+ *  - an event whose `seq` is not greater than the last applied one moves nothing:
+ *    it is dropped unless it carries a block the timeline does not hold or a
+ *    newer version of one it does — that is an event that arrived behind newer
+ *    ones, and it is merged where it belongs;
+ *  - a live event that skips a `seq` leaves a hole: `contiguousSeq` stays behind
+ *    `lastSeq` until a repair has fetched what lies between (`mergeMissed`);
  *  - `status`, `meta`, `queue` and `todos` are session state, not timeline items;
  *  - events carrying `parent_block_id` belong under their parent tool row;
  *  - blocks are ordered by `first_seq ?? seq`, so a tool call that finishes long
@@ -44,6 +49,13 @@ export interface OptimisticBlock {
   /** When the app sent it, for the unconfirmed timeout. */
   at: number;
   /**
+   * The timeline's `lastSeq` when it was sent, set by `addOptimistic`. The echo is
+   * numbered after everything the device had issued when it took the message,
+   * which is at least everything this timeline had seen; an event numbered at or
+   * below it is older than the send and cannot be its echo.
+   */
+  afterSeq?: number;
+  /**
    * What `session.send` answered, once it has. A `steered` message waits for the
    * agent to reach its next step (A14), which takes as long as it takes, so the
    * wait says nothing about delivery.
@@ -54,7 +66,17 @@ export interface OptimisticBlock {
 export interface TimelineState {
   order: string[];
   items: Record<string, TimelineItem>;
+  /**
+   * The highest `seq` applied: the cursor `session.subscribe` resumes from, and
+   * the line at or below which a live event counts as a late one.
+   */
   lastSeq: number;
+  /**
+   * The highest `seq` such that nothing at or below it is missing. It follows
+   * `lastSeq` until an event skips a number, and then stays where it was while
+   * `lastSeq` moves on: a repair asks the device for everything after it.
+   */
+  contiguousSeq: number;
   oldestSeq: number | null;
   /** Sent, not yet confirmed. Rendered after `order`, oldest first. */
   optimistic: OptimisticBlock[];
@@ -75,7 +97,44 @@ export interface TimelineState {
 export const MAX_TIMELINE_ITEMS = 3_000;
 
 export function emptyTimeline(): TimelineState {
-  return { order: [], items: {}, lastSeq: 0, oldestSeq: null, optimistic: [], dropped: 0 };
+  return {
+    order: [],
+    items: {},
+    lastSeq: 0,
+    contiguousSeq: 0,
+    oldestSeq: null,
+    optimistic: [],
+    dropped: 0,
+  };
+}
+
+/** Whether a live event skipped a `seq` that nothing has fetched yet. */
+export function hasGap(state: TimelineState): boolean {
+  return state.contiguousSeq < state.lastSeq;
+}
+
+/**
+ * A repair is on its way to fetch what is missing, so the hole it was started
+ * for no longer counts. A skip noticed from here on opens a new one.
+ */
+export function beginRepair(state: TimelineState): TimelineState {
+  return state.contiguousSeq === state.lastSeq ? state : { ...state, contiguousSeq: state.lastSeq };
+}
+
+/** The repair failed: everything after `after` is missing again. */
+export function reopenGap(state: TimelineState, after: number): TimelineState {
+  return after >= state.contiguousSeq ? state : { ...state, contiguousSeq: after };
+}
+
+/**
+ * The device counts its last event as `seq`, and what it stores was just read
+ * in full: whatever came after the last event read was never stored — a status,
+ * a meta — so nothing is missing up to `seq`. Without this the first live event
+ * of an idle conversation would look as if it had skipped those.
+ */
+export function coverThrough(state: TimelineState, seq: number): TimelineState {
+  if (seq <= state.lastSeq) return state;
+  return { ...state, lastSeq: seq, contiguousSeq: hasGap(state) ? state.contiguousSeq : seq };
 }
 
 /**
@@ -183,7 +242,7 @@ export function isUnconfirmed(block: OptimisticBlock, now: number): boolean {
 /** Show a message the moment it is sent. Idempotent, so Retry reuses the row. */
 export function addOptimistic(state: TimelineState, block: OptimisticBlock): TimelineState {
   if (state.items[block.id] || state.optimistic.some((b) => b.id === block.id)) return state;
-  return { ...state, optimistic: [...state.optimistic, block] };
+  return { ...state, optimistic: [...state.optimistic, { ...block, afterSeq: state.lastSeq }] };
 }
 
 /**
@@ -222,16 +281,23 @@ export function dropQueued(state: TimelineState, ids: readonly string[]): Timeli
 }
 
 /**
- * Retire the pending rows an incoming event confirms. The id match is A12; the
- * text match is the fallback for a device that still mints its own block ids,
- * and only ever retires one row per event.
+ * Retire the pending rows an incoming event confirms. The id match is A12 and
+ * holds for every event. The text match is the fallback for a device that still
+ * mints its own block ids: it only ever retires one row per event, only for a
+ * live event, and only for one numbered after the send. A page of history, or an
+ * event from before the send, can hold an older message with the same words,
+ * and that is not the echo of this one.
  */
-function reconcile(optimistic: OptimisticBlock[], event: SessionEvent): OptimisticBlock[] {
+function reconcile(
+  optimistic: OptimisticBlock[],
+  event: SessionEvent,
+  live: boolean,
+): OptimisticBlock[] {
   if (optimistic.length === 0) return optimistic;
   const key = keyFor(event);
   if (optimistic.some((b) => b.id === key)) return optimistic.filter((b) => b.id !== key);
-  if (event.kind !== 'user_message' || event.source !== 'remote') return optimistic;
-  const index = optimistic.findIndex((b) => b.text === event.text);
+  if (!live || event.kind !== 'user_message' || event.source !== 'remote') return optimistic;
+  const index = optimistic.findIndex((b) => b.text === event.text && event.seq > (b.afterSeq ?? 0));
   if (index === -1) return optimistic;
   return optimistic.filter((_, i) => i !== index);
 }
@@ -257,19 +323,41 @@ function capOldest(state: TimelineState): TimelineState {
   };
 }
 
-/** Apply a live event. Out-of-order or duplicate frames are dropped. */
+/**
+ * Apply a live event. One that skips a `seq` is applied all the same and leaves
+ * a hole behind it (`hasGap`); the first event of a timeline has nothing to
+ * skip. One at or below `lastSeq` is a duplicate or a late arrival, and
+ * `mergeLate` says which.
+ */
 export function applyEvent(state: TimelineState, event: SessionEvent): TimelineState {
-  if (event.seq <= state.lastSeq) return state;
+  return apply(state, event, true);
+}
+
+/**
+ * Apply events the gateway vouches for, in order: a subscribe reply. A jump in
+ * `seq` inside one is not a hole, because after a device reconnect the gateway
+ * answers from the device's history, which keeps only the latest event of each
+ * block.
+ */
+export function applyEvents(state: TimelineState, events: readonly SessionEvent[]): TimelineState {
+  return events.reduce((next, event) => apply(next, event, false), state);
+}
+
+function apply(state: TimelineState, event: SessionEvent, detectGaps: boolean): TimelineState {
+  if (event.seq <= state.lastSeq) return mergeLate(state, event);
   const key = keyFor(event);
   const previous = state.items[key];
   const item = mergeItem(previous, event);
   const lastSeq = event.seq;
+  const skipped = detectGaps && state.lastSeq > 0 && event.seq > state.lastSeq + 1;
+  // A hole already open stays open; a new one opens behind the event that skipped.
+  const contiguousSeq = hasGap(state) || skipped ? state.contiguousSeq : event.seq;
   const oldestSeq = state.oldestSeq === null ? event.seq : Math.min(state.oldestSeq, event.seq);
-  const optimistic = reconcile(state.optimistic, event);
+  const optimistic = reconcile(state.optimistic, event, true);
   // A state-only event still moves the window: it is the oldest event this
   // session delivered, so history must be asked for what came before it and
   // not for it again.
-  if (!item) return { ...state, lastSeq, oldestSeq, optimistic };
+  if (!item) return { ...state, lastSeq, contiguousSeq, oldestSeq, optimistic };
 
   const items = { ...state.items, [key]: item };
   let order = state.order;
@@ -284,44 +372,117 @@ export function applyEvent(state: TimelineState, event: SessionEvent): TimelineS
       item.seq,
     );
   }
-  return capOldest({ ...state, order, items, lastSeq, oldestSeq, optimistic });
+  return capOldest({ ...state, order, items, lastSeq, contiguousSeq, oldestSeq, optimistic });
 }
 
-export function applyEvents(state: TimelineState, events: readonly SessionEvent[]): TimelineState {
-  return events.reduce(applyEvent, state);
+/**
+ * An event at or below the cursor: a duplicate, or one that arrived behind
+ * newer ones — the gateway fanning out what a device reconnect backfilled once
+ * live events were already flowing. A block the timeline does not hold, or holds
+ * in an older version, takes it; anything else is dropped. A streaming
+ * fragment is dropped either way, because its block's final event carries the
+ * whole text.
+ */
+function mergeLate(state: TimelineState, event: SessionEvent): TimelineState {
+  const fragment =
+    (event.kind === 'assistant_text' || event.kind === 'thinking') && event.delta !== undefined;
+  return fragment ? state : mergeMissed(state, [event]);
 }
 
 /**
  * Merge an older history page (ascending `seq`, ending before the oldest known
  * event). Existing items win: they are at least as fresh as the history copy.
+ * Not capped: these are the rows the reader asked for by scrolling back, and
+ * dropping them here would page the same events in for ever.
  */
 export function mergeHistory(state: TimelineState, events: readonly SessionEvent[]): TimelineState {
+  return mergeEvents(state, events, false);
+}
+
+/**
+ * Merge the newest page of history, which is the window the reader pages back
+ * from: its own lowest `seq` is the edge. Rows that arrived live below it before
+ * it came — events a backfill for another client made the gateway push — sit
+ * outside the window, and taking the lowest of them as the edge would have the
+ * next page start below them and skip everything between. They stay where they
+ * are, and the page that reaches them takes them for duplicates.
+ */
+export function mergeNewestPage(state: TimelineState, events: readonly SessionEvent[]): TimelineState {
+  const merged = mergeHistory(state, events);
+  if (events.length === 0) return merged;
+  const lowest = events.reduce((least, event) => Math.min(least, event.seq), Infinity);
+  return merged.oldestSeq === lowest ? merged : { ...merged, oldestSeq: lowest };
+}
+
+/**
+ * Merge events the device holds for a stretch this timeline missed: a page of a
+ * repair, or an event that arrived behind newer ones. Unlike a page of older
+ * history, the newer copy of a block wins — the tool call the page finished
+ * replaces the one still running — and the cap applies, since these rows are
+ * new at the tail.
+ */
+export function mergeMissed(state: TimelineState, events: readonly SessionEvent[]): TimelineState {
+  return capOldest(mergeEvents(state, events, true));
+}
+
+/**
+ * The one merge both of those are. `replaces` says whether a block the timeline
+ * already holds gives way to a copy with a higher `seq`. A row is placed by its
+ * ordering seq whichever end it lands on, so a block that began before the page
+ * and finished inside it keeps the place it started in.
+ */
+function mergeEvents(
+  state: TimelineState,
+  events: readonly SessionEvent[],
+  replaces: boolean,
+): TimelineState {
   if (events.length === 0) return state;
   const items = { ...state.items };
-  const added: TimelineItem[] = [];
-  let oldest = state.oldestSeq;
+  const placed = new Map<string, TimelineItem>();
+  const moved = new Set<string>();
+  let changed = false;
+  // `session.history` pages back from `oldestSeq`, so only a page of older history
+  // moves it down. An event that merely arrives behind newer ones does not join
+  // the window: paging back from its seq would skip everything between it and
+  // the rows the timeline holds, and that stretch would never be asked for.
+  const lowest = events.reduce((least, event) => Math.min(least, event.seq), Infinity);
+  const oldest =
+    state.oldestSeq === null
+      ? lowest
+      : replaces
+        ? state.oldestSeq
+        : Math.min(state.oldestSeq, lowest);
+  let newest = state.lastSeq;
   let optimistic = state.optimistic;
   for (const event of events) {
-    if (oldest === null || event.seq < oldest) oldest = event.seq;
+    if (event.seq > newest) newest = event.seq;
     // A page can carry the device's copy of a send this app is still showing.
-    optimistic = reconcile(optimistic, event);
+    optimistic = reconcile(optimistic, event, false);
     const key = keyFor(event);
-    if (items[key]) continue;
-    const item = mergeItem(undefined, event);
+    const previous = items[key];
+    if (previous && !(replaces && event.seq > previous.event.seq)) continue;
+    const item = mergeItem(previous, event);
     if (!item) continue;
     items[key] = item;
-    added.push(item);
+    changed = true;
+    if (previous === undefined || previous.seq !== item.seq) placed.set(key, item);
+    if (previous !== undefined && previous.seq !== item.seq) moved.add(key);
+  }
+  // A duplicate changes nothing, and says so by being the same object.
+  if (!changed && newest === state.lastSeq && oldest === state.oldestSeq && optimistic === state.optimistic) {
+    return state;
   }
   // Both sides are already sorted by ordering seq, so merge instead of sorting.
-  added.sort((a, b) => a.seq - b.seq);
-  const order = mergeSorted(added, state.order, items);
-  // Not capped: these are the rows the reader asked for by scrolling back, and
-  // dropping them here would page the same events in for ever.
+  const added = [...placed.values()].sort((a, b) => a.seq - b.seq);
+  const base = moved.size === 0 ? state.order : state.order.filter((key) => !moved.has(key));
+  const order = added.length === 0 ? state.order : mergeSorted(added, base, items);
   return {
     ...state,
     order,
     items,
-    lastSeq: Math.max(state.lastSeq, events[events.length - 1]?.seq ?? 0),
+    lastSeq: newest,
+    // A hole that was open stays open; otherwise everything up to `newest` is here.
+    contiguousSeq: hasGap(state) ? state.contiguousSeq : newest,
     oldestSeq: oldest,
     optimistic,
   };
