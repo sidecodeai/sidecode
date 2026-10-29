@@ -26,7 +26,14 @@ to that session. Nothing is stored beyond the buffer and the latest session summ
 the owning device, adds `device_id` when the request is addressed by `session_id`, stamps an opaque
 `from` connection id, and forwards the frame unchanged. The device replies with the same `id` and
 `from`, and the gateway routes the reply to that one connection. If the device is offline the
-gateway answers `device_offline` itself; if no reply arrives within 60 s it answers `timeout`.
+gateway answers `device_offline` itself; if no reply arrives within 60 s it answers `timeout`, and
+a request written to a device link that a newer connection has replaced is answered `timeout` 10 s
+after that connection's `hello_ack` if the device has not answered it there by then, because a
+device that kept running answers over whatever link is current, and a connection that is replaced in
+its turn hands the request to the next, which has its own 10 s (A56). Nothing is written to a device
+before its `hello_ack`: the connection holds whatever is sent to it during the handshake and queues
+it behind the ack and the preferences, so a request that was parked for a returning device cannot
+cost it the link.
 
 The gateway never inspects message text, tool input or tool output. It parses the envelope
 (`type`, `id`, `device_id`, `session_id`, `seq`) and the `Session` summaries it indexes, and treats
@@ -64,6 +71,15 @@ it is answered `device_offline` only when the period ends without one. A close c
 `4403`, and an explicitly removed device, skip the grace and flip `online` at once: those say the
 device is not coming back, not that the link went quiet. A second connection for the same device
 still replaces the first with `4001`, unchanged.
+
+Two situations earn a longer grace (A56). A link that drops while an update the gateway forwarded
+is running is waited for **60 s**, because the device's own service restart comes on top of the
+link dropping. And a gateway that stops cleanly records, in `devices.sqlite3`, the devices the apps
+were told are online; a process that starts within 120 s of it begins a **30 s** grace for each
+(60 s for one the store says is updating), so a restart does not report every device offline for the
+4 to 19 s the devices take to reconnect, and the requests the apps make in the meantime wait for
+their device and follow its `hello_ack`. The record is spent by the start that reads it and a crash
+makes none, so a cold start is as it always was.
 
 Refused upgrades are logged, at one line per source address per minute carrying how many attempts
 it made in between, and an address far past any sane retry backoff is refused before the handshake
@@ -113,20 +129,76 @@ events or 4 MiB per session, whichever is smaller, for the 16 most recently used
 
 An app reconnecting renders its cached list, receives `hello`, then subscribes with the last `seq`
 it applied. If the buffer still covers that cursor it gets the missing events in the reply. If it
-does not, the reply carries `resync: true` and the app pages history from the device with
-`session.history`. The subscribe reply also carries the latest `queue` snapshot (amendment A6),
+does not and the device is connected, the gateway asks the device for them (below, A56). If that
+does not work either, the reply carries `resync: true` and the app pages history from the device
+with `session.history`. The subscribe reply also carries the latest `queue` snapshot (amendment A6),
 because a queue is current state rather than a timeline row. The device keeps every queue in `ts`
 order, and an app edits an entry by taking it out with `session.queue_remove` and sending the new
 words back with that `ts` as `queue_ts`, so the edit waits where the original did and cannot be
 delivered while it is still being changed (A43).
 
 When a **device** reconnects after an outage, the gateway compares each session's `last_seq` from
-the device `hello` with the tail of its own buffer. Where the device is ahead, it asks the device
-for `session.history {after_seq: <buffer tail>}`, appends what comes back to the buffer, and fans it
-out to subscribers as ordinary events (amendment A9). Apps need no special handling: they apply
-events by `block_id` as always. Only a session whose buffer still holds something is backfilled —
-an empty buffer already answers `session.subscribe` with `resync`, and the app pages history for
-itself. The requests run as background tasks so a slow device cannot hold up the reconnect.
+the device `hello` with the tail of its own buffer and with the cursor of every app subscribed to
+the session. Where the device is ahead of either, it asks the device for
+`session.history {after_seq: <the lowest of them>}`, appends what comes back to the buffer, and
+fans it out to subscribers as ordinary events, each subscriber being given the events after its own
+cursor (amendment A9). Apps need no special handling: they apply events by `block_id` as always.
+The buffer being empty is not a reason to skip a session: after a gateway restart every buffer is
+empty, and an app that subscribed before its device's `hello` was told nothing was missing and then
+kept a hole where the device's outage was, because nothing asked for those events. Now something
+does (A56). The requests run as background tasks so a slow device cannot hold up the reconnect.
+
+**The device, not the gateway, answers what the gateway cannot (A56).** The same request serves a
+`session.subscribe` the buffer cannot cover, when the device is connected: the reply carries the
+events the device returned followed by what arrived live while it was being fetched, and
+`resync: false`. Both paths are bounded — a request is 500 events and 1 MiB and waits 3 s, one
+request is in flight per session and two per device, so an account whose apps all reconnect at once
+cannot flood the one machine that holds its history; a subscribe takes one page, and a device's
+`hello` pages through a longer gap, five pages and 10 s at most, the wait for a turn counted, and
+gives no socket more than 1,500 frames at once, counting what its send queue holds, which an app's
+queue can take — and a reply that is an error, exceeds a bound or never comes, or a gap that
+outlasts the pages or the time, is applied in no part, because half a gap is how a hole gets into a
+transcript. What follows from that failure is the old answer, `resync`: a subscribe is answered
+`resync: true`; every socket that is subscribed and behind the device's count when a `hello`'s fetch
+fails, the ones that were waiting and any that subscribed meanwhile, is marked and answered
+`resync: true` the next time it subscribes, which is what an app's own gap repair does, so the apps
+that cannot repair a gap themselves still end with a transcript that is whole; a later fetch that
+succeeds clears the mark only when it covered the hole the mark stands for; and a replay buffer that
+would be left with a hole is dropped, so that the next subscribe asks the device instead of trusting
+it. A socket that subscribes with no cursor pages history itself, and counts as holding the
+session's `last_seq`, so the events a link outage cost it are fetched for it too. A subscribe that
+has to wait for the device runs apart from its socket's read loop, so a Stop, a send or a pong on
+the same socket is not read after the fetch; subscribes to one session are answered in order and an
+unsubscribe ends one that is still waiting.
+
+Order matters, because an app drops an event at or below its cursor as late. While a session's fetch
+is in flight its live events are held and published with the fetched ones in one pass in `seq`
+order, a held event that history does not carry (a `queue`, a delta, a `status`) keeping its place
+between them, and the buffer turns away any the fetch already brought; a socket is only sent fetched
+events past its own cursor, so two apps at different cursors are each given exactly what they lack,
+and one that paged history itself is owed what follows the `last_seq` it counted as holding. If the
+device's connection is replaced meanwhile, its fetches end and what they held is dropped, neither
+published nor buffered, so that the replay buffer is never given events that skip what nobody
+fetched: the sockets that were behind are marked, a session event the replaced connection still
+delivers is dropped, and the next connection's `hello` fetches again from each socket's cursor,
+because the device keeps every event history carries, and a current client sends the Up next queue
+again after its handshake and its summaries in the `hello`. The hold is bounded and, if it fills or
+the fetch ends in an error, the sockets that are owed events are marked, as they are when a fetch is
+cut short while it publishes: the marks go on before the first event and off after the last, and a
+pass that ends before its last event marks every subscriber of the session, those level with the
+hello too, and drops the replay buffer, because an event it held may have reached only some of them.
+When the link dropped, what was held and is not out follows as live events; after an overflow, when
+newer events are out already, and when the connection was replaced, nothing is published again, and
+the marks cover the loss. A socket that would be given more than the 1,500 frames is sent none of
+the fetch and stays marked, which still reaches the buffer and the sockets that fit. Only the device
+that owns a session is ever fetched from for it, so a `hello` that names another device's session
+fetches nothing and publishes nothing into it. Fetched events pass through memory like every other
+event: nothing of a conversation is written to the gateway's disk, the replay buffer is not
+persisted, and the log lines say ids, `seq` numbers, counts, milliseconds and the outcome and never
+a title or any text. The queue snapshot is not recovered by a fetch, because `session.history`
+carries no `queue` event; it comes back with the device's next one. A summary, from a
+`session.updated` or a `hello`, that reports `queued` as 0 drops the snapshot, so a queue emptied by
+a frame lost on a half-open link does not outlive it.
 
 Nothing on the way from a device frame to the apps touches the disk. A device socket reads and
 dispatches one frame at a time, so anything awaited while handling a frame is latency every later
@@ -594,10 +666,14 @@ shell needs on a bar above the keyboard.
 The gateway serves one client wheel and knows the build every device runs from its `hello`; when
 the two differ it asks the device to update itself, on its own account, and nobody presses anything
 (A36). `rc_gateway/auto_update.py` is the whole policy, so the hub keeps routing frames and one
-place decides who is asked and when: one `device.update {build}` per hello that is behind; a device
-that answers `conflict` because a session is running is asked again when its sessions go quiet or
-after ten minutes, whichever comes first, for as long as it stays connected; `unsupported` (a client
-installed from source) is left alone for the life of the connection; and a failure — `update.failed`
+place decides who is asked and when: one `device.update {build}` per hello that is behind, sent once
+the device has been quiet for 120 s (A56) — none of its sessions that is driven or attached
+(`control` `remote` or `shared`) has a turn in progress or a message queued, which the gateway
+follows from the device's summaries and starts the clock over whenever it changes — or, for a
+device that is never quiet, once after six hours, because a client up to 1.18.1 does not guard a
+session a terminal shares; a device that answers `conflict`, by its own wider rule, is asked again
+when it is quiet and at most every ten minutes, for as long as it stays connected; `unsupported` (a
+client installed from source) is left alone for the life of the connection; and a failure — `update.failed`
 or a device that never comes back within five minutes — is remembered on the device row
 (`update_failed_build`, an additive column) so the gateway never hammers a machine: it tries that
 build again only when an app retries or a newer wheel arrives, and a device that reconnects still
@@ -750,7 +826,7 @@ sessions delivered to that person's phone.
 
 | Where | What |
 | --- | --- |
-| Gateway `DATA_DIR` | `auth.sqlite3` (issued login sessions), `devices.sqlite3` (devices, pairing codes — both hashed), `sessions.sqlite3` (the latest summary per session, with its `unseen` mark in a column of its own, A47), `push.sqlite3` (Web Push subscriptions, APNs tokens, a delivery journal), `users.sqlite3` (the accounts and their hashed passwords), `preferences.sqlite3` (one row of preferences per account, A35, A41), `session_secret` and `vapid_private.pem`. The databases and both secrets are created at 0600 |
+| Gateway `DATA_DIR` | `auth.sqlite3` (issued login sessions), `devices.sqlite3` (devices, pairing codes — both hashed — and, between a clean stop and the next start, the ids of the devices that were online and when, A56), `sessions.sqlite3` (the latest summary per session, with its `unseen` mark in a column of its own, A47), `push.sqlite3` (Web Push subscriptions, APNs tokens, a delivery journal), `users.sqlite3` (the accounts and their hashed passwords), `preferences.sqlite3` (one row of preferences per account, A35, A41), `session_secret` and `vapid_private.pem`. The databases and both secrets are created at 0600 |
 | Gateway memory | Live connections, the per-session replay buffer, and a cache in front of the login-session store that also holds the event which closes a socket the moment its session is signed out |
 | Device `~/.rc-client` | `config.toml` at 0600 (gateway origin, device id, device token, name), `state/rc-client.sqlite3` (sessions, events, a key-value table, and request ids for `session.send` idempotency), `state/attachments/`, `state/channel.sock` and `state/claude-mcp.json` for the attachment, `state/daemon.lock` (the single-instance lock), `bin/claude` when the shim is installed, `logs/` |
 | Browser | The session cookie, plus whatever the service worker caches of the built app |

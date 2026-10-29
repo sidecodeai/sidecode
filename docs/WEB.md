@@ -131,7 +131,8 @@ same result without playing the message a second time, which is the whole reason
 And `session.subscribe` has a replay bound — 200 events here, where the gateway keeps 2 000 or
 4 MiB, deliberately small so any session with history can reach it — answering `resync: true` with
 no events for a cursor the buffer no longer covers, which is what drives the app's resync branch:
-blank the timeline, keep the unconfirmed sends, reload from history.
+keep the transcript and ask the device for what follows the cursor. The mock's `session.history`
+takes `after_seq` (A9) for that forward walk, as well as `before_seq`.
 
 ## Structure
 
@@ -483,7 +484,7 @@ conversation in front forgotten) and `tests/protocol-fixtures.test.ts` (the A47 
 `public/sw.js` is registered in production builds only. It is network-first for navigations,
 cache-first for hashed assets under `/assets/`, and bypasses `/api`, `/ws`, `/install.sh` and
 `/dist/`. Only successful same-origin responses are cached, so a gateway error page never becomes
-the offline shell. A push payload carries only a device name and a reason; clicking the notification
+the offline shell, and neither does the 404 for a hashed asset a deploy removed. A push payload carries only a device name and a reason; clicking the notification
 focuses an open tab or opens `/sessions/<device_id>/<session_id>`.
 
 The line the notification shows is `rc.title`, which the gateway writes in full; the worker's own
@@ -625,7 +626,8 @@ Nothing of this reaches the gateway.
   timeline at 3 000 rows: past it the oldest go, `oldestSeq` moves forward with them and `dropped`
   counts them, which is how the chat store knows to set `historyHasMore` again — scrolling back
   pages them in as ordinary history. A page the reader asked for by scrolling is never capped, or
-  paging back would fetch the same events for ever. `useChat.close` stamps a conversation with the
+  paging back would fetch the same events for ever; the rows a repair merges in at the tail are
+  capped like live ones. `useChat.close` stamps a conversation with the
   order it was left in and keeps the three most recently closed; the rest are dropped with their
   slash-command lists, and a conversation that is open — `close` runs on every reconnect too — is
   never among them.
@@ -797,8 +799,53 @@ Nothing of this reaches the gateway.
   out, the login screen keeps the whole path including the fragment, since the token lives there;
   `rememberedDestination` accepts only a path inside the app.
 - **Reconnect** backs off exponentially to 5 s, replies to `ping`, and treats 60 s of silence as a
-  half-open socket. Subscriptions are re-issued with the latest `since_seq`.
-- **Close codes** 4401 and 4403 end the session and return to login; every other code reconnects.
+  half-open socket. After a `1012` close — the gateway announcing a restart — it asks again every
+  second, spread by 15 %, for 30 s before the usual backoff takes over, and a `hello` ends that
+  window. Subscriptions are re-issued with the latest `since_seq`.
+- **Close codes** 4401 and 4403 end the session and return to login; 1012 is the restart schedule
+  above; every other code reconnects with the backoff.
+- **A hole is repaired, and a resync keeps the transcript.** `TimelineState` keeps
+  `contiguousSeq` beside `lastSeq`: a live event that skips a `seq` is applied all the same and
+  leaves `contiguousSeq` behind, and `useChat.repair` asks the device for everything after it
+  (`session.history` with `after_seq`, A9), a page at a time and one request at a time, merging each
+  page by block with `mergeMissed` — the newer copy of a block wins and keeps the place the block
+  began. An event at or below `lastSeq` is a duplicate, or one that arrived behind newer ones; it is
+  merged when it carries a block the timeline does not hold or a newer version of one it does, and
+  dropped otherwise, a streaming fragment always; it never lowers `oldestSeq`, which only a page of
+  older history moves — and the newest page sets to its own lowest `seq` (`mergeNewestPage`), whatever
+  arrived live below it before it came — so paging back cannot skip the stretch between a stray row
+  and the loaded rows.
+  `ChatSession` holds the `seq` of the todos and queue snapshots applied (`todosSeq`, `queueSeq`),
+  and a snapshot newer than the one held is applied even below the cursor, because history carries
+  no queue event and a page can move the cursor over one still on its way. A `resync` leaves the rows, the todos, the queue,
+  the older pages and the unconfirmed sends where they are and repairs from the cursor; only a
+  conversation with nothing to keep, or more than five pages (`REPAIR_PAGES`) to join, starts again
+  from the newest page. The events of a subscribe reply are applied with `applyEvents`, which does
+  not look for holes, because after a device reconnect the gateway answers from the device's history
+  and its numbers jump legitimately. After the newest page or a complete repair the timeline counts
+  itself as read through the session's `last_seq` as it stood when the request left
+  (`coverThrough`), because the device keeps no `status` or `meta` and the first live event after
+  an idle conversation would otherwise look like a skip. `chatFold.ts` holds the folds of
+  state-only events (`foldChat`, `foldSession`) and `chatSync.ts` what a subscribe still owes, how a
+  page is folded in and when the rows start again.
+- **A conversation that cannot be read says so.** `ChatSession.historyLoaded` is true once the
+  newest page was read, and `error` holds the sentence for the subscribe, the newest page or a
+  repair that failed (an older page that fails stays silent: scrolling up asks again). `Timeline`
+  shows nothing while a first read is pending, `HistoryNotice` — the sentence and a Retry — after
+  the last row when one failed, and "No messages yet" only once a read succeeded and found none and
+  no repair is under way (`ChatSession.repairing`).
+  `useChat.retry` subscribes afresh, which reads the newest page if none was read and repairs what
+  is missing, whether live rows arrived first or not; a conversation that was read and has no rows
+  owes the device nothing, so the next subscribe that works clears its failure. `useHistoryRetry`
+  calls it by itself when the device comes online and, while it is online, after 2, 4, 8, 15 and
+  15 s, with a schedule of its own for each conversation. `ChatSession.generation` counts the times
+  the rows were started again, and a page of older history that was asked for earlier rows is
+  dropped when it answers.
+- **A tab older than the server keeps standing.** The gateway answers 404 for a missing `/assets/`
+  file, and `vite:preloadError` marks the tab (`stores/staleBuild.ts`) when its payload is a failure
+  to load a chunk, not a module that threw while it ran. Every lazy part sits in a
+  `ChunkBoundary`, which draws it as `failed` — Markdown as plain text, a page as the blank canvas —
+  and `StaleBuildNotice` floats a reload sentence with a Reload button over the page. Nothing reloads by itself, because drafts live in memory only.
 - **Sending** is always `mode: "auto"`; the device decides between send, steer and queue, and the
   button label follows that decision. "Interrupt & send" is a separate, explicit action. The one
   exception is an edited queued message, which goes back with `mode: "queue"` (A43, below).
@@ -813,7 +860,9 @@ Nothing of this reaches the gateway.
   refusal the gateway is certain about also takes the row away, and hands the
   draft back if nothing was typed since; a minute with no device event turns the chip into
   "Delivery unconfirmed". A device that still mints its own block id is reconciled by `text` and
-  `source: "remote"` instead, one row per event.
+  `source: "remote"` instead, one row per event, and only against a live event numbered after the
+  send (`afterSeq`, the timeline's `lastSeq` when the row was added): a page of history can hold an
+  older message with the same words, so a page matches by id alone.
 - **While a question is pending the button reads Answer** (A20). The composer finds the pending
   `question` block with `selectPendingQuestion`, the status line stays "Waiting for your answer",
   and submitting sends `session.answer` rather than `session.send`: the draft becomes the free-text

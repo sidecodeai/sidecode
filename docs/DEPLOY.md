@@ -268,13 +268,22 @@ docker compose down -v                    # stop and DELETE the volumes
 Compose rotates the gateway's container log with the `json-file` driver at 10 MB, keeping five
 files, so older lines are gone once the files turn over.
 
-**Upgrading.** Pull the new revision and rebuild:
+**Upgrading.** Pull the new revision, build the image while the running container keeps serving,
+and then swap the container once:
 
 ```sh
 git pull
-docker compose build
-docker compose up -d
+docker compose build gateway
+docker compose up -d --force-recreate gateway
 ```
+
+One swap, not two. Each swap closes every app and device socket (`1012`) and leaves the gateway
+down for the few seconds a start takes. A deploy that runs `up -d` and then recreates the container
+again, to pick up a changed `.env` for instance, makes two blackouts, and the second lands on
+devices that are reconnecting or have just been asked to update. Building first leaves the old
+container serving while the image is made, and one `--force-recreate` takes the new image and a
+changed `.env` together (`restart` takes neither). What the apps and devices see across the swap is
+described under [What a restart looks like](#what-a-restart-looks-like).
 
 Each of the six databases applies its own additive migrations when it is opened, so an existing
 `DATA_DIR` is brought up to the new schema in place and an upgrade needs no manual step. A release
@@ -284,8 +293,11 @@ manual step either, and brings no new environment variable with it; a release th
 columns of `preferences` in 1.7.0 (A41) — is applied the
 same way. From 1.4.7 the gateway also
 brings every connected device to the wheel it serves by itself (A36), so an image update is followed
-by the devices updating themselves, one `Updating…` at a time on the device rows; a device whose
-update fails stays on its old client and says so until someone retries. Signed-in apps stay signed in:
+by the devices updating themselves, one `Updating…` at a time on the device rows. Under A56 a
+device is asked once it has been quiet for two minutes (no session it drives or is attached to has
+a turn running or a message queued), so a machine someone is working on is left alone, and one that
+is never quiet is asked after six hours; a device whose update fails stays on its old client
+and says so until someone retries. Signed-in apps stay signed in:
 login sessions are recorded in `auth.sqlite3` rather than in memory, so a restart or an image update
 no longer signs everyone out. Expired and revoked rows are pruned at startup, which is logged as
 `pruned expired login sessions`.
@@ -301,6 +313,36 @@ rebuild after a `git pull` and every device can be brought forward from an app.
 `GET /api/config` omits `client` in exactly one case, a gateway run from a source checkout where no
 wheel has been built. The apps then offer no update, because there is no build to name. The image
 `docker compose build` produces always carries one.
+
+### What a restart looks like
+
+Under A56 a swap, or any stop that reaches the gateway's own shutdown, costs the apps and the
+devices a few seconds of reconnecting and no more:
+
+- The gateway records the devices that were online in `devices.sqlite3`, with the time, as it
+  stops. A process that starts within two minutes holds each of them online for 30 s (60 s for one
+  that was updating) while it reconnects, so the apps keep showing the devices online, a request
+  made in the meantime waits for its device instead of being refused, and a device that does not
+  return goes offline as it always did. A crash records nothing, and the next start is cold. The
+  record is spent by the start that reads it.
+- A device's link that drops while an update it was asked for is running is waited for 60 s, not
+  20 s.
+- Nothing is written to a device before its `hello_ack`, so a request that was waiting for the
+  device is delivered right after it, and a request that was written to a link that has since been
+  replaced is answered `timeout` 10 s after the new link's ack, if the device has not answered it
+  there, instead of after 60 s.
+- Apps that reconnect first and devices that reconnect later no longer leave holes: a subscribe the
+  replay buffer cannot serve is answered with the events the device holds (500 events and 1 MiB a
+  request, 3 s for the device's answer, two requests at a time per device and one per session), and
+  when a device says hello, every subscriber behind it is given what follows its own cursor, page
+  after page for a longer gap (five pages and 10 s at most). A gap past those bounds is left to
+  `resync`, as before. A subscribe that waits for the device does not hold up its app socket.
+  Conversation content passes through memory only; nothing of it is written to `DATA_DIR`.
+- At `info` the gateway logs one line for each subscribe that needed something (`session
+  subscribed`), for each catch-up after a device hello (`session caught up`) and for each request
+  orphaned by a reconnect (`request orphaned by a device reconnect`), with the device id, session id,
+  sequence numbers, counts, milliseconds and the outcome (`replayed`, `device_backfilled`, `resync`,
+  `fetch_failed`); never a title or any text.
 
 **Backing up.** Everything durable is in the `rc-data` volume: the accounts, login sessions, the
 device registry, the session index, push subscriptions, the per-account preferences, the

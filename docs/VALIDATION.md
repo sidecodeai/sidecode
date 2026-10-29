@@ -74,7 +74,8 @@ as an app on `WS /ws/app` with `Authorization: Bearer <token>`:
 7. Mirroring: run `claude -p "Reply with exactly OK"` in another repository. A session appears with
    `origin: "terminal"`; after it exits, a send resumes it.
 8. Restart `rc-client run` and confirm the sessions return with `seq` unbroken. Restart the gateway,
-   confirm the device redials and a subscribe with a stale cursor reports `resync: true`.
+   confirm the device redials and a subscribe with a stale cursor is answered with the events the
+   device holds, or with `resync: true` when the gap does not fit (A56).
 9. Upgrade path: start the gateway against a `DATA_DIR` from an older build and enrol a device. A
    fresh volume hides every schema regression, so this is the check that matters before a release.
 10. Docker: write a root `.env` with `PUBLIC_ORIGIN=http://127.0.0.1:18787`, `GATEWAY_PORT=18787`,
@@ -87,5 +88,13 @@ as an app on `WS /ws/app` with `Authorization: Bearer <token>`:
     `control: "shared"` and takes a message from the app. For Codex, `rc-client codex setup`, then a
     bare `codex` in a scratch repository appears as `control: "shared"` too. Never run
     `rc-client uninstall` or `service remove` on a machine that carries a real installation.
+12. Continuity (A56): keep a session running with its conversation open in the web app, then swap
+    the gateway once (`docker compose build gateway`, `docker compose up -d --force-recreate
+    gateway`; the first swap onto A56 has no restart grace, so use a later one). The transcript
+    keeps its rows and the reader's place, holds everything the session did meanwhile once and in
+    order, and the device row stays online; the gateway logs `session subscribed` and `session
+    caught up` for the session. Then serve a newer client build while a turn runs: the device keeps
+    its old build until the session has been quiet for two minutes, and the gateway then logs
+    `automatic client update`.
 
 Delete `/tmp/rc-smoke-data` and `/tmp/rc-smoke-home` afterwards.

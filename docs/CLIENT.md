@@ -241,8 +241,23 @@ same way.
 | --- | --- |
 | `unsupported` | there is no build file, so this client was not installed from a wheel |
 | `conflict` "already on this build" | the requested build is the one it is running |
-| `conflict`, counting them | a session it drives is starting, running or waiting on you |
+| `conflict`, counting them | a session is in use: one it drives that is starting, running or waiting on you, or a terminal session it is attached to that has a turn open, a prompt on screen or a message waiting |
+| `conflict`, counting them | a terminal it runs for an app (A38) is open |
 | `{accepted: true, from}` | otherwise, with the build it is leaving |
+
+What counts as in use is what the restart would take from the person: the daemon holds the turn it
+is reading, the approvals and questions it relays and the Up next queue in memory, and a shell it
+runs ends with it. So an attached terminal session counts while its CLI has a turn open (its
+subagents and background tasks included), while an approval or a question is pending, while its
+Up next queue is not empty and while a message steered into the turn is waiting to be handed over,
+and a session the device drives counts for a non-empty queue as well. Only a session something
+holds counts, a process the device runs for it or a bridge attached to it: messages queued for a
+session nothing holds wait for the next send, which resumes it, and an update does not change
+that. A terminal CLI that is sitting at its prompt does not count either, and nothing the person
+types in the terminal is the daemon's to wait for. The gateway asks only once the device has been
+quiet for a while (A56), judging by the
+states and queue counts it indexes, so this is also the answer for what that index cannot show, a
+message steered into a turn and a shell, and for a gateway that asks anyway after waiting too long.
 
 Accepting spawns `rc-client self-update --build <sha>` in its own session, so the updater outlives
 the service restart it performs at the end. The updater downloads
@@ -458,6 +473,29 @@ value that is not a non-negative integer is `bad_request`. The files of a held m
 device; its `queue` entry says how many there are as `attachments`, only when there are any, and
 apps offer such an entry Remove and not Edit. Every way into a queue — the hub's, an attached Claude
 session's, and the device's own re-holds — goes through `rc_client/sessions/queue.py`.
+
+A queue lives in the memory of the process that runs the daemon, so a restart loses it, and a
+restored session starts with a count of zero. The gateway keeps the last `queue` snapshot it was
+told for each session, and one that did not restart with the device would go on serving the old one
+to every app that subscribes, entries that answer `not_found` when removed. So the daemon notes
+which sessions had something held when it last stopped, and once the gateway link is up, before the
+first terminal scan, publishes a `queue` event with an empty `pending` for each, and the summary
+that follows a queue change, which leaves `updated_at` alone: a session that comes back empty is
+not one that was touched. It says so once per run, and nothing is said while the link is down, since
+a frame published into a gap is dropped.
+
+The other direction needs the same care. The gateway keeps only the newest `queue` snapshot of a
+session, in its memory, and history carries no `queue` event, so a gateway that restarted while the
+device went on has lost every snapshot, and apps that subscribe would see no Up next until the
+queue next changed. After every gateway link, the first one included, once the handshake is done and
+ahead of the first terminal scan, the daemon therefore publishes the current `queue` event of every
+session whose queue is not empty, held or not, and the summary after it, which leaves `updated_at`
+alone: saying it again is not activity, so no session moves in a list. A queue that changed while
+the link was down is said too even when it is empty now, since the frame that emptied it was
+dropped and the gateway would go on serving the snapshot it had; the daemon marks such a session
+when the queue changes with no link, and the mark goes once it has been said. Nothing in the
+protocol changes, and a session whose queue is empty and was never changed in the dark is not
+mentioned.
 
 The `user_message` the daemon publishes for a `session.send` carries **that request's id as its
 `block_id`** (amendment A12), on all four paths: Claude through the SDK, Claude through a channel,
@@ -913,10 +951,24 @@ time fires on waking.
 | A limit stop on a `remote` or `shared` session, switch on | `resume {status: "scheduled"}` at `resets_at` + 60 s, or now + the window (five hours when unknown) with `estimated: true`. A `terminal` session gets none: the device has no way in |
 | The time passes, session idle | `resume {status: "fired"}`, then the prompt through the ordinary send path: `user_message {source: "resume"}` and `turn_started {trigger: "resume"}` |
 | The time passes, a turn is running | `cancelled` — somebody took the session further |
-| The time passes, scheduled as `shared` and the CLI is gone | `dropped` ("The terminal that owned this session was closed.") |
+| The time passes, scheduled as `shared`, and the session reads as held by nobody (`control: "none"`) | `rescheduled` a minute on, and again, up to three times; after the third, `dropped` ("The terminal that owned this session was closed.") |
 | The resumed turn hits the limit again | `rescheduled` with `attempts + 1`; after the third such turn, `dropped` |
+| The time passes, and the send is refused as the terminal's (`conflict`), or because a live terminal CLI holds the session and its bridge has not reconnected, or because the process table could not be read (`timeout`) | `fired`, then `rescheduled` a minute on, and again, up to three times; the next refusal is `dropped`, with that refusal's own message |
 | The person sends a message or runs a command | `cancelled` ("you sent a message") |
 | The switch goes off | every pending resume `cancelled`, on every session |
+
+A resume is not asked for again by anybody, and just after a daemon restart every session reads as
+held by nobody until the scan finds its CLI and its bridge dials back, then as the terminal's, then
+as shared. So three outcomes are a restart's wait and not an answer, and are put off a minute at a
+time, up to three times, before the resume is dropped: a session scheduled as `shared` that reads
+as `control: "none"`, a send refused with `conflict`, which is what a session the scan shows as the
+terminal's, or a CLI the shim did not start, answers (see "A send never resumes a session a terminal
+holds"), and the guard's own `timeout`, a bridge that has not reconnected or a process table that
+could not be read. The tries are counted apart from the limit attempts above and are kept in
+memory, so a restart in the middle of them starts the count again. Everything else drops the resume
+at once, as before: a Claude that cannot start, a request the device cannot read. A terminal that
+really was closed therefore costs three minutes of rows, `rescheduled` each time, before the
+`dropped` that it always got.
 
 The prompt is one constant, `RESUME_PROMPT`, verbatim from PROTOCOL 7.2 and never edited per
 session; it is the one message the device writes for the person, so it never names the session
@@ -952,6 +1004,14 @@ session, for the one after it. A scan that is not done when the wait ends is not
 the `hello` goes as the hub restored the sessions, one warning line says so (`first hello sent
 before the first terminal scan settled`), and what the scan finds afterwards is published like any
 change. A reconnect in the same run never waits.
+
+The channel socket and the pi socket open before any of that, before the daemon adopts Codex's
+threads and joins Grok's leader, which takes seconds. The bridges and terminal proxies of the CLIs
+that outlived the previous daemon have been dialling back since it went, and what they register
+is in the hub by the time the first scan decides who holds what. The gateway link starts after
+the agents are known and not before: its `hello` carries the agent list and the sessions' control,
+and a `hello` sent earlier would say less than the one that follows and show the apps the
+difference.
 
 An attached Claude session does not wait for the scan. A terminal attaches before its CLI has
 written anything, and the transcript appears with the first row, so every tail pass (every two
@@ -1093,10 +1153,12 @@ claude (your terminal)
 
 The bridge reads `CLAUDE_CODE_SESSION_ID` and `CLAUDE_PROJECT_DIR` from its own environment,
 registers with the daemon and stays until stdin closes. It survives a daemon restart: frames are
-buffered and the registration is replayed on reconnect. It logs nothing but warnings, and never the
-text of a message. A line on this socket is at most 256 KiB (`wire.MAX_LINE_BYTES`) for the bridge and
-the daemon alike; a longer one is dropped by the side that reads it, and the connection goes on,
-except an opening frame, whose connection is closed quietly: it never said what it was for.
+buffered and the registration is replayed on reconnect, and the restarted daemon attaches it to the
+session its CLI's hook last named, as the section on hooks below says. It logs nothing but
+warnings, and never the text of a message. A line on this socket is at most 256 KiB
+(`wire.MAX_LINE_BYTES`) for the bridge and the daemon alike; a longer one is dropped by the side
+that reads it, and the connection goes on, except an opening frame, whose connection is closed
+quietly: it never said what it was for.
 
 The bridge registers when Claude Code sends `initialize`, so the session is `shared` and the
 device may inject from that moment. Claude Code, though, starts listening for channel messages
@@ -1277,6 +1339,52 @@ daemon then moves the live attachment to that session. It prints nothing on stdo
 a `SessionStart` hook prints there is appended to the model's context, and it always exits 0, because
 a failing hook would interrupt your session over a feature you did not ask for.
 
+**A daemon restart does not undo it.** A CLI outlives the daemon, and its bridge, which registers
+again with the session id the CLI started in, would otherwise put the attachment back on a session
+nobody is in, so the apps would show an untitled empty session as attached and the one the person
+is typing into as held by nobody, until the CLI's next `/resume`, `/clear` or compaction. The daemon
+therefore keeps what each hook said in the registry (the `terminal-bindings` key), named by the CLI's
+pid and start time, and a bridge that registers is attached to the session its CLI's hook last put
+it in. The start time is `ps -o lstart=` in UTC and the C locale, read for the pid when the hook
+arrives and again when the bridge registers: a pid that a later process was given has another start
+time, and its stored word is let go. A start time that cannot be read at registration does not
+discard the word, and one that could not be read when the hook arrived keeps it for that run only
+and never stores it. The word is dropped when the CLI is gone, not when only its bridge closed,
+which Claude Code does when it reloads its MCP servers.
+
+Claude Code's own record of the CLI is the other account: `~/.claude/sessions/<pid>.json` holds the
+`sessionId` the process is in, kept current across `/resume`, `/clear` and compaction, and
+`updatedAt`, when Claude Code last wrote it. Only that file can know about a `/resume` made while
+the daemon was down, and it is all there is the first time a daemon of this version restarts, since
+the one before stored nothing. Its format is Claude Code's own and not documented, so it is read
+tolerantly: a field it does not know is ignored, and a file that does not look as expected says
+nothing. A record is believed only for the process it was written for: its `procStart` must be the
+start time of the process that holds the pid. That holds where `ps` and Claude Code write a start
+time the same way, which is macOS; on Linux no record matches, and the stored word is all there is.
+
+Where the hook and the record disagree, the later word wins: the time the daemon heard the hook,
+kept with it, against the record's `updatedAt`. A record written after the hook was heard says the
+CLI has moved since, which is what a `/resume` made while the daemon was down looks like; one
+written before it, or one that says no time, is the older account. When they agree, the hook's own
+detail, the transcript it named, is kept.
+
+Things that arrive close together are applied in the order they came, whichever look finishes
+first. A hook is stamped as it is heard, before the look at its process, and one heard earlier than
+a hook already held for the same CLI says nothing new, so two hooks a few milliseconds apart can
+not leave the attachment on the session the second took it from. A bridge that registers while its
+CLI's hook is heard is placed by the hook map as it stands once the process and the record have
+been read, and a hook heard between its being placed and its being attached moves it afterwards,
+as one heard after it would.
+
+The terminal scan sets the two against each other the same way, and against the session a
+`claude` command line resumed, which is the oldest account of all. A session a live CLI is in
+therefore has a holder, `control: "terminal"` rather than `"none"`, even for a CLI that was not
+started through the shim, and a `claude` that was resumed into one session and then moved is named
+by where it is, not by the session on its command line. The scan looks for the process a hook last
+put in a session by pid and start time and never by working directory, so a restarted daemon shows
+such a session as held in the seconds before its CLI's bridge dials back, where it used to show it
+as held by nobody.
+
 Its second hook is what lets a question be answered from a phone. Claude Code never relays
 `AskUserQuestion` through a channel — the CLI relays only tools that need no person — but it does
 run `PermissionRequest` hooks beside its own dialog and takes whichever answers first. So the
@@ -1396,9 +1504,72 @@ still outranks it, because an approval blocks the very work the question was ask
 message an app sends meanwhile is never injected, because the dialog owns the prompt: it is steered
 or held as during any turn. When the attachment drops, or another CLI process registers for the
 session and takes it over, pending approvals and a pending question become `expired`; on a drop
-the session moves to `terminal` if the CLI process is still alive or to `none` if it exited. Messages still held in the queue stay there and go out through the ordinary resume
-path, and so do messages steered into the turn and not yet handed over (A51); their files are deleted
-now and written again by whatever delivers them (A49).
+the session moves to `terminal` if the CLI process is still alive or to `none` if it exited.
+Messages still held in the queue stay there and go out through the ordinary resume path, and so do
+messages steered into the turn and not yet handed over (A51); their files are deleted now and
+written again by whatever delivers them (A49).
+
+**A daemon that is stopping is neither a CLI exiting nor a bridge dropping.** Stopping it closes
+every bridge, and until this was told apart an update, which restarts the daemon, ended the turn
+each attached CLI was running as `stopped`, handed its session back as `terminal` and `readonly`,
+let go of its held messages and waited a second for each bridge to say whether its CLI had gone. None
+of it was true of a CLI that was still there. From the moment shutdown begins, a bridge that closes
+leaves the session as the apps show it, with its turn, its state, `control: "shared"` and its held
+messages, and so does one that closed a moment earlier and was still settling when it began, since
+the settle asks again whether the daemon is stopping before it decides anything. The daemon that
+starts next derives them again from the transcript, as it does for
+every session after a restart. Prompts are the exception: an approval or a question the device was
+relaying becomes `expired`, since nothing can answer it once the daemon is gone and the next one has
+no record of it. What each hook said stays stored (see the hooks above).
+
+### A send never resumes a session a terminal holds
+
+A Claude session that no bridge is attached to and the device does not drive is resumed when a
+message is sent to it: the device starts a Claude process on its transcript. That is right for a
+session nobody holds and wrong for one a terminal CLI is writing, which would end up with two
+Claude processes in one conversation. A daemon restart opens exactly that window: from the first
+scan until the CLI's bridge dials back, which its backoff keeps within five seconds, a session the
+CLI holds is attached to nobody, and a send that was parked for the daemon is released into it.
+
+So a `session.send` or `session.command` to such a session first asks whether a live terminal CLI
+is in it: Claude Code's own record of a process, the session its command line resumed, or its
+hook's last word for a process that is still the one the hook spoke of, the later of them deciding
+where they differ. Where one is, and the shim
+started it, the request waits up to five seconds for its bridge to register, without holding the
+session's lock, and then goes through the bridge like any send to an attached session. When no
+bridge comes it answers `timeout`, "the terminal for this session has not reconnected yet; try
+again in a moment", having done nothing, so the app can retry it under the same `id`. A CLI the
+shim did not start has no bridge to wait for, and the answer is the `conflict` every terminal
+session gets, "controlled by terminal; take over first". A session no CLI holds, one of another
+agent, one the device drives, one that is attached and one the scan already shows as
+`control: "terminal"` are not looked up at all, and nothing changes for them: that last one is
+refused at once, as it always was, and taking over a terminal session, which ends its CLI and
+resumes the session itself, is not part of any of this.
+
+The look is of the process table, and a table that could not be read, `ps` failing or running out
+of its three seconds, is not an empty one: nobody is not the same as nobody who can be seen. The
+request then answers the same `timeout`, "could not tell whether a terminal holds this session; try
+again in a moment", and resumes nothing. That is the busiest moment of a machine, just after an
+update, which is the moment the guard is there for.
+
+Waiting for a bridge made two things matter that the session's lock had been enough for while a
+send never waited. A request is served once per `id`: an app that retries after its own timeout,
+which the gateway now causes sooner by answering a request the device never saw at once, while the
+first is still waiting, gets the outcome of the first, and is neither injected nor queued a second
+time (PROTOCOL 2.4). And the requests to one session are served one at a time in the order they
+arrived, so a message that waits for a bridge is not overtaken by the one sent after it: a gate
+in front of the session's lock, held for the whole of a request, lets one through at a time. The
+bridge registers under the lock and never under the gate, so the wait cannot hold up the thing it
+waits for. A refusal, which is remembered nowhere, is shared by the repeats that were waiting and
+by nobody after them.
+
+Two things are counted from the moment a request arrives and not from its turn at the gate. The
+five seconds it may wait for a bridge are: a queue of requests that all wait for a bridge that is
+not coming is refused together after one wait, not one after another, the last of twelve after a
+minute, past the gateway's own timeout; a request whose time ran out while it waited its turn is
+refused at once unless the bridge has registered by then. And a message the person sends cancels a
+resume pending for the session as it arrives, before it waits at the gate, so a resume that falls
+due while the message is held up behind another request is not sent after it.
 
 ### Plan approval (A54)
 
@@ -1455,7 +1626,11 @@ library at startup — the device's configuration is read later, off the launch 
 terminal starts as fast as before. It dials the channel socket with backoff on the same loop that
 relays bytes and registers the CLI's pid, which is the pid the channel bridge registers too
 (`os.getppid()`), so the terminal and the attachment find each other (`sessions/ptys.py`).
-**Relaying never waits for the daemon.**
+**Relaying never waits for the daemon.** The backoff starts at half a second and stops growing at
+two: the terminal cannot be typed into from a phone until the proxy has dialled back, a daemon that
+restarts is back within seconds, and a refused connection to a local socket costs nothing. A CLI
+started before this was two seconds still waits as long as it did, up to thirty, and the next one
+the person starts is the first to dial back quickly.
 
 The daemon asks it three things: type this, what is on screen, and is anybody typing. The screen
 comes back with the escapes taken out and the horizontal jumps Claude Code lays its rows out with
@@ -2720,8 +2895,12 @@ stops, logs `gateway link stopped` with the reason, and writes `state/link.json`
 `rc-client status` prints a `gateway link` line saying the gateway rejected this device and to run
 `rc-client enroll` again. Nothing else in the daemon stops. `4001` means a newer connection replaced
 this one, and racing it back would only replace that one in turn, so the reconnect waits at least
-fifteen seconds. Everything else is transient and retried with backoff, and only a connection that
-stayed up for thirty seconds resets it.
+fifteen seconds. `1012` is the gateway restarting, and it is back within seconds, so for the half
+minute after one the device asks again every second, give or take fifteen per cent so that the
+devices it cut off together do not all arrive together, whatever the tries meet meanwhile. They do
+not count against the backoff, which goes on from where it was when the half minute is over, and a
+`4001` in that half minute still waits. Everything else is transient and retried with backoff, and
+only a connection that stayed up for thirty seconds resets it.
 
 Work that belongs to a fresh connection — the mirror scan the gateway backfills from — runs beside
 the frame pump, never in front of it. Holding the pump back left every forwarded request unanswered
@@ -2732,6 +2911,19 @@ A frame published between the `hello`'s snapshot and the gateway's ack queues be
 instead of being dropped: it describes a change the snapshot cannot hold, and the sender that
 writes it starts once the ack is in. A frame published before the snapshot is still dropped,
 because the snapshot holds what it describes, and so is one published while the link is down.
+
+The link reads until `hello_ack`, not for it as the very next frame. A gateway can make a device
+reachable before it acknowledges the hello, and a request an app sent in that moment, or one the
+gateway held while the link was down, then arrives first. The device used to take such a frame for a
+failed handshake and hang up, which lost the request: its app waited out its own 60 seconds and
+then saw `timeout`, and the reconnect that followed met the same gateway. A frame that arrives
+ahead of the ack is kept and served once the ack is in, oldest first, over the same connection,
+whatever it is: a request is answered, a `ping` with a `pong`, a request of a kind the device does
+not know with `unsupported`. Only a connection that closes, or says nothing for thirty seconds, or
+sends more than 256 frames, or 8 MiB, ahead of the ack, ends the wait: what waits is kept in memory,
+so it is bounded both ways, and a gateway that sends that much is hung up on with a logged error and
+dialled again with the usual backoff. A frame that is by itself over the byte bound, an attachment
+sent in the race window, is lost with it, and its app retries. A frame that is not a JSON object is skipped there as it is later.
 
 ### Staying on time
 
@@ -2882,3 +3074,26 @@ and Codex out of step.
 - `attach_ready` reports whether the *daemon's* `PATH` resolves `claude` to the shim, which the
   service files set at install time. It does not prove that your interactive shell does, so a
   session started before you opened a new terminal shows as `terminal`, not `shared`.
+- A restart still forgets what the daemon held in memory for an attached session. Its turn is
+  shown only once the transcript has a row of it, so a turn that began before the restart and is
+  silent, a long tool call, reads as idle; an approval or question that was on screen is not
+  raised again, and its card, `expired` when the daemon stopped, stays that way; and the messages
+  held in Up next or steered into the turn are gone, which the apps are told (`queue` with nothing
+  pending). A daemon update therefore waits for all of those (see "Updating a device") rather than
+  recovering them.
+- Messages queued for a session nothing holds are lost at a restart like any others. They are
+  delivered only by the next send, which resumes the session, so an update does not wait for them.
+- Claude Code's own record of a CLI (`~/.claude/sessions/<pid>.json`) is believed only where its
+  `procStart` is spelled as `procscan` reports a start time, which is macOS. On Linux no record
+  matches, and a CLI that moved while the daemon was down stays on the session its last hook named,
+  or its bridge names, until its next hook. The send guard rests on the same three accounts, the
+  record, the hook's stored word and the session on a command line, so on Linux, the first time a
+  daemon of this version restarts, it cannot see a CLI that has no stored hook word and no
+  `--resume`: nothing names its session, and a send resumes it. The same holds for a CLI of a Claude
+  Code that writes no record, one started with a `--settings` of its own, which runs no hooks of
+  the device's, and one whose home is not `~/.claude`, which the client does not read.
+- The gateway link opens only after the daemon has adopted Codex's threads, joined Grok's leader and
+  detected the agents, because the `hello` carries the agent list and every session's control. A
+  restart therefore still keeps the device out of contact for those seconds, about six on a machine
+  with a hundred Codex threads, which the gateway's grace for a device that is restarting or being
+  updated is there to cover. The channel and pi sockets open earlier, so the CLIs dial back sooner.

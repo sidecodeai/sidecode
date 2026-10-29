@@ -108,13 +108,15 @@ arrives, and is not remembered.
 which client a machine runs: they update the app on their phone, and the machines follow. The
 gateway serves one client build and says which (`GET /api/config` `client.build`); a device reports
 the build it runs in every `hello`; and when the two differ the **gateway** asks the device to
-update, on its own, the moment the device is not busy — no row to notice, no button to press. The
-device row therefore shows no client version and never "Update available". It says "Updating…"
-while the update runs and "Update failed · <reason>" when it did not come back, and only then offers
-**Retry update**, which asks once more exactly as the automatic attempt did; a device that cannot
+update, on its own, once the device has been quiet for two minutes (A56) — no row to notice, no
+button to press. The device row therefore shows no client version and never "Update available". It
+says "Updating…" while the update runs and "Update failed · <reason>" when it did not come back,
+and only then offers **Retry update**, which asks once more exactly as the automatic attempt did; a device that cannot
 update itself (installed from source) is left alone and shows nothing. The gateway tries once per
-build it serves, waits while a session on the device is running, gives up after a failure until a
-person retries or a newer build arrives, so a machine that keeps failing is shown, not hammered.
+build it serves. It waits while a session the device drives or is attached to is running, waiting
+on the person or holding queued messages, and starts its two minutes over whenever that changes;
+it asks a machine that is never quiet once, after six hours; and it gives up after a failure until
+a person retries or a newer build arrives, so a machine that keeps failing is shown, not hammered.
 The device's own page states no client version and no build either:
 its facts are the hostname and the architecture, and the only thing it says about the client is
 the same "Updating…" or "Update failed · <reason>" the row says, with Retry beside it.
@@ -980,6 +982,91 @@ out yet — and resumes following; the button leaves only once the tail is reall
 an earlier page prepends above the current anchor. Content appended below never drags the viewport. On the phone, a tap anywhere
 outside a text field puts the keyboard away without stealing the tap from a control.
 
+## Keeping a transcript whole
+
+The transcript is the device's record, relayed by the gateway. A gateway restart, a dropped link or
+a laptop asleep can lose a piece of the relay, and the web app mends it rather than showing a
+transcript with a quiet hole in it.
+
+- **A skipped number is a hole.** Every event carries a `seq`, one more than the last. When a live
+  event skips ahead, the web app applies it all the same, remembers the last event below the hole,
+  and asks the device for everything after that one (`session.history` with `after_seq`, A9), a
+  page at a time. What comes back is merged by block: a block the page has a newer copy of — a
+  tool call that finished while the link was down — replaces the older copy where the block began.
+  The app asks one question at a time, and after a failed one it waits for the Retry and for the
+  device to return rather than asking again on every event. A stretch longer than five pages is not
+  worth joining row by row, and the transcript starts again from the newest page.
+- **An event behind newer ones is kept.** When a device reconnects, the gateway fans out what it
+  produced meanwhile, and that can land after events that were already flowing. It is merged where
+  it belongs and moves neither the cursor, nor the edge the reader pages back from, nor the
+  session's state. A duplicate is dropped, and so is a streaming fragment: its block's final
+  event carries the whole text. The one exception to "nor the state" is a todos or queue snapshot
+  newer than the one held: snapshots are judged against each other and not against the cursor,
+  because history carries no queue event and a page can move the cursor over one still on its way.
+- **A resync keeps the transcript.** After a gateway restart the replay buffers are empty, so a
+  session that moved on answers a resubscribe with `resync` unless the gateway can fetch what was
+  missed from the device (A56). The rows stay on screen, with the todos, the Up next list, the
+  older pages the reader loaded, the unconfirmed messages and the scroll position; the app asks
+  the device for everything after its cursor, as it does for a hole, and the answer is merged in
+  below. The transcript starts again from the newest page only when there was nothing to keep, or
+  when the device holds more than five pages after the cursor. If the device cannot be asked, the
+  transcript stays as it was and says so (§ "When the history cannot be read").
+- **What the device never stored is not a hole.** The device keeps the latest event of each block
+  and no `status` or `meta` at all, so after a complete read the last numbers of an idle
+  conversation are ones nobody can fetch. The web app counts them as read, using the device's own
+  count of its last event, so the first live event after them is the next one and not a skip.
+- **A subscribe reply is trusted.** The gateway answers a reconnect from the device's history when
+  its own buffer is empty, and that keeps only the latest event of each block, so the numbers in a
+  reply may jump without anything missing. The first event of a conversation has nothing before it
+  to skip either.
+
+## When the history cannot be read
+
+Asking a device for a conversation can fail: it is asleep, the gateway has just restarted and the
+device has not come back yet, or the request timed out. The web app never turns that into "No
+messages yet" — an empty conversation is told only after a read has succeeded and found nothing.
+
+- **Pending says nothing.** Until the newest page has been read, an empty transcript shows no
+  empty-state sentence at all, only the "Loading earlier messages…" line while a read is under way.
+  The same holds while a repair is asking the device what the transcript missed: a conversation
+  with no rows is not known to be empty until that has been answered.
+- **A failure says why, with a Retry.** A light notice, in the app's own words for the device's
+  answer ("That device is offline.", "The device did not answer in time.", or "Could not load this
+  conversation."), stands in the transcript where the missing rows would be: alone in an empty
+  transcript, and after the last row, above the status line, when the failure is of a repair and
+  the rows above are the stale ones. Retry subscribes afresh, which reads the newest page if none
+  was read and repairs what is missing. A conversation that was read and has no rows owes the
+  device nothing by being empty, so a failure it had is cleared by the next subscribe that works.
+- **It asks again by itself.** At once when the device comes online — after a gateway restart that
+  is the moment the answer exists — and while the device is online, after 2, 4, 8, 15 and 15
+  seconds. An offline device is not asked on a timer, and after the fifth try the app waits for
+  the device to return or for the Retry. The schedule belongs to the conversation: moving to
+  another one in the same pane starts it over.
+- **An older page that fails is silent.** Scrolling up asks for it again; nothing about the
+  conversation is unknown.
+
+## A tab older than the server
+
+A deploy replaces the website's files, and a browser tab opened before it keeps the old ones. The
+next time that tab reaches for a part it has not loaded yet — the Markdown renderer in the
+transcript, the terminal — the file is gone. The gateway answers 404 for a missing
+`/assets/` file (never the app shell, which the browser would try to run as a module), and the web
+app does three things and no more:
+
+- **A light notice** floats at the top of the page, in the page's own language: "SideCode was
+  updated. Reload to continue." / "随码已更新，请重新加载以继续。", with a Reload button. It lifts
+  off the page on its shadow, takes no room from it and stays until the page is reloaded.
+- **The part that failed is drawn as little as possible.** Markdown stays readable as plain text,
+  and a page that never arrived is the blank canvas. The rest of the page, the composer included,
+  keeps working, so there is no white screen.
+- **Nothing reloads by itself.** A draft is kept in memory only, so a reload would lose what is
+  typed; the person copies it first and presses Reload when ready.
+
+One notice serves every lazy part, because the cause is one. A chunk that failed for a moment of
+bad network gets the same notice, and the same cure. A module that loaded and then threw while it
+ran gets none: that is a fault in the page, a reload would not cure it, and the notice would blame
+an update that did not happen.
+
 ## Status vocabulary
 
 One word per state, the same word in both apps and in notifications.
@@ -1354,7 +1441,8 @@ language never means touching a component. The product is SideCode in English an
   making the folder to work in is part of choosing it (A37) — and nothing more: no files, no
   renaming, no deleting.
 - **A session-level search.** There is a session-list search, not a transcript search.
-- **Deleting or renaming a session from an app.** The protocol and the device support both; neither
-  app has a button that calls them. Archiving is there instead.
+- **Deleting a session from an app.** The protocol and the device support it; no app has a button
+  that calls it. Archiving is there instead.
 - **A true reading anchor across a relaunch.** The transcript keeps its scroll position across
-  "Load earlier messages", but a resync or an app relaunch returns you to the bottom.
+  "Load earlier messages" and across a resync, which leaves the rows where they are and folds in
+  what was missed (§ "Keeping a transcript whole"); only an app relaunch returns you to the bottom.
