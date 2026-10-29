@@ -104,7 +104,12 @@ The device echoes `id` and `from` in its `reply`; the gateway delivers that repl
 originating connection and strips `from` before doing so. If the device is offline the gateway
 answers `device_offline` itself. If no reply arrives within 60 s the gateway answers `timeout`.
 `session.create` and `session.history` may use the full 60 s; every other request SHOULD reply in
-under 5 s.
+under 5 s. A request that was written to a device link that a newer connection of the same device
+has since replaced is answered `timeout` when the newer connection has not answered it within 10 s
+of its `hello_ack`, instead of after 60 s (A56): a device that kept running may still answer it on
+the new link, and the gateway delivers that answer. A connection that is replaced in its turn
+hands the request on, and the next has its own 10 s. Only a `session.send` is safe to send again
+(2.4).
 
 ### 2.4 Idempotency
 
@@ -125,7 +130,12 @@ A device link that drops is not offline yet. The gateway keeps reporting `online
 only when no replacement connection arrived in that time; a close with `4401` or `4403`, or a device
 that was explicitly removed, turns it `false` at once. Requests addressed to the device during the
 grace period wait for the replacement connection and are answered `device_offline` when the period
-ends without one. A reconnect within the period is invisible to apps.
+ends without one. A reconnect within the period is invisible to apps. The period is **60 s** while
+an update the gateway forwarded to the device (6.3) is running, from its acceptance until the device
+reconnects or the update times out, and a gateway that stopped cleanly begins a **30 s** period for
+each device that was online when it stopped (the record is made as it stops, and used only by a
+start within 120 s of it), so that restarting the gateway does not report every device offline
+(A56).
 
 The close code says whether reconnecting is worth trying (amendment A4). It applies to `/ws/app` and
 `/ws/device` alike.
@@ -2407,11 +2417,29 @@ The device, session and option arrays are shortened here; the fixture holds the 
 `events` are the buffered events with `seq > since_seq`. Omitting `since_seq` returns an empty array,
 which tells the app to call `session.history`. `resync: true` means the replay buffer no longer
 covers `since_seq`, so the app must reload from history. A connection may subscribe to several
-sessions; subscribing again replaces the cursor.
+sessions; subscribing again replaces the cursor. A subscribe without `since_seq` counts the socket
+as holding what the gateway has indexed, the `last_seq` of the `session` in the reply, because the
+history the app pages reaches at least that far: it is sent what follows, the events a device's
+catch-up fetches after a link outage among them (A56).
+
+When the replay buffer cannot cover `since_seq` and the session's device is connected, the gateway
+asks the device for the events after `since_seq` (7.1) before it answers, and `events` holds what the
+device returned followed by what arrived live meanwhile, with `resync: false`. It does so within 500
+events, 1 MiB and 10 s (3 s of them for the device's own answer); a reply that does not fit, an
+error or silence leaves the answer as above, a `resync: true` when the app is behind. It waits for
+the device without holding up the other frames on the socket, so that reply may follow the replies
+to frames sent later, a `session.unsubscribe` ends a subscribe that is still waiting, and
+subscribes to one session are answered in the order they were sent. A subscriber that a fetch at
+its device's `hello` could not bring up to date (7.1) is answered `resync: true` the next time it
+subscribes to that session with a `since_seq`, whatever the value (A56).
 
 `queue` is the latest `queue` event payload the gateway saw for this session (amendment A6). It
 is absent when the gateway has seen none, which is the normal case for a session nobody has
-queued to. An app applies it exactly as it would apply a live `queue` event.
+queued to, and it is dropped when a session summary, in a `session.updated` or in a device's
+`hello`, reports `queued` as 0 (A56), because the event that emptied the queue may have been lost
+with a link that was already dead. A summary that counts queued messages leaves it as it is, and
+the next `queue` event sets it again. An app applies it exactly as it would apply a live `queue`
+event.
 
 `fixtures/app/session.subscribe.json`
 
@@ -2689,7 +2717,7 @@ The gateway forwards these to the owning device and returns the device's reply.
 | `terminal.attach` | `device_id`, `terminal_id` | `{terminal_id, cols, rows, scrollback}` — output goes to this app connection from now on; `scrollback` is base64 of the last 64 KiB the terminal produced (A38). `not_found` once the terminal is gone |
 | `terminal.close` | `device_id`, `terminal_id` | `{}` — ends the shell; idempotent (A38) |
 | `device.agents` | `device_id` | `{agents}` — the agents as `hello` reports them, with `accounts[].limits` read fresh for this reply (A33) |
-| `device.update` | `device_id`, `build` | `{accepted: true, from}` — the device fetches the gateway's wheel, refuses it unless its SHA-256 is `build`, installs it, restarts its service and reconnects with the new `client_build` (A22). `conflict` while a session it drives is running or when it already runs `build`; `unsupported` when the client cannot update itself (installed from source). The gateway sends it on its own account, with `from: "gateway"`, whenever a device's build is not the served one (A36); an app sends it to retry a failed update. |
+| `device.update` | `device_id`, `build` | `{accepted: true, from}` — the device fetches the gateway's wheel, refuses it unless its SHA-256 is `build`, installs it, restarts its service and reconnects with the new `client_build` (A22). `conflict` when it already runs `build`, or when it is in use (A56): a session it drives is starting, running or waiting on the person; a session it drives or is attached to has queued messages; an attached terminal session has an open turn, a pending approval or question, or queued or undelivered steers; or a device terminal (A38) is open. `unsupported` when the client cannot update itself (installed from source). The gateway sends it on its own account, with `from: "gateway"`, whenever a device's build is not the served one and the device has been quiet for 120 s (A36, A56); the device's own answer is final, because the gateway cannot see steers or shells. An app sends it to retry a failed update. |
 
 Every request carries `id`. `session.stop` is idempotent. `session.delete` removes the session from
 the device registry and does **not** delete the agent's own transcripts. `device.dirs` returns
@@ -3315,7 +3343,9 @@ Two cursors select the page, and they are mutually exclusive:
 | neither | Backwards from the newest event | The most recent page |
 
 Both forms return at most `limit` events, ascending by `seq`, with `has_more`. Apps page backwards
-with `before_seq`; `after_seq` exists for the gateway backfill described in 7.1.
+with `before_seq`. `after_seq` serves the gateway's backfill described in 7.1, and an app that finds
+a gap in its timeline: it asks from its last contiguous `seq` and merges what comes back by block id
+(A56).
 
 `fixtures/history/page.json` is a worked page built from `fixtures/timelines/claude.json`, and
 `scripts/validate_fixtures.py` enforces every rule above on it. Contrast it with
@@ -3329,7 +3359,10 @@ deltas and `status` events.
 Schema: `schema/device_frames.json`. Endpoint `WS /ws/device`, header
 `Authorization: Bearer <device_token>`.
 
-The device sends `hello` first and the gateway answers `hello_ack`. A second connection for the same
+The device sends `hello` first and the gateway answers `hello_ack`. The ack is the first frame the
+gateway writes on the connection: nothing else is written to the device before it and the
+`preferences` that follow it, not a forwarded request, a ping or the gateway's own requests, and
+whatever was waiting follows in the order it was sent (A56). A second connection for the same
 device replaces the first; the old socket is closed with code 4001.
 
 `hello.name` is what the device calls itself, its configured name or its hostname. The gateway
@@ -3583,8 +3616,11 @@ device is offline.
 
 A device keeps working while its socket is down, so events produced during an outage never reach the
 gateway. Amendment A9 closes that hole. When a device reconnects, the gateway compares each
-session's `last_seq` in the device `hello` with the tail of its own replay buffer. For every session
-whose device `last_seq` is ahead, the gateway asks the device for the missing range:
+session's `last_seq` in the device `hello` with what it holds. For every session whose device
+`last_seq` is ahead of the tail of its replay buffer, the gateway asks the device for the missing
+range. Since A56 it does so too for a session with a subscribed app whose cursor is behind the
+device's `last_seq`, whether or not the buffer holds anything, which is what a gateway restart
+leaves:
 
 `fixtures/device/forwarded/session.history.after.json`
 
@@ -3600,13 +3636,51 @@ whose device `last_seq` is ahead, the gateway asks the device for the missing ra
 }
 ```
 
-The gateway appends the returned events to the replay buffer and fans them out to that session's
-current subscribers as ordinary `session.event` frames. This is the one request the gateway issues on
-its own behalf rather than forwarding, so `from` names the gateway instead of an app connection, and
-the gateway consumes the reply itself.
+The request starts after the lowest cursor among the apps that are behind, or after the end of the
+buffer when that is lower; the `limit` shown is the protocol's maximum, and the gateway itself asks
+for at most 500. The gateway appends the returned events to the replay buffer and fans them out to
+that session's subscribers as ordinary `session.event` frames, each subscriber being given the
+events after its own cursor. This is the one request the gateway issues on its own behalf rather
+than forwarding, so `from` names the gateway instead of an app connection, and the gateway consumes
+the reply itself. The same request answers a `session.subscribe` the buffer cannot serve (6.2).
 
 Apps need no special handling. The backfilled events arrive as normal session events and are applied
-by `block_id` like any other.
+by `block_id` like any other. While the request is in flight the session's live events wait, and
+are published with the fetched ones in one pass in `seq` order, so an app never receives an event
+before those that precede it (it would drop them as late), an event it has already been given is
+not sent again, and an event that history does not carry (a `queue`, a delta, a `status` or a
+`meta`) keeps its place between the fetched ones.
+
+A fetch is bounded (A56): a request asks for at most 500 events within 1 MiB and waits 3 s for
+them, with one request in flight per session and two per device. A subscribe takes one page. A
+device's `hello` may find a longer gap, and its catch-up asks page after page while the device
+reports `has_more`, five pages and 10 s at most, the wait for its turn counted in the 10 s, and
+applies nothing until the last page is in. No socket is given more than 1,500 frames at once by the
+catch-ups that are sending it events, counting the frames its send queue holds already and the live
+events held behind the fetch, which is what an app's send queue can take: a socket that would be
+given more is marked and sent none of the fetch, which still goes to the replay buffer and to the
+sockets that fit. A reply that is an error, exceeds a bound or never comes, or a gap that outlasts
+the pages or the time, is applied in no part: a replay buffer that would be left with a hole is
+dropped, and every socket that is subscribed and behind the device's `last_seq` when the fetch fails
+(those that were waiting when it began and any that subscribed since) is answered `resync: true` the
+next time it subscribes. A later fetch that succeeds clears that mark only for a socket whose hole
+it covered, which is one that began after a cursor at or below where the hole begins; a fetch that
+began after the hole leaves the mark, and so does one that is cut short while it publishes, which
+also marks every socket subscribed to the session, those level with the device's `last_seq` among
+them, and drops the replay buffer, because what it held and had not published may have reached only
+some of them. When the link dropped, what was held and is not yet out follows as live events; after
+an overflow, when newer events are out already, and when the connection was replaced, nothing is
+published again, and the marks cover the loss. History carries no `queue` event (6.4), so a fetch
+does not restore a session's queue snapshot. The gateway publishes events only into the sessions of
+the device that sent them. A connection of the device that is replaced takes its fetches with it:
+what they held is dropped, neither published nor buffered, and the sockets that were behind are
+marked, and a session event that the replaced connection still delivers is dropped as well, replies
+to requests being delivered as before (2.3). The new connection's `hello` fetches again from each
+socket's cursor, because the device still has every event history carries, and a current device
+sends the Up next queue again after its handshake and its summaries in the `hello`, so the replay
+buffer is never given events that skip what nobody fetched. A session a `hello` names that another
+device owns fetches nothing, and a fetched `resume` event cues a push only if its `seq` is newer
+than any the gateway had seen of the session. Nothing fetched is written to the gateway's disk.
 
 ### 7.2 Resuming after a usage limit
 
@@ -3831,9 +3905,21 @@ one app connection that asked. The gateway relays bytes and never reads them.
       `hello` on the `Device` (A38).
 - [ ] Sends `device.update {build}` itself, `from: "gateway"`, to a device whose `hello`
       carries a `client_build` that is neither null nor the served build — once per served build
-      per device, retried while the device answers `conflict` for a running session, never again
-      after `update.failed` or a timeout until an app retries or the served build changes; a
-      device that answers `unsupported` is left alone (A36).
+      per device and once it has been quiet for 120 s (no session driven or attached has a turn in
+      progress or a message queued), or after six hours without it; retried at most every ten
+      minutes while the device answers `conflict`, never again after `update.failed` or a timeout
+      until an app retries or the served build changes; a device that answers `unsupported` is left
+      alone (A36, A56).
+- [ ] Writes nothing to a device before its `hello_ack` and `preferences`, and answers `timeout` to
+      a request written to a link that a newer connection replaced, if that connection has not
+      answered it 10 s after its `hello_ack` (A56).
+- [ ] Answers a `session.subscribe` its replay buffer cannot serve from the device, without holding
+      up the socket's other frames, and fills the gap of every subscriber behind a device's `hello`
+      (500 events and 1 MiB a request, five pages and 10 s for a hello), holding the session's live
+      events behind the fetch and publishing them with it in `seq` order, and answering `resync`
+      where it does not fit (A56).
+- [ ] Holds the devices that were online at a clean stop for 30 s after a start within 120 s of it,
+      and a link that drops under a running update for 60 s (A56).
 - [ ] Issues claim tokens for hosts, lets a signed-in user claim one, mints the pairing code for
       the host on that claim and hands it out exactly once (A23).
 - [ ] Sends every `/ws/app` frame after `hello` — `device.updated`, `session.updated`,
@@ -3852,8 +3938,9 @@ one app connection that asked. The gateway relays bytes and never reads them.
 - [ ] Keeps a replay buffer of 2 000 events or 4 MiB per session and sets `resync: true` when a
       `since_seq` falls outside it.
 - [ ] On a device reconnect, backfills every session whose device `last_seq` is ahead of the
-      replay buffer tail with `session.history {after_seq}`, appends the result to the buffer and
-      fans it out to subscribers as `session.event` frames.
+      replay buffer tail, or of the cursor of a subscribed app (A56), with
+      `session.history {after_seq}`, appends the result to the buffer and fans it out to
+      subscribers as `session.event` frames.
 - [ ] Stamps `device_id` on every `session.event` and `session.removed` frame sent to an app.
 - [ ] Remembers the latest `queue` event payload per session and returns it as `queue` in the
       `session.subscribe` reply.
@@ -3953,7 +4040,8 @@ one app connection that asked. The gateway relays bytes and never reads them.
       directory it may not write with `forbidden` (A37).
 - [ ] Reports `client_build` in `hello`, answers `device.update` as 6.3 says, verifies the wheel's
       SHA-256 before installing, restarts itself only after a successful install, and sends
-      `update.failed` otherwise (A22).
+      `update.failed` otherwise (A22). Answers `conflict` when it already runs the build or is in
+      use, as 6.3 says (A56).
 - [ ] Advertises `speeds` from the agent's own catalogue, maps `session.set` / `session.create`
       `speed` to the agent's setting (Codex: `thread/settings/update {serviceTier}`), refuses a tier
       the session's model does not offer with `unsupported`, and reports the tier in `Session.speed`
@@ -4928,3 +5016,47 @@ rename made elsewhere replaces the title, because the agent's own record is the 
 changes nothing: it forwards `session.set` as it always did. `fixtures/objects/agent.*.json` show
 `rename` and `fixtures/app/session.set.rename.json` and `reply.session.set.rename.json` the
 exchange. See 4.2, 4.4, 6.3, 9.2 and 9.3.
+
+**2026-10-29 A56 — continuity across restarts and updates.** A gateway deploy, and the client update
+that follows it, cost a person's open session its state. Every replay buffer was empty after the
+restart, so an app that was behind was told to `resync` and cleared its transcript; an app that had
+subscribed before its device's `hello` was told nothing was missing and kept a hole where the
+device's outage was, because A9 skipped an empty buffer; a request parked for a returning device could
+be written ahead of its `hello_ack`, which cost the link and left the app waiting out its timeout; and
+the device was asked to update at the moment everything reconnected. Nothing changes on the wire: each
+rule below is the gateway's or the device's own, an app, a device or a gateway that predates it
+interoperates unchanged, and what it does not know it does not need. The gateway writes `hello_ack`
+first, and holds anything else addressed to the device behind it and the `preferences` (7). It answers
+`timeout` to a request written to a device link that a newer connection replaced, once that
+connection has had 10 s from its `hello_ack` to answer it (2.3). It fetches from the device, with the
+`session.history {after_seq}` of A9, what the apps are missing: the events after a
+`session.subscribe` cursor the replay buffer cannot serve (one page of 500 events and 1 MiB, within
+10 s, without holding up the socket's other frames), and, at a device `hello`, the range after the
+lowest cursor of the apps behind the device's `last_seq` whether or not the buffer holds anything
+(page after page, five and 10 s at most, and no socket given more than 1,500 frames at once),
+giving each subscriber the events after its own cursor, one request per session and two per device
+at a time, with the session's live events held behind the fetch and published with it in `seq`
+order; a gap that does not fit is answered `resync: true`, as before, and left to the next
+`session.subscribe` of a subscriber that was left in it (6.2, 7.1). A connection of the device that
+is replaced takes its fetches and what they held with it, the session events it still delivers are
+dropped, and the sockets that were behind are marked until the new connection's `hello` fetches
+again (7.1); a subscribe with no `since_seq` counts as holding the session's indexed `last_seq`, and
+is sent what follows (6.2). It holds the devices that were online when it stopped for 30 s after a
+start within 120 s of the stop, and a link that drops under a running update for 60 s, instead of 20
+s (2.5). It asks a device for the update of A36 only after the device has been quiet for 120 s, that
+is, with no session driven or attached (`control` `remote` or `shared`) in `starting`, `running`,
+`needs_approval` or `needs_input` or with `queued` above 0, the clock starting over whenever that
+changes, and asks a device that is never quiet once after six hours, because a client up to 1.18.1
+does not guard a session a terminal shares; a device that answers `conflict` is asked again when it
+is quiet and at most every ten minutes (6.3). The device, for its part, answers `conflict` by a rule
+wider than the gateway's, which the gateway cannot see: it is in use when a session it drives is
+starting, running or waiting on the person, when a session it drives or is attached to has queued
+messages, when an attached terminal session has an open turn, a pending approval or question, or
+queued or undelivered steers, or when a device terminal (A38) is open; a client that predates the
+rule answers by the narrower one, and the gateway's six hours reach it. The gateway forgets a
+session's queue snapshot when a summary reports `queued` as 0 (6.2). An app that finds a gap in its
+timeline may ask for it with `session.history {after_seq}` from its last contiguous `seq` and merge
+what comes back by block id (6.4). Nothing the gateway fetches is written to its disk, and it logs
+one line for each subscribe that needed the device, each catch-up and each orphaned request, with
+ids, sequence numbers, counts, milliseconds and the outcome. See 2.3, 2.5, 6.2, 6.3, 6.4, 7, 7.1 and
+9.
