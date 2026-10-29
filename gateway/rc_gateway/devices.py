@@ -17,6 +17,7 @@ import secrets
 import sqlite3
 import time
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -144,6 +145,16 @@ class DeviceStore:
             )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS devices_username_idx ON devices(username)"
+            )
+            # A56: the devices that were online when the gateway last stopped, and when, so that
+            # the next process can hold them online while they reconnect. Cleared when it starts.
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS stopped_devices (
+                    device_id TEXT PRIMARY KEY,
+                    stopped_at INTEGER NOT NULL
+                )
+                """
             )
             connection.execute(
                 """
@@ -446,6 +457,38 @@ class DeviceStore:
                 "WHERE device_id=?",
                 (state, message, failed_build, device_id),
             )
+
+    async def record_stop(self, device_ids: Iterable[str], *, now: int | None = None) -> None:
+        """Remember which devices were online as the gateway stops (A56), replacing the last."""
+        ids = list(device_ids)
+        if ids:
+            await asyncio.to_thread(self._record_stop, ids, _now(now))
+
+    def _record_stop(self, device_ids: list[str], now: int) -> None:
+        with self._connect() as connection:
+            connection.execute("DELETE FROM stopped_devices")
+            connection.executemany(
+                "INSERT INTO stopped_devices(device_id, stopped_at) VALUES (?, ?)",
+                [(device_id, now) for device_id in device_ids],
+            )
+
+    async def take_stopped(self, *, within: int, now: int | None = None) -> list[str]:
+        """The devices recorded at the last stop, if it was at most ``within`` seconds ago.
+
+        The record is spent by being read: a process that crashes later must not treat it as its
+        own predecessor's. A device that was removed in the meantime is not returned.
+        """
+        return await asyncio.to_thread(self._take_stopped, within, _now(now))
+
+    def _take_stopped(self, within: int, now: int) -> list[str]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT s.device_id FROM stopped_devices s "
+                "JOIN devices d ON d.device_id=s.device_id WHERE s.stopped_at>=?",
+                (now - within,),
+            ).fetchall()
+            connection.execute("DELETE FROM stopped_devices")
+        return [str(row["device_id"]) for row in rows]
 
     async def rename(self, device_id: str, username: str, name: str) -> bool:
         return await asyncio.to_thread(self._rename, device_id, username, name)

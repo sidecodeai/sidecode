@@ -119,6 +119,31 @@ def test_spa_fallback_and_cache_headers(tmp_path: Path) -> None:
     assert worker.headers["cache-control"] == "no-store, must-revalidate"
 
 
+def test_a_missing_asset_is_a_404_not_the_app_shell(tmp_path: Path) -> None:
+    """A tab opened before a deploy asks for chunks the new build no longer has.
+
+    `index.html` in their place is not a JavaScript module, so the import fails as a broken page;
+    a 404 says plainly that the file is gone. Routes of the app itself still get the shell.
+    """
+    dist = tmp_path / "web-dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html><title>app</title>", encoding="utf-8")
+    (dist / "assets" / "Markdown-new123.js").write_text("export default 1", encoding="utf-8")
+    with _app(tmp_path) as client:
+        kept = client.get("/assets/Markdown-new123.js")
+        gone = client.get("/assets/Markdown-old456.js")
+        nested = client.get("/assets/fonts/inter.woff2")
+        route = client.get("/sessions/abc")
+    assert kept.status_code == 200
+    assert gone.status_code == 404
+    assert gone.json()["error"]["code"] == "not_found"
+    assert gone.headers["cache-control"] == "no-store"
+    assert "text/html" not in gone.headers["content-type"]
+    assert nested.status_code == 404
+    assert route.status_code == 200
+    assert route.text.startswith("<!doctype html>")
+
+
 def test_the_spa_fallback_never_escapes_the_build(tmp_path: Path) -> None:
     dist = tmp_path / "web-dist"
     dist.mkdir()

@@ -10,11 +10,13 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from rc_gateway.auto_update import UPDATE_PATIENCE_SECONDS, is_busy
 from rc_gateway.connections import Connection
 from rc_gateway.devices import UPDATE_FAILED, UPDATE_IDLE, UPDATE_RUNNING
 from rc_gateway.hub import UPDATE_TIMEOUT_MESSAGE
 
 from .conftest import (
+    SHORT_QUIET_SECONDS,
     HubRig,
     device_hello,
     drain_until,
@@ -51,12 +53,16 @@ async def rig_with_wheel(
     build: str | None = SERVED_BUILD,
     update_retry: float = 30.0,
     update_timeout: float = 30.0,
+    update_quiet: float = SHORT_QUIET_SECONDS,
+    update_patience: float = UPDATE_PATIENCE_SECONDS,
 ) -> tuple[HubRig, Served]:
     served = Served(build)
     rig = await hub_rig(
         tmp_path,
         update_timeout=update_timeout,
         update_retry=update_retry,
+        update_quiet=update_quiet,
+        update_patience=update_patience,
         served_build=served,
     )
     return rig, served
@@ -91,40 +97,162 @@ async def test_an_accepted_automatic_update_shows_as_updating(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_a_busy_device_is_asked_again_when_its_sessions_go_quiet(tmp_path: Path) -> None:
-    """The retry period is far away: the quiet moment is what brings the second request."""
-    rig, _ = await rig_with_wheel(tmp_path, update_retry=30.0)
+async def test_a_quiet_device_is_asked_only_after_the_quiet_period(tmp_path: Path) -> None:
+    rig, _ = await rig_with_wheel(tmp_path, update_quiet=0.4)
+    started = time.monotonic()
+    await rig.hub.handle_device_hello(rig.device, device_hello(client_build=OLD_BUILD))
+
+    assert await next_ask(rig.device, timeout=0.2) is None
+    ask = await next_ask(rig.device)
+    assert ask is not None
+    assert time.monotonic() - started >= 0.4
+    await rig.hub.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_device_with_a_turn_in_progress_is_not_asked_until_it_has_been_quiet(
+    tmp_path: Path,
+) -> None:
+    rig, _ = await rig_with_wheel(tmp_path, update_quiet=0.3)
     await rig.hub.handle_device_hello(
         rig.device, device_hello(client_build=OLD_BUILD, sessions=[running_session(rig.device_id)])
     )
+    assert await next_ask(rig.device, timeout=0.6) is None
+
+    quiet_from = time.monotonic()
+    await rig.hub.handle_device_frame(
+        rig.device,
+        {"type": "session.updated", "session": session_summary(SESSION_ID, rig.device_id)},
+    )
+    ask = await next_ask(rig.device)
+    assert ask is not None and ask["build"] == SERVED_BUILD
+    assert time.monotonic() - quiet_from >= 0.3
+    await rig.hub.stop()
+
+
+@pytest.mark.asyncio
+async def test_the_quiet_clock_starts_over_when_a_session_turns_busy(tmp_path: Path) -> None:
+    rig, _ = await rig_with_wheel(tmp_path, update_quiet=1.0)
+    await rig.hub.handle_device_hello(rig.device, device_hello(client_build=OLD_BUILD))
+    await asyncio.sleep(0.3)
+    await rig.hub.handle_device_frame(
+        rig.device, {"type": "session.updated", "session": running_session(rig.device_id)}
+    )
+    await asyncio.sleep(0.1)
+    quiet_from = time.monotonic()
+    await rig.hub.handle_device_frame(
+        rig.device,
+        {"type": "session.updated", "session": session_summary(SESSION_ID, rig.device_id)},
+    )
+
+    ask = await next_ask(rig.device, timeout=3.0)
+
+    assert ask is not None
+    assert time.monotonic() - quiet_from >= 1.0
+    await rig.hub.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_busy_session_that_is_removed_leaves_the_device_quiet(tmp_path: Path) -> None:
+    rig, _ = await rig_with_wheel(tmp_path, update_quiet=0.1)
+    await rig.hub.handle_device_hello(
+        rig.device, device_hello(client_build=OLD_BUILD, sessions=[running_session(rig.device_id)])
+    )
+    assert await next_ask(rig.device, timeout=0.3) is None
+
+    await rig.hub.handle_device_frame(
+        rig.device, {"type": "session.removed", "session_id": SESSION_ID}
+    )
+
+    assert await next_ask(rig.device) is not None
+    await rig.hub.stop()
+
+
+@pytest.mark.parametrize(
+    ("summary", "busy"),
+    [
+        ({"control": "remote", "state": "running"}, True),
+        ({"control": "shared", "state": "running"}, True),
+        ({"control": "remote", "state": "starting"}, True),
+        ({"control": "shared", "state": "needs_approval"}, True),
+        ({"control": "remote", "state": "needs_input"}, True),
+        ({"control": "terminal", "state": "running"}, False),
+        ({"control": "none", "state": "running"}, False),
+        ({"control": "remote", "state": "idle"}, False),
+        ({"control": "remote", "state": "readonly"}, False),
+        ({"control": "remote", "state": "idle", "queued": 1}, True),
+        ({"control": "shared", "state": "idle", "queued": 2}, True),
+        ({"control": "terminal", "state": "readonly", "queued": 2}, False),
+        ({"control": "none", "state": "idle", "queued": 1}, False),
+        ({"control": "remote", "state": "idle", "queued": 0}, False),
+        ({"control": "remote", "state": "idle", "queued": True}, False),
+        ({"state": "running"}, False),
+    ],
+)
+def test_what_keeps_a_device_from_being_updated(summary: dict[str, Any], busy: bool) -> None:
+    assert is_busy(summary) is busy
+
+
+@pytest.mark.asyncio
+async def test_a_device_that_is_never_quiet_is_asked_anyway_after_the_patience(
+    tmp_path: Path,
+) -> None:
+    rig, _ = await rig_with_wheel(tmp_path, update_quiet=0.1, update_patience=0.4)
+    started = time.monotonic()
+    await rig.hub.handle_device_frame(
+        rig.device, {"type": "session.updated", "session": running_session(rig.device_id)}
+    )
+    await rig.hub.handle_device_hello(
+        rig.device, device_hello(client_build=OLD_BUILD, sessions=[running_session(rig.device_id)])
+    )
+
+    assert await next_ask(rig.device, timeout=0.25) is None
+    ask = await next_ask(rig.device)
+
+    assert ask is not None and ask["build"] == SERVED_BUILD
+    assert time.monotonic() - started >= 0.4
+    await rig.hub.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_device_that_refuses_is_asked_again_once_quiet_and_not_sooner_than_the_retry(
+    tmp_path: Path,
+) -> None:
+    """`conflict` is the device's own rule, wider than the gateway's: it may refuse a quiet one."""
+    rig, _ = await rig_with_wheel(tmp_path, update_quiet=0.05, update_retry=0.5)
+    await rig.hub.handle_device_hello(rig.device, device_hello(client_build=OLD_BUILD))
     ask = await next_ask(rig.device)
     assert ask is not None
 
+    refused_at = time.monotonic()
+    await rig.hub.handle_device_frame(rig.device, refused(ask, "a terminal is attached"))
+    assert await next_ask(rig.device, timeout=0.3) is None
+    again = await next_ask(rig.device)
+
+    assert again is not None and again["build"] == SERVED_BUILD
+    assert time.monotonic() - refused_at >= 0.5
+    await rig.hub.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_device_that_refused_is_not_asked_again_while_a_session_is_running(
+    tmp_path: Path,
+) -> None:
+    rig, _ = await rig_with_wheel(tmp_path, update_quiet=0.05, update_retry=0.05)
+    await rig.hub.handle_device_hello(rig.device, device_hello(client_build=OLD_BUILD))
+    ask = await next_ask(rig.device)
+    assert ask is not None
     await rig.hub.handle_device_frame(rig.device, refused(ask, "1 session is running"))
+    await rig.hub.handle_device_frame(
+        rig.device, {"type": "session.updated", "session": running_session(rig.device_id)}
+    )
+
     assert await next_ask(rig.device, timeout=SETTLE_SECONDS) is None
 
     await rig.hub.handle_device_frame(
         rig.device,
         {"type": "session.updated", "session": session_summary(SESSION_ID, rig.device_id)},
     )
-    again = await next_ask(rig.device)
-    assert again is not None and again["build"] == SERVED_BUILD
-    await rig.hub.stop()
-
-
-@pytest.mark.asyncio
-async def test_a_device_that_stays_busy_is_asked_again_when_the_period_is_up(
-    tmp_path: Path,
-) -> None:
-    rig, _ = await rig_with_wheel(tmp_path, update_retry=0.05)
-    await rig.hub.handle_device_hello(
-        rig.device, device_hello(client_build=OLD_BUILD, sessions=[running_session(rig.device_id)])
-    )
-    ask = await next_ask(rig.device)
-    assert ask is not None
-
-    await rig.hub.handle_device_frame(rig.device, refused(ask, "1 session is running"))
-    # Nothing says the session ended; only the period passing asks again.
     assert await next_ask(rig.device) is not None
     await rig.hub.stop()
 
@@ -133,10 +261,8 @@ async def test_a_device_that_stays_busy_is_asked_again_when_the_period_is_up(
 async def test_a_wheel_deployed_while_a_device_was_busy_is_the_one_asked_for(
     tmp_path: Path,
 ) -> None:
-    rig, served = await rig_with_wheel(tmp_path, update_retry=0.05)
-    await rig.hub.handle_device_hello(
-        rig.device, device_hello(client_build=OLD_BUILD, sessions=[running_session(rig.device_id)])
-    )
+    rig, served = await rig_with_wheel(tmp_path, update_quiet=0.05, update_retry=0.05)
+    await rig.hub.handle_device_hello(rig.device, device_hello(client_build=OLD_BUILD))
     ask = await next_ask(rig.device)
     assert ask is not None and ask["build"] == SERVED_BUILD
 
@@ -144,27 +270,6 @@ async def test_a_wheel_deployed_while_a_device_was_busy_is_the_one_asked_for(
     served.build = NEXT_BUILD
     again = await next_ask(rig.device)
     assert again is not None and again["build"] == NEXT_BUILD
-    await rig.hub.stop()
-
-
-@pytest.mark.asyncio
-async def test_a_session_still_running_does_not_release_the_retry(tmp_path: Path) -> None:
-    rig, _ = await rig_with_wheel(tmp_path, update_retry=30.0)
-    await rig.hub.handle_device_hello(
-        rig.device, device_hello(client_build=OLD_BUILD, sessions=[running_session(rig.device_id)])
-    )
-    ask = await next_ask(rig.device)
-    assert ask is not None
-
-    await rig.hub.handle_device_frame(rig.device, refused(ask, "1 session is running"))
-    await rig.hub.handle_device_frame(
-        rig.device,
-        {
-            "type": "session.updated",
-            "session": session_summary(SESSION_ID, rig.device_id, state="running"),
-        },
-    )
-    assert await next_ask(rig.device, timeout=SETTLE_SECONDS) is None
     await rig.hub.stop()
 
 

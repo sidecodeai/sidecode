@@ -108,7 +108,13 @@ async def test_an_app_behind_a_live_event_is_told_to_resync(
         {"type": "session.subscribe", "id": "s1", "session_id": SESSION_ID, "since_seq": 4},
     )
 
-    reply = frames_of(rig.app)[-1]
+    # The device is connected, so it is asked first (A56); the one in this rig never answers.
+    replies: list[dict[str, Any]] = []
+    deadline = time.monotonic() + 2.0
+    while not replies and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
+        replies = [item for item in frames_of(rig.app) if item.get("id") == "s1"]
+    (reply,) = replies
     assert reply["id"] == "s1"
     assert reply["result"]["resync"] is True
     assert reply["result"]["session"]["last_seq"] == 9

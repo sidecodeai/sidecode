@@ -20,13 +20,25 @@ from functools import partial
 from typing import Any
 
 from .auto_update import (
-    BUSY_STATES,
+    UPDATE_PATIENCE_SECONDS,
+    UPDATE_QUIET_SECONDS,
     UPDATE_RETRY_SECONDS,
     AutoUpdate,
     DeviceUpdates,
+    UpdatePace,
 )
 from .badge import BadgeChange, BadgeHook
 from .budget import ByteBudget
+from .catchup import (
+    CATCH_UP_SECONDS,
+    FETCH_SECONDS,
+    OUTCOME_BACKFILLED,
+    OUTCOME_FETCH_FAILED,
+    OUTCOME_REPLAYED,
+    OUTCOME_RESYNC,
+    CatchUpHost,
+    CatchUps,
+)
 from .connections import AppConnection, DeviceConnection, SlowClientError, encode
 from .devices import UPDATE_FAILED, UPDATE_RUNNING, DeviceStore, normalize_pairing_code
 from .frames import (
@@ -40,6 +52,7 @@ from .frames import (
     DEVICE_UPDATE_FAILED,
     ERROR_BAD_REQUEST,
     ERROR_DEVICE_OFFLINE,
+    ERROR_INTERNAL,
     ERROR_NOT_FOUND,
     ERROR_TIMEOUT,
     ERROR_TOO_LARGE,
@@ -90,10 +103,6 @@ PAIRING_TRACK_SECONDS = 600.0
 #: Amendment A9. A gateway-originated request carries this opaque id in `from`, so the device
 #: echoes it like any other and the reply routes back here instead of to an app connection.
 GATEWAY_ORIGIN_ID = "gateway"
-BACKFILL_LIMIT = 1000
-#: A device that was offline for a long time can be far ahead; stop after this many pages rather
-#: than looping forever against a peer that keeps reporting `has_more`.
-MAX_BACKFILL_PAGES = 64
 ACTIVE_APP_WINDOW_SECONDS = 60.0
 #: How long a shutdown waits for notifications that are already on their way out.
 TRANSITION_DRAIN_SECONDS = 5.0
@@ -101,6 +110,18 @@ TRANSITION_DRAIN_SECONDS = 5.0
 #: and a daemon restart all look identical for a few seconds, and reporting each one as offline
 #: made devices flap. `online` stays true for this long, and a reconnect inside it is invisible.
 OFFLINE_GRACE_SECONDS = 20.0
+#: A56. A request that was written to a link a newer connection replaced is answered `timeout`
+#: this many seconds after the newer connection's `hello_ack`, if the device has not answered it on
+#: the new link by then, instead of after the request timeout.
+ORPHAN_GRACE_SECONDS = 10.0
+#: A56. A device that accepted an update installs a wheel and restarts its service, which takes
+#: longer than a dropped link does, so a link that drops under an update is waited for this long.
+UPDATE_GRACE_SECONDS = 60.0
+#: A56. A gateway that stops cleanly records the devices that were online; the next one, if it
+#: starts within this many seconds, holds each of them online for the restart grace while it
+#: reconnects, instead of reporting every device offline for the seconds a restart takes.
+RESTART_WINDOW_SECONDS = 120
+RESTART_GRACE_SECONDS = 30.0
 #: Close codes that mean the device is not coming back, so `online` flips at once (A13, §2.5).
 IMMEDIATE_OFFLINE_CLOSES = frozenset({CLOSE_UNAUTHORIZED, CLOSE_FORBIDDEN})
 
@@ -201,6 +222,11 @@ class _Pending:
     #: A39: the session a `session.archive {archived: true}` is closing until the device answers.
     #: What a session reports on its way out is the end of it, not news (A47).
     closing: str = ""
+    #: A56: the device connection the frame was written to, so a request left on a link that a
+    #: newer one replaced can be told apart from one written to the live link.
+    device_connection_id: str = ""
+    session_id: str = ""
+    started: float = field(default_factory=time.monotonic)
     timer: asyncio.Task[None] | None = None
 
 
@@ -214,6 +240,22 @@ class _GatewayRequest:
 
     kind: str
     waiter: asyncio.Future[Frame]
+
+
+@dataclass(frozen=True)
+class _Subscribe:
+    """A `session.subscribe` that passed its checks, with what its log line needs (A56)."""
+
+    identifier: str
+    #: The device that owns the session.
+    owner: str
+    session_id: str
+    since_seq: int | None
+    started: float
+
+
+class _NeedsDevice(Exception):
+    """A subscribe only the device can answer, raised where nothing may wait for it (A56)."""
 
 
 @dataclass(frozen=True)
@@ -234,6 +276,8 @@ class _Grace:
     #: Set when the grace resolves, whichever way: a replacement connection arrived, or the
     #: period ran out. A request parked on it re-reads the device slot and learns which.
     resolved: asyncio.Event
+    #: How long it lasts: the offline grace, or the longer one an update or a restart earns (A56).
+    seconds: float
     timer: asyncio.Task[None] | None = None
 
 
@@ -257,15 +301,27 @@ class Hub:
         on_session_resume: ResumeHook | None = None,
         on_badge_change: BadgeHook | None = None,
         request_timeout: float = REQUEST_TIMEOUT_SECONDS,
+        fetch_timeout: float = FETCH_SECONDS,
+        catch_up_budget: float = CATCH_UP_SECONDS,
         offline_grace: float = OFFLINE_GRACE_SECONDS,
+        orphan_grace: float = ORPHAN_GRACE_SECONDS,
+        update_grace: float = UPDATE_GRACE_SECONDS,
+        restart_grace: float = RESTART_GRACE_SECONDS,
         update_timeout: float = UPDATE_TIMEOUT_SECONDS,
         update_retry: float = UPDATE_RETRY_SECONDS,
+        update_quiet: float = UPDATE_QUIET_SECONDS,
+        update_patience: float = UPDATE_PATIENCE_SECONDS,
         served_build: Callable[[], str | None] | None = None,
     ) -> None:
         self.index = index
         self.device_store = device_store
         self.request_timeout = request_timeout
+        self.fetch_timeout = fetch_timeout
+        self.catch_up_budget = catch_up_budget
         self.offline_grace = offline_grace
+        self.orphan_grace = orphan_grace
+        self.update_grace = update_grace
+        self.restart_grace = restart_grace
         self.update_timeout = update_timeout
         self._on_session_transition = on_session_transition
         self._on_session_resume = on_session_resume
@@ -281,8 +337,26 @@ class Hub:
         self._gateway_pending: dict[str, _GatewayRequest] = {}
         #: Internal requesters (``send_session_as``) waiting for a reply, by origin id.
         self._sinks: dict[str, Callable[[Frame], Awaitable[None]]] = {}
-        self._backfills: set[asyncio.Task[None]] = set()
+        #: A56: what a device's hello fetches from it for the apps that are behind, and the live
+        #: events of a session that wait while it does.
+        self._catchups = CatchUps(
+            CatchUpHost(
+                ask=self._ask_device,
+                publish=self._publish_event,
+                apps=lambda: self._apps.values(),
+                buffers=self._buffers,
+                session_owner=self._owners.get,
+                owner_of=self._owner_of,
+                device_account=lambda device_id: self._device_owners.get(device_id, ""),
+                timeout=lambda: self.fetch_timeout,
+                budget=lambda: max(self.catch_up_budget, self.fetch_timeout),
+            )
+        )
         self._notifications: set[asyncio.Task[None]] = set()
+        #: A56: the timers of requests left on a replaced link, which end with the shutdown, and
+        #: by device the newest link whose timer counts: an earlier link's runs out unheeded.
+        self._orphan_timers: set[asyncio.Task[None]] = set()
+        self._orphan_links: dict[str, str] = {}
         self._grace: dict[str, _Grace] = {}
         self._updates: dict[str, asyncio.Task[None]] = {}
         self._pairings: dict[str, _Pairing] = {}
@@ -299,10 +373,9 @@ class Hub:
                 ask=self._ask_device,
                 connection=self._device_connection,
                 record=self.device_store.get,
-                busy=self._device_is_busy,
             ),
             served_build=served_build if served_build is not None else lambda: None,
-            retry_after=update_retry,
+            pace=UpdatePace(retry=update_retry, quiet=update_quiet, patience=update_patience),
         )
 
     # ---- lifecycle ----
@@ -311,16 +384,22 @@ class Hub:
         if self._heartbeat is None:
             self._heartbeat = asyncio.create_task(self._heartbeat_loop())
         await self._clear_closed_marks()
+        await self._begin_restart_graces()
 
     async def stop(self) -> None:
+        await self._record_online_devices()
         if self._heartbeat is not None:
             self._heartbeat.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._heartbeat
             self._heartbeat = None
-        for task in list(self._backfills):
-            task.cancel()
-        self._backfills.clear()
+        self._catchups.stop()
+        for timer in list(self._orphan_timers):
+            timer.cancel()
+        self._orphan_timers.clear()
+        self._orphan_links.clear()
+        for app in self._apps.values():
+            app.cancel_subscribing()
         for device_id in list(self._grace):
             self._end_grace(device_id)
         for device_id in list(self._updates):
@@ -339,6 +418,17 @@ class Hub:
             await connection.stop(code=1001, reason="gateway shutting down")
         self._devices.clear()
         self._apps.clear()
+
+    async def _record_online_devices(self) -> None:
+        """Note which devices the apps were told are online, before anything is closed (A56).
+
+        The process that follows holds them through their reconnect. A store that cannot be
+        written costs it that, and must not cost this shutdown the rest of its work.
+        """
+        try:
+            await self.device_store.record_stop([*self._devices, *self._grace])
+        except Exception:
+            log.exception("could not record the devices that were online")
 
     async def _drain_notifications(self) -> None:
         """Let the pushes already in flight finish, rather than dropping a notification.
@@ -383,13 +473,72 @@ class Hub:
         # A13: a replacement inside the grace period ends it without a word to the apps, which
         # never saw the device leave, and releases whatever requests were parked waiting for it.
         reconnected = self._end_grace(connection.device_id)
+        self._fail_orphans_later(connection)
         if previous is not None and previous is not connection:
+            # What it was asked for will never arrive, and must not hold up the new connection's.
+            self._catchups.supersede(previous)
             await previous.stop(code=CLOSE_DEVICE_REPLACED, reason=DEVICE_REPLACED_CLOSE_REASON)
         log.info("device connected", device_id=connection.device_id, within_grace=reconnected)
+
+    def _fail_orphans_later(self, connection: DeviceConnection) -> None:
+        """Give what was written to an older link a while to be answered on this one (A56).
+
+        A device that kept running answers a request it was working on over whatever link is
+        current, so a slow one, a `session.create` above all, still succeeds across a link flap.
+        What is still unanswered ``orphan_grace`` seconds after the device could first answer on
+        this link is answered `timeout`, which is soon enough that nobody waits out the 60 s. A
+        link that is replaced in its turn hands what it was waiting on to the next, which has the
+        whole grace: every request of the device that is not on this link is counted here.
+        """
+        orphans = [
+            (key, item)
+            for key, item in self._pending.items()
+            if item.device_id == connection.device_id and item.device_connection_id != connection.id
+        ]
+        if not orphans:
+            self._orphan_links.pop(connection.device_id, None)
+            return
+        self._orphan_links[connection.device_id] = connection.id
+        timer = asyncio.create_task(self._fail_orphans_after_ack(connection, orphans))
+        self._orphan_timers.add(timer)
+        timer.add_done_callback(self._orphan_timers.discard)
+
+    async def _fail_orphans_after_ack(
+        self, connection: DeviceConnection, orphans: list[tuple[tuple[str, str], _Pending]]
+    ) -> None:
+        try:
+            await connection.acknowledged.wait()
+            await asyncio.sleep(self.orphan_grace)
+            if self._orphan_links.get(connection.device_id) != connection.id:
+                return
+            for key, pending in orphans:
+                # A request sent again with the same id is a new entry, which is not the orphan.
+                if self._pending.get(key) is pending:
+                    await self._fail_orphan(key, pending)
+        finally:
+            if self._orphan_links.get(connection.device_id) == connection.id:
+                del self._orphan_links[connection.device_id]
+
+    async def _fail_orphan(self, key: tuple[str, str], pending: _Pending) -> None:
+        del self._pending[key]
+        if pending.timer is not None:
+            pending.timer.cancel()
+        log.info(
+            "request orphaned by a device reconnect",
+            device_id=pending.device_id,
+            session_id=pending.session_id,
+            kind=pending.kind,
+            ms=int((time.monotonic() - pending.started) * 1000),
+            outcome=ERROR_TIMEOUT,
+        )
+        await self._deliver(
+            key[0], error_reply(key[1], ERROR_TIMEOUT, "device did not reply in time")
+        )
 
     async def detach_device(self, connection: DeviceConnection) -> None:
         # A36: an attempt belongs to the connection that earned it; the next hello starts over.
         self._auto_update.forget(connection)
+        self._catchups.cancel(connection)
         async with self._lock:
             if self._devices.get(connection.device_id) is not connection:
                 return
@@ -402,12 +551,39 @@ class Hub:
         if code in IMMEDIATE_OFFLINE_CLOSES:
             await self._report_offline(connection.device_id)
             return
-        self._begin_grace(connection.device_id)
+        self._begin_grace(connection.device_id, self._grace_seconds(connection.device_id))
 
-    def _begin_grace(self, device_id: str) -> None:
-        """Hold a dropped device online for the grace period (A13)."""
+    def _grace_seconds(self, device_id: str) -> float:
+        """How long a dropped link is waited for: longer while an update that was asked for runs."""
+        return self.update_grace if device_id in self._updates else self.offline_grace
+
+    async def _begin_restart_graces(self) -> None:
+        """Hold the devices that were online when the previous process stopped (A56).
+
+        Every one of them is reconnecting, and for the seconds that takes the apps would otherwise
+        be told each is offline and the requests made in the meantime would fail. A device that is
+        updating gets the update's longer grace, because its restart comes on top of the gateway's.
+        """
+        try:
+            for device_id in await self.device_store.take_stopped(within=RESTART_WINDOW_SECONDS):
+                await self._begin_restart_grace(device_id)
+        except Exception:
+            # A start that cannot read the record is a cold start, which is what it was before.
+            log.exception("could not hold the devices that were online at the last stop")
+
+    async def _begin_restart_grace(self, device_id: str) -> None:
+        if device_id in self._devices or device_id in self._grace:
+            return
+        record = await self.device_store.get(device_id)
+        seconds = self.restart_grace
+        if record is not None and record.update_state == UPDATE_RUNNING:
+            seconds = max(seconds, self.update_grace)
+        self._begin_grace(device_id, seconds)
+
+    def _begin_grace(self, device_id: str, seconds: float) -> None:
+        """Hold a dropped device online for a grace period (A13)."""
         self._end_grace(device_id)
-        grace = _Grace(resolved=asyncio.Event())
+        grace = _Grace(resolved=asyncio.Event(), seconds=seconds)
         grace.timer = asyncio.create_task(self._expire_grace(device_id, grace))
         self._grace[device_id] = grace
 
@@ -423,7 +599,7 @@ class Hub:
 
     async def _expire_grace(self, device_id: str, grace: _Grace) -> None:
         try:
-            await asyncio.sleep(self.offline_grace)
+            await asyncio.sleep(grace.seconds)
         except asyncio.CancelledError:
             return
         if self._grace.get(device_id) is not grace:
@@ -461,7 +637,7 @@ class Hub:
         if grace is None:
             return
         with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(grace.resolved.wait(), timeout=self.offline_grace)
+            await asyncio.wait_for(grace.resolved.wait(), timeout=grace.seconds)
 
     async def disconnect_device(
         self, device_id: str, *, reason: str, code: int = CLOSE_UNAUTHORIZED
@@ -507,96 +683,28 @@ class Hub:
         await self.device_store.record_build(connection.device_id, client_build)
         await self.device_store.touch(connection.device_id)
         sessions = frame.get("sessions")
-        if isinstance(sessions, list):
-            for summary in sessions:
-                if isinstance(summary, dict):
-                    await self._store_session(connection.device_id, summary)
+        summaries = (
+            [item for item in sessions if isinstance(item, dict)]
+            if isinstance(sessions, list)
+            else []
+        )
+        known: dict[str, int] = {}
+        for summary in summaries:
+            before = await self._store_session(connection.device_id, summary)
+            if before is not None:
+                known[text_field(summary, "session_id")] = before
         await self._announce_device(connection)
         # A36: a device behind the served wheel is brought to it without anyone pressing Update.
-        self._auto_update.on_hello(connection, client_build)
-        self._start_backfill(connection, sessions if isinstance(sessions, list) else [])
+        self._auto_update.on_hello(connection, client_build, summaries)
+        self._catchups.start(connection, summaries, known)
         await self._advance_pairing(connection.device_id, "online")
         if has_available_agent(connection.agents):
             await self._advance_pairing(connection.device_id, "agents")
         return True
 
-    # ---- backfill after a link outage (A9) ----
-
-    def _start_backfill(self, connection: DeviceConnection, summaries: list[Any]) -> None:
-        """Ask the device for whatever the replay buffer missed while the link was down.
-
-        Only a session whose buffer still holds something is worth backfilling: an empty buffer
-        already answers `session.subscribe` with `resync`, and the app pages history itself.
-        """
-        plan: list[tuple[str, int]] = []
-        for summary in summaries:
-            if not isinstance(summary, dict):
-                continue
-            session_id = text_field(summary, "session_id")
-            device_last = int_field(summary, "last_seq")
-            buffer = self._buffers.get(session_id)
-            if not session_id or device_last is None or buffer is None or len(buffer) == 0:
-                continue
-            if device_last > buffer.last_seq:
-                plan.append((session_id, buffer.last_seq))
-        if not plan:
-            return
-        task = asyncio.create_task(self._run_backfill(connection, plan))
-        self._backfills.add(task)
-        task.add_done_callback(self._backfills.discard)
-
-    async def _run_backfill(
-        self, connection: DeviceConnection, plan: list[tuple[str, int]]
-    ) -> None:
-        for session_id, tail in plan:
-            try:
-                await self._backfill_session(connection, session_id, tail)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                log.exception("backfill failed", device_id=connection.device_id)
-
-    async def _backfill_session(
-        self, connection: DeviceConnection, session_id: str, tail: int
-    ) -> None:
-        after = tail
-        for _ in range(MAX_BACKFILL_PAGES):
-            reply = await self._ask_device(
-                connection,
-                {
-                    "type": "session.history",
-                    "session_id": session_id,
-                    "after_seq": after,
-                    "limit": BACKFILL_LIMIT,
-                },
-            )
-            if reply is None or not reply.get("ok"):
-                return
-            result = object_field(reply, "result") or {}
-            events = result.get("events")
-            if not isinstance(events, list) or not events:
-                return
-            applied = 0
-            for event in events:
-                if not isinstance(event, dict):
-                    continue
-                seq = int_field(event, "seq")
-                if seq is None or seq <= after:
-                    continue
-                frame = {"type": "session.event", "session_id": session_id, "event": event}
-                if await self._publish_event(connection, session_id, event, frame):
-                    applied += 1
-                    after = max(after, seq)
-            log.info(
-                "backfilled events after a device reconnect",
-                device_id=connection.device_id,
-                events=applied,
-                through_seq=after,
-            )
-            if not result.get("has_more") or applied == 0:
-                return
-
-    async def _ask_device(self, connection: DeviceConnection, request: Frame) -> Frame | None:
+    async def _ask_device(
+        self, connection: DeviceConnection, request: Frame, timeout: float | None = None
+    ) -> Frame | None:
         """Send a gateway-originated request and wait for the device's reply."""
         kind = frame_type(request)
         # A UUID, not a bare hex string: every request id on the wire is one (§6.3 `RequestBase`),
@@ -613,14 +721,25 @@ class Hub:
         try:
             async with self._send_lock:
                 await connection.send(frame)
-            return await asyncio.wait_for(waiter, timeout=self.request_timeout)
+            return await asyncio.wait_for(
+                waiter, timeout=self.request_timeout if timeout is None else timeout
+            )
         except (SlowClientError, ConnectionError):
             log.warning(
                 "gateway request could not be sent", device_id=connection.device_id, kind=kind
             )
             return None
-        except (TimeoutError, asyncio.CancelledError):
+        except TimeoutError:
             log.warning("gateway request timed out", device_id=connection.device_id, kind=kind)
+            return None
+        except asyncio.CancelledError:
+            # The shutdown cancels the request, which nobody will answer, and the wait ends. A task
+            # that is itself being cancelled (a subscriber who left, a link that dropped) is
+            # cancelled, not answered `None`.
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise
+            log.warning("gateway request was cancelled", device_id=connection.device_id, kind=kind)
             return None
         finally:
             self._gateway_pending.pop(identifier, None)
@@ -707,15 +826,6 @@ class Hub:
 
     def _device_connection(self, device_id: str) -> DeviceConnection | None:
         return self._devices.get(device_id)
-
-    async def _device_is_busy(self, device_id: str) -> bool:
-        """Whether a session on this device is mid-turn, counted as the device counts them (A22).
-
-        Read only while an automatic update is parked waiting for the machine to go quiet, so the
-        index lookup is nowhere near the path a session event takes.
-        """
-        sessions = await self.index.list_sessions(device_id=device_id)
-        return any(text_field(item, "state") in BUSY_STATES for item in sessions)
 
     # ---- terminals (A38, §7.3) ----
 
@@ -819,6 +929,7 @@ class Hub:
             await stale.stop(code=CLOSE_TOO_MANY_APPS, reason=APP_REPLACED_CLOSE_REASON)
 
     async def detach_app(self, connection: AppConnection) -> None:
+        connection.cancel_subscribing()
         async with self._lock:
             self._apps.pop(connection.id, None)
         # A close the device is still working on outlives the socket that asked for it: it is what
@@ -1123,34 +1234,23 @@ class Hub:
                 )
                 return
         self._track_pending(
-            origin.id,
             identifier,
-            device_id,
-            kind,
-            text_field(frame, "terminal_id"),
-            closing=_session_being_closed(frame),
+            _Pending(
+                device_id=device_id,
+                connection_id=origin.id,
+                kind=kind,
+                terminal_id=text_field(frame, "terminal_id"),
+                closing=_session_being_closed(frame),
+                device_connection_id=device.id,
+                session_id=text_field(frame, "session_id"),
+            ),
         )
 
-    def _track_pending(
-        self,
-        origin_id: str,
-        identifier: str,
-        device_id: str,
-        kind: str,
-        terminal_id: str = "",
-        closing: str = "",
-    ) -> None:
-        key = (origin_id, identifier)
+    def _track_pending(self, identifier: str, pending: _Pending) -> None:
+        key = (pending.connection_id, identifier)
         existing = self._pending.get(key)
         if existing is not None and existing.timer is not None:
             existing.timer.cancel()
-        pending = _Pending(
-            device_id=device_id,
-            connection_id=origin_id,
-            kind=kind,
-            terminal_id=terminal_id,
-            closing=closing,
-        )
         self._pending[key] = pending
         pending.timer = asyncio.create_task(self._expire_pending(key, identifier))
 
@@ -1251,26 +1351,120 @@ class Hub:
                     connection, error_reply(identifier, ERROR_BAD_REQUEST, "session_id is required")
                 )
             return
-        indexed = await self.index.get(session_id)
+        owner = await self._owner_of(session_id)
         # A session on another account's device is answered exactly as one that does not exist,
         # so a subscribe cannot be used to probe which session ids are real (A24).
-        if indexed is None or not await self._reaches(connection, indexed.device_id):
+        if owner is None or not await self._reaches(connection, owner):
             await self._send_app(
                 connection, error_reply(identifier, ERROR_NOT_FOUND, "unknown session")
             )
             return
-        since_seq = int_field(frame, "since_seq")
-        buffer = self._buffers.get(session_id)
-        if buffer is None:
-            events: list[Frame] = []
-            resync = since_seq is not None and since_seq < indexed.last_seq
-        else:
-            events, resync = buffer.replay_from(since_seq)
-        cursor = max(since_seq or 0, 0)
+        request = _Subscribe(
+            identifier, owner, session_id, int_field(frame, "since_seq"), time.monotonic()
+        )
+        if not connection.subscribing.get(session_id):
+            try:
+                await self._answer_subscribe(connection, request, may_ask=False)
+                return
+            except _NeedsDevice:
+                pass
+        # The device may take seconds to answer, and the socket's other frames, a Stop among
+        # them, must not wait for it (A56). An earlier subscribe to the session answers first.
+        waiting = connection.subscribing.get(session_id, [])
+        task = asyncio.create_task(
+            self._answer_subscribe_later(connection, request, waiting[-1] if waiting else None)
+        )
+        connection.await_subscribe(session_id, task)
+
+    async def _answer_subscribe_later(
+        self, connection: AppConnection, request: _Subscribe, earlier: asyncio.Task[None] | None
+    ) -> None:
+        try:
+            if earlier is not None:
+                await asyncio.wait({earlier})
+            await self._answer_subscribe(connection, request, may_ask=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("subscribe failed", session_id=request.session_id)
+            await self._send_app(
+                connection, error_reply(request.identifier, ERROR_INTERNAL, "subscribe failed")
+            )
+
+    async def _answer_subscribe(
+        self, connection: AppConnection, request: _Subscribe, *, may_ask: bool
+    ) -> None:
+        answer = await self._subscription(
+            connection, request.session_id, request.since_seq, may_ask=may_ask
+        )
+        if answer is None:
+            await self._send_app(
+                connection, error_reply(request.identifier, ERROR_NOT_FOUND, "unknown session")
+            )
+            return
+        result, outcome = answer
+        await self._send_app(connection, ok_reply(request.identifier, result))
+        if outcome is not None:
+            log.info(
+                "session subscribed",
+                device_id=request.owner,
+                session_id=request.session_id,
+                since=request.since_seq,
+                last_seq=result["session"].get("last_seq"),
+                events=len(result["events"]),
+                ms=int((time.monotonic() - request.started) * 1000),
+                outcome=outcome,
+            )
+
+    async def _subscription(
+        self, connection: AppConnection, session_id: str, since_seq: int | None, *, may_ask: bool
+    ) -> tuple[dict[str, Any], str | None] | None:
+        """What a subscribe is answered with, and the outcome worth a log line, if any.
+
+        The buffer answers when it can. When it cannot and the device is connected, the device does
+        (A56): the events after the app's cursor, and a `resync` only if they do not fit. Where
+        nothing may wait for the device (``may_ask`` false), that is `_NeedsDevice` instead,
+        decided on the state this very read found, so a hello that lands meanwhile cannot make the
+        read loop wait. The reply is built from what the gateway knows once the device has
+        answered, with nothing awaited between reading the index and registering the socket, so a
+        device hello that lands in between finds the subscriber already counted.
+        """
+        stale = connection.take_stale(session_id)
+        indexed = await self.index.get(session_id)
+        if indexed is None:
+            return None
+        events, resync = self._replay(session_id, since_seq, indexed)
+        outcome = _subscribe_outcome(events, resync, since_seq)
+        backfilled = False
+        if stale and since_seq is not None:
+            events, resync, outcome = [], True, OUTCOME_RESYNC
+        elif resync and since_seq is not None:
+            device = self._connected_device(indexed.device_id)
+            if device is not None:
+                if not may_ask:
+                    raise _NeedsDevice
+                fetched, asked = await self._catchups.fetch_for_subscriber(
+                    device, session_id, since_seq
+                )
+                indexed = await self.index.get(session_id)
+                if indexed is None:
+                    return None
+                if fetched is None:
+                    events, resync = self._replay(session_id, since_seq, indexed)
+                    outcome = OUTCOME_FETCH_FAILED if resync else OUTCOME_REPLAYED
+                else:
+                    events, resync = self._catchups.join(session_id, fetched, since_seq), False
+                    backfilled = asked
+                    outcome = OUTCOME_BACKFILLED if asked else OUTCOME_REPLAYED
+        # A subscribe with no cursor pages history itself, up to at least what the index holds,
+        # and is owed what follows: the session's `last_seq` stands for its cursor (A56).
+        cursor = indexed.last_seq if since_seq is None else max(since_seq, 0)
         if events:
             cursor = int_field(events[-1], "seq") or cursor
         if resync:
             cursor = indexed.last_seq
+        elif backfilled:
+            cursor = max(cursor, indexed.last_seq)
         connection.subscribe(session_id, cursor)
         result: dict[str, Any] = {
             "session": indexed.summary,
@@ -1280,7 +1474,20 @@ class Hub:
         queued = self._queues.get(session_id)
         if queued is not None:
             result["queue"] = {"pending": queued.get("pending") or []}
-        await self._send_app(connection, ok_reply(identifier, result))
+        return result, outcome
+
+    def _replay(
+        self, session_id: str, since_seq: int | None, indexed: IndexedSession
+    ) -> tuple[list[Frame], bool]:
+        """What the replay buffer says for a cursor: the events after it, or that it cannot say."""
+        buffer = self._buffers.get(session_id)
+        if buffer is None:
+            return [], since_seq is not None and since_seq < indexed.last_seq
+        return buffer.replay_from(since_seq)
+
+    def _connected_device(self, device_id: str) -> DeviceConnection | None:
+        device = self._devices.get(device_id)
+        return device if device is not None and not device.closed else None
 
     async def _claim_session(self, device_id: str, session_id: str) -> bool:
         """True when `device_id` owns `session_id`, claiming it the first time it is seen.
@@ -1371,14 +1578,40 @@ class Hub:
         event = object_field(frame, "event")
         if not session_id or event is None:
             return
+        if self._devices.get(device.device_id) is not device:
+            # A connection that a newer one replaced may still deliver what it had already read.
+            # Publishing it would move cursors past events the replacement dropped and leave the
+            # replay buffer a hole: the new connection's hello fetches it from the device (A56).
+            log.debug("event from a replaced connection dropped", device_id=device.device_id)
+            return
         if not await self._claim_session(device.device_id, session_id):
             return
+        hold = self._catchups.held(session_id)
+        if hold is not None:
+            if hold.add(event, frame):
+                return
+            # Past its bounds: what is held goes out now and the session carries on live.
+            await self._catchups.overflow(session_id, hold)
         await self._publish_event(device, session_id, event, frame)
 
     async def _publish_event(
-        self, device: DeviceConnection, session_id: str, event: Frame, frame: Frame
+        self,
+        device: DeviceConnection,
+        session_id: str,
+        event: Frame,
+        frame: Frame,
+        *,
+        known: int | None = None,
+        skip: frozenset[AppConnection] = frozenset(),
     ) -> bool:
-        """Buffer one event and fan it out. Returns False for a dropped or duplicate event."""
+        """Buffer one event and fan it out. Returns False for a dropped or duplicate event.
+
+        ``known`` says the event was fetched from the device rather than pushed (A56): it is the
+        newest ``seq`` the gateway had seen of the session before. Such an event reaches only the
+        sockets that are behind it, one the buffer already holds still does, and it cues a push
+        only when it is newer than anything the gateway has been told of. ``skip`` names sockets
+        that are sent none of it, which a catch-up does for one that could not take its burst.
+        """
         seq = int_field(event, "seq")
         if seq is None:
             return False
@@ -1391,50 +1624,73 @@ class Hub:
                 bytes=size,
             )
             return False
-        buffer = self._buffer_for(session_id)
-        if not buffer.append(event, size):
+        stored = self._buffer_for(session_id).append(event, size)
+        if not stored and known is None:
             return False
-        if text_field(event, "kind") == "queue":
-            # A6: `queue` describes current state rather than timeline history, so the newest
-            # snapshot is kept for `session.subscribe` instead of being replayed from the buffer.
-            self._remember_queue(session_id, event)
-        # Recorded before the fan-out and without touching the disk, so no app can read a summary
-        # that predates an event it has already been sent, and no event waits on SQLite.
-        self.index.record_seq(session_id, seq)
+        if stored:
+            if text_field(event, "kind") == "queue":
+                # A6: `queue` describes current state rather than timeline history, so the
+                # newest snapshot is kept for `session.subscribe`, not replayed from the buffer.
+                self._remember_queue(session_id, event)
+            # Recorded before the fan-out and without touching the disk, so no app can read a
+            # summary that predates an event it has already been sent, and no event waits on SQLite.
+            self.index.record_seq(session_id, seq)
         # A5: apps address a session by (device_id, session_id) and a pushed event has to carry
         # the device identity the gateway derived from the token, not one the frame claimed.
         outgoing = {**frame, "device_id": device.device_id}
         async with self._lock:
-            subscribers = [item for item in self._apps.values() if item.subscribed(session_id)]
+            subscribers = [
+                item
+                for item in self._apps.values()
+                if item.subscribed(session_id)
+                and item not in skip
+                and (known is None or item.behind(session_id, seq))
+            ]
         for subscriber in subscribers:
             subscriber.subscribe(session_id, seq)
             await self._send_app(subscriber, outgoing)
-        if text_field(event, "kind") == "resume":
+        if stored and text_field(event, "kind") == "resume" and (known is None or seq > known):
             # A35: a pending resume changes no session state, so this event is the only thing
             # that can tell someone their session was paused, resumed or given up on.
             await self._notify_resume(device, session_id, event)
-        return True
+        return stored
 
     # ---- session index ----
 
-    async def _store_session(self, device_id: str, summary: Frame) -> None:
+    async def _store_session(self, device_id: str, summary: Frame) -> int | None:
+        """Index a summary a device announced.
+
+        Returns how far the gateway had seen the session before it (A56), or ``None`` when it had
+        not seen it or the summary was refused.
+        """
         stored = dict(summary)
         stored["device_id"] = device_id
         session_id = text_field(stored, "session_id")
         if not session_id or not await self._claim_session(device_id, session_id):
-            return
+            return None
         closing = self._is_closing(session_id)
         previous = await self.index.get(session_id)
         indexed = await self.index.upsert(stored, closing=closing)
         if indexed is None:
             log.warning("session summary refused", device_id=device_id)
-            return
+            return None
+        # A56: a summary is the device's latest word on its queue. The event that emptied the queue
+        # may have been lost with a link that was already dead, so the snapshot must not outlive it.
+        if int_field(stored, "queued") == 0:
+            self._queues.pop(session_id, None)
         owner = await self.device_owner(device_id)
         await self.broadcast_user(owner, {"type": "session.updated", "session": indexed.summary})
         if indexed.unseen != (previous is not None and previous.unseen):
             self._badge_changed(owner, indexed)
-        # A36: an automatic update a busy device refused is asked again the moment it goes quiet.
-        await self._auto_update.on_session_change(device_id)
+        # A36, A56: an automatic update waits for the device to be quiet, which its summaries say.
+        self._auto_update.on_session_change(device_id, indexed.summary)
+        self._cue_transition(previous, indexed, owner, closing=closing)
+        return None if previous is None else previous.last_seq
+
+    def _cue_transition(
+        self, previous: IndexedSession | None, indexed: IndexedSession, owner: str, *, closing: bool
+    ) -> None:
+        """Cue a push when a session's state moved, unless nobody should be told."""
         # A session on its way out reports the end of its turn first (A39). The person who closed
         # it is not told that a turn finished.
         if closing:
@@ -1443,9 +1699,8 @@ class Hub:
         # just created (or a device reconnecting after a wipe) must not produce a push storm.
         if self._on_session_transition is None or previous is None:
             return
-        if previous.state == indexed.state:
-            return
-        self._notify_transition(previous.state, indexed, owner)
+        if previous.state != indexed.state:
+            self._notify_transition(previous.state, indexed, owner)
 
     def _notify_transition(self, previous_state: str, indexed: IndexedSession, owner: str) -> None:
         """Run the push hook off the device read loop.
@@ -1519,6 +1774,7 @@ class Hub:
         if not await self._claim_session(device_id, session_id):
             return
         removed = await self.index.remove(session_id)
+        self._auto_update.on_session_removed(device_id, session_id)
         owner = await self.device_owner(device_id)
         await self._drop_session(device_id, session_id, owner)
         if removed is not None and removed.unseen:
@@ -1540,6 +1796,7 @@ class Hub:
         self._device_owners.pop(device_id, None)
 
     async def _drop_session(self, device_id: str, session_id: str, owner: str) -> None:
+        self._catchups.forget(session_id)
         self._buffers.pop(session_id, None)
         self._queues.pop(session_id, None)
         self._owners.pop(session_id, None)
@@ -1727,6 +1984,15 @@ class Hub:
                     await connection.send({"type": "ping"})
                 except (SlowClientError, ConnectionError):
                     await connection.stop(code=CLOSE_SLOW_CLIENT, reason="slow client")
+
+
+def _subscribe_outcome(events: list[Frame], resync: bool, since_seq: int | None) -> str | None:
+    """What a subscribe the buffer answered amounts to, or ``None`` when it was nothing to log."""
+    if since_seq is None:
+        return None
+    if resync:
+        return OUTCOME_RESYNC
+    return OUTCOME_REPLAYED if events else None
 
 
 def _attachments_over_limit(frame: Frame) -> str | None:

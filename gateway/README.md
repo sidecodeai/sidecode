@@ -31,7 +31,7 @@ Four SQLite files, each created 0600 in a directory created 0700, alongside the 
 | File | Contents |
 | --- | --- |
 | `auth.sqlite3` | issued logins (`jti`, username, expiry, revocation), so a restart does not sign everyone out |
-| `devices.sqlite3` | enrolled devices and pairing codes, as hashes only |
+| `devices.sqlite3` | enrolled devices and pairing codes, as hashes only; between a clean stop and the next start, the ids of the devices that were online (A56) |
 | `sessions.sqlite3` | the last known summary of every agent session, and the gateway's own `unseen` mark on it (A47) |
 | `push.sqlite3` | Web Push subscriptions, APNs tokens and the delivery journal, badge-only deliveries included |
 
@@ -68,6 +68,8 @@ never reach the network: the STT backend, the Live API, Web Push and APNs sender
 | `rc_gateway/unseen.py` | when a session carries the A47 mark: set on working to waiting, shown only while the session is open and held, and what clears it |
 | `rc_gateway/migrations.py` | additive column migrations applied when a store opens |
 | `rc_gateway/hub.py`, `connections.py`, `replay.py` | WebSocket routing core |
+| `rc_gateway/catchup.py` | what the hub fetches from a device that the gateway lacks: the bounded request, the gate that limits fetches per session and device, and the hold that keeps live events behind a fetch (A56) |
+| `rc_gateway/auto_update.py` | when a device behind the served wheel is asked to update: once it has been quiet for two minutes (A36, A56) |
 | `rc_gateway/routes/` | HTTP endpoints |
 | `rc_gateway/ws/` | `/ws/device`, `/ws/app`, `/ws/stt` |
 | `rc_gateway/uploads.py` | authenticates and bounds an upload before its body is read |

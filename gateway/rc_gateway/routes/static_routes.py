@@ -1,9 +1,9 @@
 """Static delivery: the client installer, the client wheel and the web app.
 
 These routes are registered last so ``/api/*`` and ``/ws/*`` always win. The SPA fallback returns
-``index.html`` for any unknown path so client-side routing survives a reload, and a missing build
-yields a plain placeholder rather than a crash, because the API has to stay usable while the web
-agent is still building.
+``index.html`` for any unknown path so client-side routing survives a reload, except under
+``/assets/``, where a missing file is a 404. A missing build yields a plain placeholder rather than
+a crash, because the API has to stay usable while the web agent is still building.
 """
 
 from __future__ import annotations
@@ -99,6 +99,11 @@ async def web_app(path: str, request: Request) -> Response:
     if candidate is not None:
         cache = IMMUTABLE if _fingerprinted(candidate, root) else NO_STORE
         return FileResponse(candidate, headers={"Cache-Control": cache})
+    if path.startswith("assets/"):
+        # A tab opened before a deploy asks for hashed chunks the new build no longer has. The app
+        # shell in their place is not JavaScript, so the import fails as a broken page; a 404 says
+        # plainly that the file is gone, and the web app turns that into a reload notice.
+        raise HTTPException(status_code=404, detail={"code": "not_found"})
     return FileResponse(index, headers={"Cache-Control": NO_STORE})
 
 

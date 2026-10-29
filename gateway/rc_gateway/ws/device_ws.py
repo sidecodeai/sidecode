@@ -67,6 +67,9 @@ async def device_socket(ws: WebSocket) -> None:
 
     await ws.accept()
     connection = DeviceConnection(ws, record.device_id)
+    # The slot is published before the hello is applied, and a request released into it must not
+    # reach the device ahead of the ack it is waiting for (A56).
+    connection.hold_until_greeted()
     connection.start()
     reader = TextReader(ws)
     attached = False
@@ -83,7 +86,10 @@ async def device_socket(ws: WebSocket) -> None:
         if not await state.hub.handle_device_hello(connection, hello):
             await connection.stop(code=CLOSE_PROTOCOL_ERROR, reason="unsupported protocol version")
             return
-        await connection.send(
+        # A35: the preferences follow the ack, before any request, so a device that has just come
+        # back knows whether to resume a session the usage limit stopped without asking for the
+        # value. Whatever was sent to the device while it handshook follows both.
+        await connection.greet(
             {
                 "type": "hello_ack",
                 "device_id": record.device_id,
@@ -92,15 +98,11 @@ async def device_socket(ws: WebSocket) -> None:
                     "delta_flush_ms": DELTA_FLUSH_MS,
                     "max_event_bytes": MAX_EVENT_BYTES,
                 },
-            }
-        )
-        # A35: right after the ack, before any request, so a device that has just come back knows
-        # whether to resume a session the usage limit stopped without asking for the value.
-        await connection.send(
+            },
             {
                 "type": "preferences",
                 "preferences": await state.preferences_view(record.username),
-            }
+            },
         )
         while True:
             frame = await _receive(reader)

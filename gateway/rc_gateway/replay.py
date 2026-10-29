@@ -53,6 +53,10 @@ class ReplayBuffer:
             self._bytes -= dropped
         return True
 
+    def after(self, seq: int) -> list[Event]:
+        """Every buffered event past ``seq``, oldest first."""
+        return [event for held, event, _ in self._events if held > seq]
+
     def tail(self, limit: int) -> list[Event]:
         """The newest ``limit`` events, oldest first."""
         events = [event for _, event, _ in self._events]
@@ -72,4 +76,4 @@ class ReplayBuffer:
         first = self.first_seq
         if first is None or first > since_seq + 1:
             return [], True
-        return [event for seq, event, _ in self._events if seq > since_seq], False
+        return self.after(since_seq), False

@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from rc_gateway.apns import ApnsProvider, ApnsResponse
 from rc_gateway.app import build_state, create_app
-from rc_gateway.auto_update import UPDATE_RETRY_SECONDS
+from rc_gateway.auto_update import UPDATE_PATIENCE_SECONDS, UPDATE_RETRY_SECONDS
 from rc_gateway.badge import BadgeHook
 from rc_gateway.config import ApnsConfig, Config, PolishConfig, SttConfig
 from rc_gateway.connections import AppConnection, Connection, DeviceConnection
@@ -24,6 +24,9 @@ from rc_gateway.devices import DeviceStore
 from rc_gateway.frames import REQUEST_TIMEOUT_SECONDS
 from rc_gateway.hub import (
     OFFLINE_GRACE_SECONDS,
+    ORPHAN_GRACE_SECONDS,
+    RESTART_GRACE_SECONDS,
+    UPDATE_GRACE_SECONDS,
     UPDATE_TIMEOUT_SECONDS,
     Hub,
     ResumeHook,
@@ -36,6 +39,10 @@ from rc_gateway.push_store import WebPushSubscription
 from rc_gateway.state import GatewayState
 from rc_gateway.stt import SttError, Transcript
 
+#: What a hub built for a test waits for a device that was asked for events and never answers.
+SHORT_FETCH_SECONDS = 0.2
+#: How long a device must be quiet in a test before the gateway asks it to update.
+SHORT_QUIET_SECONDS = 0.05
 ORIGIN = "http://testserver"
 PASSWORD = "correct-horse-battery-staple"
 MEMBER_PASSWORD = "another-correct-horse-staple"
@@ -248,6 +255,10 @@ def state(
         on_session_resume=built.push.on_session_resume,
         on_badge_change=built.push.on_badge_change,
         request_timeout=0.4,
+        # A fetch from the device (A56) that nothing answers ends quickly, so a subscribe the test
+        # device does not answer is a resync within a fraction of a second.
+        fetch_timeout=SHORT_FETCH_SECONDS,
+        catch_up_budget=3 * SHORT_FETCH_SECONDS,
         # Short enough to drive the A13 grace period in a test, and well inside the request
         # timeout above so a parked request is still answered `device_offline` rather than
         # `timeout` when the period ends without a reconnect.
@@ -256,6 +267,9 @@ def state(
         # `write_wheel` gets the same behaviour a deployed gateway has.
         served_build=built.served_build,
         update_retry=0.2,
+        # A56: a device is asked to update once it has been quiet for this long, which is a
+        # fraction of a second here rather than two minutes.
+        update_quiet=SHORT_QUIET_SECONDS,
     )
     return built
 
@@ -462,9 +476,16 @@ async def hub_rig(
     on_session_resume: ResumeHook | None = None,
     on_badge_change: BadgeHook | None = None,
     request_timeout: float = REQUEST_TIMEOUT_SECONDS,
+    fetch_timeout: float = SHORT_FETCH_SECONDS,
+    catch_up_budget: float | None = None,
     offline_grace: float = OFFLINE_GRACE_SECONDS,
+    orphan_grace: float = ORPHAN_GRACE_SECONDS,
+    update_grace: float = UPDATE_GRACE_SECONDS,
+    restart_grace: float = RESTART_GRACE_SECONDS,
     update_timeout: float = UPDATE_TIMEOUT_SECONDS,
     update_retry: float = UPDATE_RETRY_SECONDS,
+    update_quiet: float = SHORT_QUIET_SECONDS,
+    update_patience: float = UPDATE_PATIENCE_SECONDS,
     served_build: Callable[[], str | None] | None = None,
 ) -> HubRig:
     """Build a hub whose connections never drain their queues.
@@ -491,9 +512,16 @@ async def hub_rig(
         on_session_resume=on_session_resume,
         on_badge_change=on_badge_change,
         request_timeout=request_timeout,
+        fetch_timeout=fetch_timeout,
+        catch_up_budget=3 * fetch_timeout if catch_up_budget is None else catch_up_budget,
         offline_grace=offline_grace,
+        orphan_grace=orphan_grace,
+        update_grace=update_grace,
+        restart_grace=restart_grace,
         update_timeout=update_timeout,
         update_retry=update_retry,
+        update_quiet=update_quiet,
+        update_patience=update_patience,
         served_build=served_build,
     )
     device = fake_device(enrolled.device_id)
@@ -512,6 +540,23 @@ async def hub_rig(
 
 def fake_device(device_id: str) -> DeviceConnection:
     return DeviceConnection(FakeSocket(), device_id)  # type: ignore[arg-type]
+
+
+async def another_device(rig: HubRig, *, account: str = "admin") -> DeviceConnection:
+    """A second device, enrolled for ``account`` and attached to the rig's hub."""
+    grant = await rig.devices.create_pairing(account)
+    enrolled = await rig.devices.redeem(
+        grant.code,
+        name=f"{account}-laptop",
+        platform="linux",
+        hostname=f"{account}.local",
+        arch="x86_64",
+        client_version="0.1.0",
+    )
+    assert not isinstance(enrolled, str), enrolled
+    device = fake_device(enrolled.device_id)
+    await rig.hub.attach_device(device)
+    return device
 
 
 def fake_app(username: str = "admin", jti: str | None = None) -> AppConnection:
