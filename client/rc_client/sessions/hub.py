@@ -10,16 +10,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from .. import attachments
+from .. import attachments, procscan
 from ..agents.base import AttachmentSteering, SessionRunner
-from ..agents.claude import transcripts
+from ..agents.claude import live, transcripts
+from ..agents.claude.holders import Holder
 from ..agents.codex.daemon.service import CodexDaemonService
 from ..agents.codex.models import catalog_cache
 from ..agents.grok.service import GrokLeaderService
 from ..agents.pi.adapter import PiRunner
 from ..agents.pi.service import PiExtensionService
 from ..agents.registry import RunnerSpec, offline_commands, runner_for
-from ..errors import RcError
+from ..errors import RcError, TerminalNotReady
 from ..git import create_worktree, session_git, slugify
 from ..logging_setup import logger
 from ..models import (
@@ -34,6 +35,7 @@ from ..models import (
 from ..registry import Registry
 from . import offsets, rename, titles
 from .attach import Attachment, HookQuestion, SessionStart, TurnHook
+from .bindings import Binding, TerminalBindings
 from .channel import SessionChannel
 from .limits import LimitStop
 from .ptys import PtyLinks
@@ -46,15 +48,20 @@ log = logger("rc_client.hub")
 Publisher = Callable[[dict[str, Any]], Awaitable[None]]
 MAX_TEXT_BYTES = 64 * 1024
 MAX_ATTACHMENTS = 8
-# How many terminals may be remembered at once, and how many removals may wait
-# for a link. Both are bounded because a terminal that never closes its bridge
-# and a link that never comes back would otherwise grow them without end.
-MAX_TERMINALS = 64
+# How many removals may wait for a link: a link that never comes back would
+# otherwise grow them without end.
 MAX_PENDING_REMOVALS = 64
 # How long closing a session may take before the reply goes out anyway (A39).
 # An agent that will not die is still let go of here: the person asked for the
 # session to be closed, and a request that never answers helps nobody.
 CLOSE_TIMEOUT = 8.0
+# How long a send waits for the bridge of a live terminal CLI that holds its session, and how often
+# it looks. A bridge that lost the daemon dials back within its own backoff, five seconds at most
+# (`channel/link.py`).
+BRIDGE_WAIT = 5.0
+BRIDGE_POLL = 0.05
+BRIDGE_PENDING = "the terminal for this session has not reconnected yet; try again in a moment"
+SCAN_FAILED = "could not tell whether a terminal holds this session; try again in a moment"
 
 
 def _as_int(value: Any, field: str) -> int | None:
@@ -91,6 +98,10 @@ class SessionEntry:
     # them (A51).
     sent: dict[str, dict[str, Any]] = field(default_factory=dict)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # Lets one `session.send` or `session.command` at a time through to the session, in the order
+    # they arrived. It is taken before the lock, and held across the wait for a bridge that the
+    # lock must stay free for.
+    gate: asyncio.Lock = field(default_factory=asyncio.Lock)
     # The one task handing the queue its next message, and whether it was
     # asked again while it ran (A43).
     drainer: asyncio.Task[None] | None = None
@@ -126,8 +137,12 @@ class SessionHub:
         # Set by the daemon so Grok sessions can run on the machine's shared
         # leader when the person's configuration asks for it (A28).
         self.grok_leader: GrokLeaderService | None = None
-        # The session each terminal CLI last said it was in, by its own pid.
-        self._terminals: dict[int, SessionStart] = {}
+        # The session each terminal CLI's hook last put it in, by its own pid. It outlives the
+        # daemon, so a restart does not send an attachment back to the session its CLI started in.
+        self.bindings = TerminalBindings(registry)
+        # When a CLI started, which tells it from a later process given its pid. Replaceable so
+        # a test can name a process that is not there.
+        self.process_start = procscan.process_start
         # Removals the device made on its own initiative, and the link each
         # went out on. A frame published while the link is down is dropped, so
         # each one is said again on the next link.
@@ -136,8 +151,16 @@ class SessionHub:
         # Whether the gateway link is up right now; the daemon wires the real
         # answer in, so a repeated removal is never published into a gap.
         self.link_up: Callable[[], bool] = lambda: True
+        # The requests being served, by session and request id, and what they will answer.
+        self._flying: dict[tuple[str, str], asyncio.Future[dict[str, Any]]] = {}
         # Set when the daemon stops: no queue is drained after that.
         self._closed = False
+        # The sessions that had messages in their Up next when the daemon last stopped, until the
+        # gateway has been told that the queue is empty (`clear_stale_queues`).
+        self._stale_queues: list[str] = []
+        # The sessions whose queue changed while the link was down, until the gateway has been
+        # told what it holds now (`republish_queues`).
+        self._unsaid_queues: set[str] = set()
 
     # ------------------------------------------------------------- accessors
 
@@ -162,7 +185,14 @@ class SessionHub:
         """A channel wired to the hub, so every turn's end reaches the scheduler."""
         channel = SessionChannel(self.registry, session, self.publish)
         channel.on_turn_end = self._turn_ended
+        channel.on_queue_change = self._queue_changed
         return channel
+
+    def _queue_changed(self, session: Session) -> None:
+        """A queue changed. With the link down the frame that says so is dropped, and the gateway
+        goes on serving the snapshot it had, so the session is said again once there is a link."""
+        if not self.link_up():
+            self._unsaid_queues.add(session.session_id)
 
     async def _turn_ended(self, session: Session, limit: LimitStop | None) -> None:
         """Amendment A35: a turn the usage limit ended schedules its own resume."""
@@ -174,6 +204,7 @@ class SessionHub:
         `resume` is not restored here: a pending one belongs to the scheduler,
         which reads its own records back and puts them on the sessions (A35).
         """
+        self.bindings.load()
         for session in self.registry.load_sessions():
             if not session.session_id or not session.agent:
                 continue
@@ -181,12 +212,57 @@ class SessionHub:
             session.control = "none"
             session.state = "stopped" if session.archived else "idle"
             session.turn = None
+            if session.queued:
+                self._stale_queues.append(session.session_id)
             session.queued = 0
             session.resume = None
             self.entries[session.session_id] = SessionEntry(
                 session=session,
                 channel=self._channel(session),
             )
+
+    async def clear_stale_queues(self) -> None:
+        """Tell the gateway that the Up next of every session that had one is empty now.
+
+        The queue lived in the memory of the process that stopped, and `load` restored the count
+        as zero, but a gateway that did not restart still serves the snapshot it was last told:
+        entries that answer `not_found` when an app removes them. It is said once, when the link is
+        up, because a frame published while it is down is dropped. The summary follows the event,
+        as it does for any change to a queue, and does not move the session up the list: nothing
+        here is activity.
+        """
+        if not self._stale_queues or not self.link_up():
+            return
+        said = 0
+        for session_id in list(self._stale_queues):
+            entry = self.entries.get(session_id)
+            if entry is not None:
+                await entry.channel.emit("queue", pending=[])
+                await entry.channel.publish_summary(touch=False)
+                said += 1
+            self._stale_queues.remove(session_id)
+        log.info("told the gateway that the queues of the last run are empty", sessions=said)
+
+    async def republish_queues(self) -> None:
+        """Say again what is held in the Up next of every session, for a link that has just come up.
+
+        The gateway keeps only the newest `queue` snapshot of a session, in its memory, and history
+        carries none, so a gateway that restarted while this daemon went on has lost every one:
+        apps that subscribe would see no Up next until the queue next changed. A queue that
+        emptied while the link was down is said too, empty, since the frame that said so was
+        dropped and the gateway would go on serving the snapshot it had. The event is the one a
+        change publishes, and the summary follows it as it does for any change; neither moves the
+        session up the list, since saying it again is not activity.
+        """
+        for session_id, entry in list(self.entries.items()):
+            if (entry.queue or session_id in self._unsaid_queues) and (
+                self.entries.get(session_id) is entry
+            ):
+                await entry.channel.emit("queue", pending=self.queue_snapshot(entry))
+                await entry.channel.publish_summary(touch=False)
+            self._unsaid_queues.discard(session_id)
+        # A session that was removed has nothing left to say.
+        self._unsaid_queues.intersection_update(self.entries)
 
     def register_mirrored(self, session: Session, transcript: str | None = None) -> SessionEntry:
         """Adopt a session discovered from an agent transcript on disk."""
@@ -203,6 +279,15 @@ class SessionHub:
         self.entries[session.session_id] = entry
         self.registry.upsert_session(session)
         return entry
+
+    def begin_close(self) -> None:
+        """The daemon is stopping. Its bridges close with it, and their CLIs do not.
+
+        From here no queue is drained, and a bridge that goes is not the CLI exiting: what the
+        apps are showing of the session stays, for the process that starts next to derive again,
+        instead of recording a stop that never happened.
+        """
+        self._closed = True
 
     async def close(self) -> None:
         self._closed = True
@@ -387,8 +472,61 @@ class SessionHub:
         if cached is not None:
             return cached
         if source == "remote":
+            # As it arrives, not when it gets through the gate: a person's message that waits
+            # behind another request must still cancel a resume that falls due meanwhile.
             await self.resumes.cancelled_by_person(session_id)
+        return await self._in_order(
+            entry, request_id, lambda arrived: self._send(entry, params, source, arrived)
+        )
 
+    async def _in_order(
+        self,
+        entry: SessionEntry,
+        request_id: str,
+        run: Callable[[float], Awaitable[dict[str, Any]]],
+    ) -> dict[str, Any]:
+        """Serve one request to a session once per id, after the ones that arrived before it.
+
+        A repeat of an id that is still being served, an app retrying after a timeout, gets the
+        outcome of the first and is never served itself: serving it again would deliver the
+        message twice (PROTOCOL 2.4). The gate lets one request at a time through to the
+        session, in the order they came, so a request that waits for something, a bridge that
+        is still dialling back, is not overtaken by the one after it. Both are held for the
+        whole of a request, which the session's own lock was not. `run` is told when the request
+        arrived, so that what it may wait for is counted from then and not from its turn at the
+        gate: a queue of requests that all wait for a bridge that is not coming is refused
+        together, not one after another.
+        """
+        arrived = asyncio.get_running_loop().time()
+        key = (entry.session.session_id, request_id)
+        flying = self._flying.get(key) if request_id else None
+        if flying is not None:
+            return dict(await asyncio.shield(flying))
+        outcome: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        if request_id:
+            self._flying[key] = outcome
+        try:
+            async with entry.gate:
+                result = await run(arrived)
+        except asyncio.CancelledError:
+            outcome.cancel()
+            raise
+        except BaseException as exc:
+            outcome.set_exception(exc)
+            outcome.exception()  # nobody may be waiting, and that is not an error to log
+            raise
+        else:
+            outcome.set_result(result)
+            return result
+        finally:
+            if request_id:
+                self._flying.pop(key, None)
+
+    async def _send(
+        self, entry: SessionEntry, params: dict[str, Any], source: str, arrived: float
+    ) -> dict[str, Any]:
+        session_id = str(params.get("session_id") or "")
+        request_id = str(params.get("id") or "")
         text = str(params.get("text") or "")
         if len(text.encode("utf-8")) > MAX_TEXT_BYTES:
             raise RcError("too_large", "message text exceeds 64 KiB")
@@ -402,6 +540,8 @@ class SessionHub:
         # It never decides whether the message queues; `mode` does.
         queue_ts = queue_ts_from(params)
 
+        # Before the lock: the bridge it waits for registers under it.
+        await self._await_terminal(entry, arrived)
         async with entry.lock:
             if entry.shared is not None:
                 result = await self._send_shared(
@@ -667,6 +807,63 @@ class SessionHub:
             await self.grok_leader.publish_control(entry)
         await entry.channel.notice("info", "resumed this session from its transcript")
 
+    async def _await_terminal(self, entry: SessionEntry, arrived: float) -> None:
+        """Never resume a session a live terminal CLI holds: wait for its bridge, or refuse.
+
+        Resuming starts a second Claude on the transcript the terminal's CLI is writing. A CLI
+        the shim started is not attached for a moment after the daemon restarts, until its
+        bridge dials back, and a send that was held for the daemon, or came in just after it,
+        would find the session held by nobody and do exactly that. So a session a live CLI
+        holds waits up to `BRIDGE_WAIT` for the bridge, counted from when the request arrived,
+        and the send then goes through it. One whose bridge does not come is refused as
+        retryable, and one that never will have a bridge, a CLI the shim did not start, as the
+        terminal's, as it always was. A session the scan already shows as the terminal's is not
+        looked up: it is refused as it always was.
+        """
+        session = entry.session
+        if session.agent != "claude" or entry.shared is not None or entry.runner is not None:
+            return
+        if session.control == "terminal":
+            # The scan has already found its CLI, and a send to such a session has its own answer.
+            return
+        holder = await self._terminal_holder(session.session_id)
+        if holder is None:
+            return
+        if not holder.attachable:
+            raise RcError("conflict", self._terminal_conflict_message(entry))
+        log.info("a send is waiting for the bridge of the terminal that holds its session")
+        if not await self._bridge_registers(entry, arrived + BRIDGE_WAIT):
+            log.warning("the bridge of a terminal that holds a session did not register in time")
+            raise TerminalNotReady(BRIDGE_PENDING)
+
+    async def _terminal_holder(self, session_id: str) -> Holder | None:
+        """The live terminal CLI that is in this session, if there is one.
+
+        Claude Code's own record of a CLI, the session its argv resumed and what its hook last
+        said name it, the later word of them deciding when they differ (`TerminalBindings.refine`).
+        It raises `TerminalNotReady` when the process table could not be read.
+        """
+        from ..agents.claude.holders import scan_holders
+
+        scan = self.bindings.refine(await scan_holders(cwds=False))
+        if not scan.complete:
+            # Not being able to read the process table is not the same as nobody holding the
+            # session, and resuming on a guess is what this exists to prevent.
+            log.warning("the process table could not be read to tell who holds a session")
+            raise TerminalNotReady(SCAN_FAILED)
+        return next((holder for holder in scan.holders if holder.session_id == session_id), None)
+
+    @staticmethod
+    async def _bridge_registers(entry: SessionEntry, deadline: float) -> bool:
+        """Whether a bridge attaches to this session by `deadline`, on the event loop's clock."""
+        loop = asyncio.get_running_loop()
+        while entry.shared is None:
+            left = deadline - loop.time()
+            if left <= 0:
+                return False
+            await asyncio.sleep(min(BRIDGE_POLL, left))
+        return True
+
     # -------------------------------------------------------------- controls
 
     async def stop(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -828,10 +1025,20 @@ class SessionHub:
             return cached
         self._check_commands_capability(entry)
         await self.resumes.cancelled_by_person(session_id)
+        return await self._in_order(
+            entry, request_id, lambda arrived: self._command(entry, params, arrived)
+        )
+
+    async def _command(
+        self, entry: SessionEntry, params: dict[str, Any], arrived: float
+    ) -> dict[str, Any]:
+        session_id = str(params.get("session_id") or "")
+        request_id = str(params.get("id") or "")
         name = str(params.get("name") or "").strip().lstrip("/")
         if not name:
             raise RcError("bad_request", "name is required")
         argument = str(params.get("argument") or "").strip() or None
+        await self._await_terminal(entry, arrived)
         if entry.shared is not None:
             # A40: a Claude channel carries no commands, so the device types
             # this one into the terminal instead, under the same lock.
@@ -1010,26 +1217,80 @@ class SessionHub:
 
     async def attach_registered(self, attachment: Attachment) -> None:
         """A channel bridge claimed a terminal session (A10: `terminal → shared`)."""
-        entry = self._attach_entry(attachment)
+        entry = await self._attach_entry(attachment)
+        # What the hook map said when the bridge was placed: nothing awaited since.
+        heard = self.bindings.get(attachment.pid)
         if entry is None:
             attachment.detach()
             return
         async with entry.lock:
             await self.shared.registered(entry, attachment)
+        await self._follow_hook(attachment, heard)
 
-    def _attach_entry(self, attachment: Attachment) -> SessionEntry | None:
+    async def _follow_hook(self, attachment: Attachment, heard: Binding | None) -> None:
+        """Move a bridge that a hook, heard while it registered, has put in another session.
+
+        A hook cannot move a bridge that is not attached yet, and one that arrives between the
+        moment the bridge is placed and the moment it is attached would be lost.
+        """
+        current = self.bindings.get(attachment.pid)
+        if current is None or current is heard:
+            return
+        if current.start.session_id == attachment.session_id:
+            return
+        entry = self._attached_to(attachment.pid)
+        if entry is not None:
+            await self._move_attachment(entry, current.start)
+
+    async def _attach_entry(self, attachment: Attachment) -> SessionEntry | None:
         """The session this bridge speaks for, which is not always the one it names.
 
         Claude Code hands an MCP server the environment it was spawned with, so
         a bridge reports the id the CLI chose at startup for as long as it runs.
-        Where its hook has already said otherwise, the hook is the fresher
-        account and the attachment follows it.
+        Where its CLI's hook has said otherwise, now or before the daemon
+        restarted, the hook is the fresher account and the attachment follows
+        it; so does Claude Code's own record of the CLI where the hook said
+        nothing.
         """
-        start = self._terminals.get(attachment.pid)
+        start = await self._bound_start(attachment)
         if start is not None and start.session_id != attachment.session_id:
+            log.info("a bridge was put in the session its CLI is in", source=start.source)
             attachment.session_id = start.session_id
             return self._terminal_entry(start.session_id, attachment.cwd, start.transcript_path)
         return self._terminal_entry(attachment.session_id, attachment.cwd, "")
+
+    async def _bound_start(self, attachment: Attachment) -> SessionStart | None:
+        """Where the CLI behind this bridge is: its hook's last word or Claude Code's record.
+
+        Both are checked against the process, because a pid that a later process was given is not
+        the CLI that had it. A process whose start time cannot be read cannot be told from its
+        predecessor, so the hook's word stands and the record's is not believed. Where the two
+        disagree the later one wins: the CLI may have moved since the hook spoke, with the daemon
+        down to miss the next one, or the record may be the older account.
+        """
+        pid = attachment.pid
+        if pid <= 0:
+            return None
+        process = await self.process_start(pid)
+        records = await asyncio.to_thread(live.read_records)
+        # After everything awaited, so a hook heard while the file was being read is not missed.
+        binding = self.bindings.get(pid)
+        if binding is not None and process is not None and not binding.is_process(pid, process):
+            self.bindings.forget(pid)
+            binding = None
+        record = live.verified(records, pid, process)
+        if record is not None and (
+            binding is None
+            or (record.session_id != binding.start.session_id and record.updated_at > binding.at)
+        ):
+            return SessionStart(
+                session_id=record.session_id,
+                cwd=attachment.cwd,
+                pid=pid,
+                source="startup",
+                transcript_path="",
+            )
+        return binding.start if binding is not None else None
 
     def _terminal_entry(self, session_id: str, cwd: str, transcript: str) -> SessionEntry | None:
         """The entry a terminal CLI attaches to, created the first time it is seen."""
@@ -1091,13 +1352,28 @@ class SessionHub:
         return await self.shared.turn_hook(entry, hook)
 
     async def attach_closed(self, attachment: Attachment) -> None:
-        """The bridge went away: back to the terminal if the CLI is still alive."""
-        self._terminals.pop(attachment.pid, None)
+        """The bridge went away: back to the terminal if the CLI is still alive.
+
+        Not while the daemon is stopping: every bridge goes with it, and a turn the CLI is still
+        running is not ended, nor the session handed back, nor its queue let go.
+        """
         entry = self.entries.get(attachment.session_id)
         if entry is None or entry.shared is None:
             return
-        await asyncio.sleep(EXIT_SETTLE)
+        if not self._closed:
+            await asyncio.sleep(EXIT_SETTLE)
+        if self._closed:
+            # Before the settle or during it: the daemon is stopping, and that is why this bridge
+            # went, or the one that went was about to be taken down with the rest.
+            async with entry.lock:
+                await self.shared.stopped(entry, attachment)
+            return
         control = await self._holder_control(entry)
+        if control == "none":
+            # The CLI is gone, and what its hook said went with it: a later process may be given
+            # its pid. A bridge that closes while its CLI lives, as one reconnecting does, leaves
+            # the hook's word where it is.
+            self.bindings.forget(attachment.pid)
         async with entry.lock:
             await self.shared.closed(entry, attachment, control)
         if control == "none" and self._is_ghost(entry):
@@ -1112,17 +1388,14 @@ class SessionHub:
         gets: those change the session a terminal is in without restarting
         anything, so the bridge keeps naming the session the CLI started on.
         """
-        self._remember_terminal(start)
+        heard = self.bindings.stamp()
+        if not self.bindings.remember(start, await self.process_start(start.pid), heard):
+            # A later hook of this CLI got past the look at the process first.
+            return
         entry = self._attached_to(start.pid)
         if entry is None or entry.session.session_id == start.session_id:
             return
         await self._move_attachment(entry, start)
-
-    def _remember_terminal(self, start: SessionStart) -> None:
-        self._terminals.pop(start.pid, None)
-        self._terminals[start.pid] = start
-        for pid in list(self._terminals)[:-MAX_TERMINALS]:
-            self._terminals.pop(pid, None)
 
     def _attached_to(self, pid: int) -> SessionEntry | None:
         """The session whose live bridge belongs to this CLI process."""

@@ -49,6 +49,8 @@ class SessionChannel:
         # Set by the hub to the resume scheduler (amendment A35, 7.2). A channel
         # nobody wired one into simply ends its turns.
         self.on_turn_end: TurnEndHook | None = None
+        # Set by the hub to hear that this session's queue changed, before the change is said.
+        self.on_queue_change: Callable[[Session], None] | None = None
         # Seeded from the registry so a resumed session keeps the ordering its
         # already-delivered blocks were given.
         self._first_seq: dict[str, int] = registry.first_seqs(session.session_id)
@@ -250,6 +252,8 @@ class SessionChannel:
 
     async def publish_queue(self, pending: list[dict[str, Any]]) -> None:
         self.session.queued = len(pending)
+        if self.on_queue_change is not None:
+            self.on_queue_change(self.session)
         await self.emit("queue", pending=pending)
         await self.publish_summary()
 

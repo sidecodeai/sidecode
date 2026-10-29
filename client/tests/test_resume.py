@@ -29,6 +29,7 @@ from rc_client.sessions.limits import (
 )
 from rc_client.sessions.resume import (
     ALREADY_RUNNING,
+    MAX_DEFERRALS,
     OUT_OF_ATTEMPTS,
     PERSON_SENT,
     RESUME_PROMPT,
@@ -449,19 +450,33 @@ async def test_a_session_someone_took_further_cancels_its_resume(harness: Harnes
     assert harness.entry.session.resume is None
 
 
-async def test_a_terminal_closed_before_the_time_drops_the_resume(tmp_path: Path) -> None:
-    """7.2: the person who closed the terminal has said they are done."""
+async def test_a_terminal_closed_before_the_time_drops_the_resume_after_the_tries(
+    tmp_path: Path,
+) -> None:
+    """7.2: the person who closed the terminal has said they are done.
+
+    A session reads as held by nobody for a while after the daemon restarts, too, until its CLI's
+    bridge dials back, so the drop waits out three tries a minute apart instead of being at once.
+    """
     built = Harness(tmp_path, control="shared")
     await enable(built)
     await built.hit_limit(LimitStop(FIVE_HOURS, NOW + HOUR))
     built.entry.session.control = "none"
     built.clock.advance(HOUR + 2 * MINUTE)
+
     await built.hub.resumes.tick()
+    assert built.events("resume")[-1]["status"] == "rescheduled"
+    assert built.entry.session.to_dict()["resume"] is not None
+
+    for _ in range(MAX_DEFERRALS):
+        built.clock.advance(MINUTE + 1)
+        await built.hub.resumes.tick()
 
     dropped = built.events("resume")[-1]
     assert dropped["status"] == "dropped"
     assert dropped["reason"] == TERMINAL_CLOSED
     assert built.runner.sent == []
+    assert built.entry.session.resume is None
     built.close()
 
 

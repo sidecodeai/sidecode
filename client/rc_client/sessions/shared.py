@@ -636,6 +636,20 @@ class SharedControl:
             await entry.channel.publish_queue(self.hub.queue_snapshot(entry))
         await entry.channel.publish_summary()
 
+    async def stopped(self, entry: SessionEntry, attachment: Attachment) -> None:
+        """The daemon is stopping and its bridge goes with it; the CLI does not.
+
+        The session is left as the apps show it: the turn is the CLI's, and the process that
+        starts next derives it again. The prompts the device was relaying are the one thing that
+        ends here, since nothing can answer them once it is gone, and the next process has no
+        record of them to raise again.
+        """
+        state = entry.shared
+        if state is None or state.attachment is not attachment:
+            return
+        await self._expire_prompts(entry, state)
+        await self._settle(entry)
+
     async def _expire_prompts(self, entry: SessionEntry, state: SharedState) -> None:
         """Nobody can answer what a CLI that is gone, or replaced, was waiting on."""
         approvals = list(state.approvals.values())

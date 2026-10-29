@@ -563,7 +563,7 @@ class MirrorService:
         tracked = self._claude_tracked()
         if not tracked:
             return
-        scan = await scan_holders()
+        scan = self.hub.bindings.refine(await scan_holders())
         assigned = scan.assign(
             [
                 SessionRef(

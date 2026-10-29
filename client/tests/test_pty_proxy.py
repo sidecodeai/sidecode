@@ -19,6 +19,8 @@ from pathlib import Path
 import pytest
 
 from rc_client.channel import paths, wire
+from rc_client.channel.pty import RECONNECT_FIRST, RECONNECT_MAX
+from rc_client.channel.pty import DaemonLink as ProxyLink
 from rc_client.channel.screen import Keyboard, Screen
 from rc_client.sessions.attach import AttachServer
 from rc_client.sessions.ptys import PtyLink
@@ -286,3 +288,23 @@ def test_the_registration_frame_names_the_cli_and_the_settings_it_was_given() ->
     }
     assert wire.screen_request("r2") == {"type": "screen", "id": "r2"}
     assert wire.state_request("r3") == {"type": "state", "id": "r3"}
+
+
+def test_a_proxy_asks_a_restarting_daemon_again_within_two_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The terminal cannot be typed into until the proxy has dialled back, and a daemon that
+    restarts is back within seconds: half a minute between tries left it unreachable long after."""
+    monkeypatch.setattr("rc_client.channel.pty._socket_path", lambda: None)
+    link = ProxyLink(4242)
+    waits: list[float] = []
+
+    for _ in range(10):
+        link._next_attempt = 0.0
+        link.dial()
+        waits.append(link.due_in())
+
+    assert RECONNECT_MAX == 2.0
+    assert RECONNECT_FIRST - 0.05 <= waits[0] <= 1.0
+    assert all(wait <= RECONNECT_MAX for wait in waits)
+    assert waits[-1] > RECONNECT_MAX - 0.1, "and it settles at two seconds, not below"

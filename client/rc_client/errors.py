@@ -29,3 +29,14 @@ class RcError(Exception):
 
     def to_dict(self) -> dict[str, str]:
         return {"code": self.code, "message": self.message}
+
+
+class TerminalNotReady(RcError):
+    """A terminal CLI holds the session and the device cannot reach it yet, or cannot tell.
+
+    It answers `timeout`, which an app may retry, and the device has done nothing: what it asked
+    would have started a second Claude on a transcript a live terminal is writing.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__("timeout", message)

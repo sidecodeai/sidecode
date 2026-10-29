@@ -7,12 +7,14 @@ must treat as read-only rather than as "nobody".
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 from ...channel.shim import CHANNEL_FLAG, CHANNEL_VALUE
 from ...procscan import Proc, descendants, process_cwds, scan_processes, terminate
+from . import live
 
 _RESUME_FLAGS = {"--resume", "-r", "--session-id"}
 _BACKGROUND_MARKERS = ("daemon", "bg-pty-host", "bg-spare", "app-server", "mcp")
@@ -22,6 +24,8 @@ _BACKGROUND_MARKERS = ("daemon", "bg-pty-host", "bg-spare", "app-server", "mcp")
 class Holder:
     pid: int
     identity: tuple[int, str]
+    # The session this process is in: where Claude Code's own record of it says, when it has one
+    # that is the process's own, and otherwise the one its argv resumed.
     session_id: str | None
     cwd: str | None
     # Started through the device's own shim, so it loads the channel and names
@@ -29,6 +33,9 @@ class Holder:
     # one of these is never needed, and in the second before it registers it is
     # always wrong.
     attachable: bool = False
+    # When Claude Code wrote the record that named `session_id`, in milliseconds since the epoch;
+    # 0 when no record did.
+    recorded_at: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,13 +64,14 @@ class HolderScan:
     def assign(self, sessions: Sequence[SessionRef]) -> dict[str, Holder]:
         """Match sessions to terminal processes, each process to one session at most.
 
-        A process is claimed by name first: the session id its argv resumed, or
-        the pid a channel bridge registered for a session. Those are the only
-        two facts that identify which conversation a process is in. The working
-        directory is a last resort and never decides between candidates —
-        several sessions share a directory all the time, and handing the same
-        process to every one of them made every one of them look like the
-        session the terminal was actually running.
+        A process is claimed by name first: the session id Claude Code's own
+        record gives it or its argv resumed, or the pid a channel bridge
+        registered for a session. Those are the only facts that identify which
+        conversation a process is in. The working directory is a last resort
+        and never decides between candidates — several sessions share a
+        directory all the time, and handing the same process to every one of
+        them made every one of them look like the session the terminal was
+        actually running.
         """
         found: dict[str, Holder] = {}
         taken: set[int] = set()
@@ -181,7 +189,12 @@ def _session_from_argv(argv: list[str]) -> str | None:
     return None
 
 
-async def scan_holders(exclude_pids: set[int] | None = None) -> HolderScan:
+async def scan_holders(exclude_pids: set[int] | None = None, *, cwds: bool = True) -> HolderScan:
+    """Every terminal CLI there is, and what each says about itself.
+
+    `cwds` is whether to ask for their working directories, which costs a second helper process;
+    a caller that wants to know who holds which session has no use for them.
+    """
     scan = await scan_processes()
     if not scan.complete:
         return HolderScan(holders=[], complete=False)
@@ -191,17 +204,24 @@ async def scan_holders(exclude_pids: set[int] | None = None) -> HolderScan:
     candidates = [
         proc for proc in scan.procs if proc.pid not in excluded and _looks_like_claude(proc)
     ]
-    cwds, complete = await process_cwds([proc.pid for proc in candidates])
-    holders = [
-        Holder(
-            pid=proc.pid,
-            identity=proc.identity,
-            session_id=_session_from_argv(proc.argv),
-            cwd=cwds.get(proc.pid),
-            attachable=_is_attachable(proc.argv),
+    directories: dict[int, str] = {}
+    complete = True
+    if cwds:
+        directories, complete = await process_cwds([proc.pid for proc in candidates])
+    records = await asyncio.to_thread(live.read_records) if candidates else {}
+    holders: list[Holder] = []
+    for proc in candidates:
+        record = live.verified(records, proc.pid, proc.start)
+        holders.append(
+            Holder(
+                pid=proc.pid,
+                identity=proc.identity,
+                session_id=record.session_id if record else _session_from_argv(proc.argv),
+                cwd=directories.get(proc.pid),
+                attachable=_is_attachable(proc.argv),
+                recorded_at=record.updated_at if record else 0,
+            )
         )
-        for proc in candidates
-    ]
     return HolderScan(holders=holders, complete=complete)
 
 

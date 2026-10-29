@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import random
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -26,6 +27,12 @@ log = logger("rc_client.gateway")
 
 BACKOFF_STEPS = (1.0, 2.0, 4.0, 8.0, 15.0)
 SILENCE_TIMEOUT = 60.0
+# How long the gateway has to acknowledge a hello, and how many frames, and how many bytes in all,
+# it may send ahead of the ack: the requests it held for a device that was away, and nothing like
+# this many.
+ACK_TIMEOUT = 30.0
+MAX_EARLY_FRAMES = 256
+MAX_EARLY_BYTES = 8 * 1024 * 1024
 WATCHDOG_TICK = 5.0
 STABLE_CONNECTION_SECONDS = 30.0
 # PROTOCOL.md 2.5: the close code says whether reconnecting is worth trying.
@@ -40,6 +47,13 @@ FATAL_CLOSE_CODES = {
 # turn, so this reconnect waits.
 REPLACED_CLOSE_CODE = 4001
 REPLACED_DELAY = 15.0
+# The gateway closes with 1012 when it restarts, and it is back within seconds. For the half minute
+# after one, the device asks again every second, a little unevenly so that the devices it cut off
+# together do not all arrive together.
+RESTART_CLOSE_CODE = 1012
+RESTART_RETRY = 1.0
+RESTART_JITTER = 0.15
+RESTART_WINDOW = 30.0
 # PROTOCOL §5 allows 8 attachments of 6 MiB decoded in one `session.send`, which
 # is ~64 MiB of base64 plus the surrounding JSON.
 MAX_FRAME_BYTES = 80 * 1024 * 1024
@@ -78,6 +92,36 @@ def reconnect_delay(attempt: int, code: int | None) -> float:
     if code == REPLACED_CLOSE_CODE:
         return max(delay, REPLACED_DELAY)
     return delay
+
+
+def restart_delay() -> float:
+    """How long to wait before asking a restarting gateway again."""
+    return RESTART_RETRY * random.uniform(1 - RESTART_JITTER, 1 + RESTART_JITTER)
+
+
+class Backoff:
+    """How long to wait before dialling the gateway again.
+
+    The usual backoff steps up with every failure, and starts over after a connection that stayed
+    up. A gateway that closed with 1012 is restarting, so for `RESTART_WINDOW` after it the device
+    asks again every second instead. Those tries do not count against the backoff, which goes on
+    from where it was when the window is over. A connection another one replaced still waits.
+    """
+
+    def __init__(self) -> None:
+        self._attempt = 0
+        self._restarting_until = 0.0
+
+    def next(self, code: int | None, stayed_up: bool, now: float) -> float:
+        if stayed_up:
+            self._attempt = 0
+        if code == RESTART_CLOSE_CODE:
+            self._restarting_until = now + RESTART_WINDOW
+        if now < self._restarting_until and code != REPLACED_CLOSE_CODE:
+            return restart_delay()
+        delay = reconnect_delay(self._attempt, code)
+        self._attempt += 1
+        return delay
 
 
 def close_code(exc: BaseException) -> int | None:
@@ -193,7 +237,7 @@ class GatewayLink:
     # ------------------------------------------------------------------ loop
 
     async def _run(self) -> None:
-        attempt = 0
+        backoff = Backoff()
         while not self._stop:
             started = time.monotonic()
             code: int | None = None
@@ -220,11 +264,8 @@ class GatewayLink:
                 return
             # Only a connection that actually stayed up resets the backoff, so a
             # gateway that accepts and immediately drops us is not hammered.
-            if time.monotonic() - started >= STABLE_CONNECTION_SECONDS:
-                attempt = 0
-            delay = reconnect_delay(attempt, code)
-            attempt += 1
-            await asyncio.sleep(delay)
+            now = time.monotonic()
+            await asyncio.sleep(backoff.next(code, now - started >= STABLE_CONNECTION_SECONDS, now))
 
     async def _session(self) -> None:
         # The link is a long-lived tunnel to the operator's own gateway, so it is
@@ -249,11 +290,12 @@ class GatewayLink:
             # this flag.
             self._greeting = True
             await socket.send(json.dumps(hello, ensure_ascii=False))
-            ack = json.loads(await asyncio.wait_for(socket.recv(), timeout=30))
-            if ack.get("type") != "hello_ack":
-                raise RcError("unauthorized", f"unexpected gateway reply {ack.get('type')}")
+            early = await self._await_ack(socket)
             self._connected = True
             linkstate.record(linkstate.CONNECTED)
+            # What reached the device ahead of the ack is served now, oldest first.
+            for frame in early:
+                await self._dispatch(frame)
             # Whatever happens on connect — a mirror scan, a registry read, a
             # backfill the gateway is waiting for — runs beside the pump, never
             # in front of it. Holding the pump back leaves every forwarded
@@ -265,6 +307,38 @@ class GatewayLink:
             finally:
                 if ready is not None and not ready.done():
                     ready.cancel()
+
+    async def _await_ack(self, socket: ClientConnection) -> list[dict[str, Any]]:
+        """Read until the gateway acknowledges the hello; what reached the device first is returned.
+
+        A gateway can make a device reachable before it acknowledges the hello, so a request an
+        app sent in that moment, or one it held while the link was down, may arrive ahead of the
+        ack. It is a request like any other, and hanging up on it would lose it and cost a
+        reconnect, so it is kept and served once the ack is in, in the order it came.
+        """
+        early: list[dict[str, Any]] = []
+        held = 0
+        async with asyncio.timeout(ACK_TIMEOUT):
+            while True:
+                raw = await socket.recv()
+                frame = _decode(raw)
+                self._last_frame = time.monotonic()
+                if frame is None:
+                    continue
+                if frame.get("type") == "hello_ack":
+                    return early
+                if len(early) >= MAX_EARLY_FRAMES:
+                    log.error("too many frames before hello_ack", frames=len(early))
+                    raise RcError(
+                        "too_large", f"more than {MAX_EARLY_FRAMES} frames before hello_ack"
+                    )
+                held += len(raw) if isinstance(raw, bytes) else len(raw.encode("utf-8"))
+                if held > MAX_EARLY_BYTES:
+                    log.error("too much data before hello_ack", bytes=held)
+                    raise RcError(
+                        "too_large", f"more than {MAX_EARLY_BYTES} bytes before hello_ack"
+                    )
+                early.append(frame)
 
     async def _ready(self) -> None:
         if self._on_ready is not None:
@@ -318,14 +392,9 @@ class GatewayLink:
     async def _receiver(self, socket: ClientConnection) -> None:
         async for raw in socket:
             self._last_frame = time.monotonic()
-            try:
-                frame = json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
-                log.warning("dropping malformed gateway frame")
-                continue
-            if not isinstance(frame, dict):
-                continue
-            await self._dispatch(frame)
+            frame = _decode(raw)
+            if frame is not None:
+                await self._dispatch(frame)
 
     async def _dispatch(self, frame: dict[str, Any]) -> None:
         frame_type = str(frame.get("type") or "")
@@ -382,6 +451,16 @@ class GatewayLink:
             reply["ok"] = True
             reply["result"] = outcome
         await self.send(reply)
+
+
+def _decode(raw: str | bytes) -> dict[str, Any] | None:
+    """One gateway frame, or None for what is not a JSON object."""
+    try:
+        frame = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        log.warning("dropping malformed gateway frame")
+        return None
+    return frame if isinstance(frame, dict) else None
 
 
 def _report_ready(task: asyncio.Task[None]) -> None:

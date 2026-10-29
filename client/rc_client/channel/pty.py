@@ -36,9 +36,12 @@ from .screen import Keyboard, Screen
 
 READ_BYTES = 64 * 1024
 # The daemon may be down, restarting or not installed; none of that is the
-# terminal's problem, so reconnection is slow and silent.
+# terminal's problem, so reconnection is silent. A daemon that restarts is back
+# within seconds, and the terminal cannot be typed into until it has dialled
+# back, so the wait stays short: a refused connection to a local socket costs
+# nothing.
 RECONNECT_FIRST = 0.5
-RECONNECT_MAX = 30.0
+RECONNECT_MAX = 2.0
 SOCKET_TIMEOUT = 2.0
 # Without the daemon there is nothing to wake up for, so the loop only needs a
 # timeout fine enough to retry the connection on time.

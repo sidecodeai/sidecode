@@ -8,7 +8,7 @@ import json
 import os
 import threading
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -25,8 +25,10 @@ from rc_client.channel import paths
 from rc_client.config import Config, ensure_dirs
 from rc_client.daemon import Daemon
 from rc_client.models import Session
+from rc_client.sessions.attach import Attachment, HookQuestion
 from rc_client.sessions.channel import SessionChannel
 from rc_client.sessions.hub import SessionEntry
+from rc_client.sessions.shared import SharedApproval, SharedQuestion, SharedState
 from rc_client.update import update_log_path
 from tests.test_gateway_link import FakeGateway
 
@@ -66,6 +68,61 @@ async def running_daemon(
         with contextlib.suppress(asyncio.CancelledError):
             await task
         await server.stop()
+
+
+async def test_the_attachment_sockets_open_before_the_agents_are_adopted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The CLIs that outlived the last daemon dial back from the moment it went, and adopting
+    Codex's threads and joining Grok's leader takes seconds they need not wait out."""
+    empty = tmp_path / "agent-state"
+    empty.mkdir()
+    monkeypatch.setattr(transcripts, "PROJECTS_DIR", empty / "claude")
+    monkeypatch.setattr(rollouts, "SESSIONS_DIR", empty / "codex")
+    server = FakeGateway()
+    await server.start()
+    daemon = Daemon(
+        Config(
+            gateway_origin="http://127.0.0.1:8787",
+            device_id="dev-1",
+            device_token="tok-1",
+            name="test-device",
+        )
+    )
+    daemon.link.url = server.url
+    order: list[str] = []
+    prepare = daemon._prepare_attachment
+
+    async def sockets() -> None:
+        order.append("sockets")
+        await prepare()
+
+    async def adopt(binary: str | None) -> bool:
+        order.append("codex")
+        return False
+
+    async def join(binary: str | None) -> None:
+        order.append("grok")
+
+    monkeypatch.setattr(daemon, "_prepare_attachment", sockets)
+    monkeypatch.setattr(daemon.codex, "start", adopt)
+    monkeypatch.setattr(daemon.grok, "ensure", join)
+    task = asyncio.create_task(daemon.run())
+    try:
+
+        async def started() -> None:
+            while daemon._refresh_task is None:
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(started(), timeout=10)
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        await server.stop()
+
+    # The scan tries Codex again every round, so only how it began says what came first.
+    assert order[:3] == ["sockets", "codex", "grok"]
 
 
 async def request(server: FakeGateway, frame: dict[str, Any]) -> dict[str, Any]:
@@ -422,6 +479,189 @@ async def test_an_update_is_refused_while_a_session_is_working(
     assert reply["ok"] is False
     assert reply["error"]["code"] == "conflict"
     assert reply["error"]["message"] == "1 session is running"
+
+
+def attached_session(daemon: Daemon, session_id: str = "sess-attached") -> SessionEntry:
+    """A session a terminal CLI shares with the device, at rest: nothing running, nothing held."""
+    session = Session(
+        session_id=session_id,
+        device_id="dev-1",
+        agent="claude",
+        cwd="/repo",
+        state="idle",
+        origin="terminal",
+        control="shared",
+    )
+    daemon.registry.upsert_session(session)
+    entry = SessionEntry(
+        session=session,
+        channel=SessionChannel(daemon.registry, session, daemon.hub.publish),
+    )
+    entry.shared = SharedState(
+        attachment=Attachment(
+            session_id=session_id, cwd="/repo", pid=4242, claude_version="2.1.311"
+        )
+    )
+    daemon.hub.entries[session_id] = entry
+    return entry
+
+
+class FakeTerminal:
+    """Stands in for one of the shells the device runs; only its presence counts."""
+
+    async def shutdown(self) -> None:
+        return None
+
+
+def an_approval() -> SharedApproval:
+    return SharedApproval(
+        request_id="r-1", channel_id="c-1", block_id="b-1", tool="Bash", title="run", input={}
+    )
+
+
+def a_question(session_id: str) -> SharedQuestion:
+    hook = HookQuestion(session_id=session_id, cwd="/repo", tool="AskUserQuestion", input={})
+    return SharedQuestion(request_id="q-1", block_id="b-2", questions=[], hook=hook)
+
+
+def hold_a_message(entry: SessionEntry) -> None:
+    entry.queue.append({"id": "m-1", "text": "next", "ts": 1, "attachments": []})
+
+
+def steer_a_message(entry: SessionEntry) -> None:
+    assert entry.shared is not None
+    entry.shared.steers.append({"id": "m-2", "text": "now", "ts": 1})
+
+
+def open_a_turn(entry: SessionEntry) -> None:
+    entry.session.turn = {"turn_id": "t-1", "started_at": 1}
+
+
+def be_running(entry: SessionEntry) -> None:
+    entry.session.state = "running"
+
+
+def be_asked_for_approval(entry: SessionEntry) -> None:
+    assert entry.shared is not None
+    entry.shared.approvals["r-1"] = an_approval()
+
+
+def be_asked_a_question(entry: SessionEntry) -> None:
+    assert entry.shared is not None
+    entry.shared.question = a_question(entry.session.session_id)
+
+
+@pytest.mark.parametrize(
+    "occupy",
+    [
+        open_a_turn,
+        be_running,
+        be_asked_for_approval,
+        be_asked_a_question,
+        hold_a_message,
+        steer_a_message,
+    ],
+)
+async def test_an_update_waits_for_an_attached_session_that_is_in_use(
+    recorded_build: str,
+    running_daemon: tuple[Daemon, FakeGateway],
+    occupy: Callable[[SessionEntry], None],
+) -> None:
+    """A turn open, a prompt on screen or a message waiting: the restart would be felt."""
+    daemon, server = running_daemon
+    occupy(attached_session(daemon))
+
+    reply = await update_request(server, SERVED_BUILD, "u-busy")
+
+    assert reply["ok"] is False
+    assert reply["error"] == {"code": "conflict", "message": "1 session is running"}
+
+
+async def test_an_update_counts_every_session_in_use(
+    recorded_build: str, running_daemon: tuple[Daemon, FakeGateway]
+) -> None:
+    daemon, server = running_daemon
+    open_a_turn(attached_session(daemon, "sess-a"))
+    hold_a_message(attached_session(daemon, "sess-b"))
+    attached_session(daemon, "sess-c")
+
+    reply = await update_request(server, SERVED_BUILD, "u-count")
+
+    assert reply["error"]["message"] == "2 sessions are running"
+
+
+async def test_an_update_waits_for_a_held_message_on_a_session_the_device_drives(
+    recorded_build: str, running_daemon: tuple[Daemon, FakeGateway]
+) -> None:
+    daemon, server = running_daemon
+    entry = attached_session(daemon)
+    entry.shared = None
+    entry.session.control = "remote"
+    entry.runner = cast(SessionRunner, object())
+    hold_a_message(entry)
+
+    reply = await update_request(server, SERVED_BUILD, "u-queue")
+
+    assert reply["error"]["message"] == "1 session is running"
+
+
+@pytest.mark.parametrize(
+    ("opened", "said"), [(1, "1 terminal is open"), (2, "2 terminals are open")]
+)
+async def test_an_update_waits_for_a_device_terminal(
+    recorded_build: str, running_daemon: tuple[Daemon, FakeGateway], opened: int, said: str
+) -> None:
+    """A38: its shell ends with the daemon, and the gateway's index cannot show it."""
+    daemon, server = running_daemon
+    for number in range(opened):
+        daemon.terminals._terminals[f"term-{number}"] = cast(Any, FakeTerminal())
+
+    reply = await update_request(server, SERVED_BUILD, "u-terminal")
+
+    assert reply["error"] == {"code": "conflict", "message": said}
+
+
+async def test_an_update_is_not_held_by_messages_queued_on_a_session_nothing_holds(
+    recorded_build: str,
+    running_daemon: tuple[Daemon, FakeGateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """They wait for the next send to resume the session, which an update does not change."""
+    daemon, server = running_daemon
+    dormant = attached_session(daemon)
+    dormant.shared = None
+    dormant.session.control = "none"
+    hold_a_message(dormant)
+
+    async def spawn(build: str) -> FakeUpdater:
+        return FakeUpdater(0)
+
+    monkeypatch.setattr(daemon_module, "spawn_self_update", spawn)
+    reply = await update_request(server, SERVED_BUILD, "u-dormant")
+
+    assert reply["result"] == {"accepted": True, "from": recorded_build}
+
+
+async def test_an_update_is_accepted_while_nothing_is_in_use(
+    recorded_build: str,
+    running_daemon: tuple[Daemon, FakeGateway],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An attached session at rest, and a session the device drives that is idle, do not hold it."""
+    daemon, server = running_daemon
+    attached_session(daemon)
+    resting = attached_session(daemon, "sess-driven")
+    resting.shared = None
+    resting.session.control = "remote"
+    resting.runner = cast(SessionRunner, object())
+
+    async def spawn(build: str) -> FakeUpdater:
+        return FakeUpdater(0)
+
+    monkeypatch.setattr(daemon_module, "spawn_self_update", spawn)
+    reply = await update_request(server, SERVED_BUILD, "u-idle")
+
+    assert reply["result"] == {"accepted": True, "from": recorded_build}
 
 
 async def test_an_accepted_update_spawns_the_updater(

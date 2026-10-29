@@ -1,0 +1,20 @@
+{
+  "pid": 41001,
+  "sessionId": "6f1d2c3a-0b4e-4f5a-9c7d-1a2b3c4d5e6f",
+  "cwd": "/work/example",
+  "startedAt": 1793111962214,
+  "procStart": "Tue Oct 27 14:39:20 2026",
+  "version": "2.1.311",
+  "peerProtocol": 1,
+  "peerFeatures": [],
+  "kind": "interactive",
+  "entrypoint": "cli",
+  "pidDomain": "native",
+  "messagingSocketPath": "/tmp/example/41001.sock",
+  "name": "example",
+  "nameSource": "auto",
+  "nameSince": 1793111962214,
+  "status": "busy",
+  "updatedAt": 1793112062214,
+  "statusUpdatedAt": 1793112062214
+}

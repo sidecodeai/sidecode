@@ -24,6 +24,10 @@ log = logger("rc_client.procscan")
 LSOF = "/usr/sbin/lsof"
 SCAN_TIMEOUT = 3.0
 IS_LINUX = sys.platform.startswith("linux")
+# `ps` prints a start time in the local zone and the user's locale. Both are pinned, so a start
+# time means the same to every run of the daemon, whatever the shell it was started from, and
+# reads the way Claude Code writes the `procStart` of its own records (`agents/claude/live.py`).
+START_ENV = {"TZ": "UTC", "LC_ALL": "C"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,18 +64,24 @@ class OpenPaths:
     files: tuple[str, ...]
 
 
-async def _run(*args: str, timeout: float = SCAN_TIMEOUT) -> tuple[int, str]:
+async def _run(
+    *args: str, timeout: float = SCAN_TIMEOUT, env: dict[str, str] | None = None
+) -> tuple[int, str]:
     """Run one helper and read its output. A non-zero code means "do not know".
 
     A child that exits while the loop is still holding it raises
     `ProcessLookupError` from whichever call reaches it first, and that has to
     stay inside this function: it reaches the caller as an unfinished scan,
     which every caller already knows how to refuse, whereas an exception
-    escaping here takes down the whole scan round with it.
+    escaping here takes down the whole scan round with it. `env` is added to
+    the environment the helper inherits.
     """
     try:
         process = await asyncio.create_subprocess_exec(
-            *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            env={**os.environ, **env} if env else None,
         )
     except (FileNotFoundError, PermissionError, ProcessLookupError):
         return 127, ""
@@ -119,11 +129,33 @@ def _linux_scan() -> Scan:
     return Scan(procs=procs, complete=True)
 
 
+def _linux_start(pid: int) -> str | None:
+    """The start marker `_linux_scan` gives one process, or None when it is gone."""
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as handle:
+            tail = handle.read().decode("utf-8", "replace").rsplit(")", 1)[-1].split()
+    except (OSError, ValueError):
+        return None
+    return tail[19] if len(tail) > 19 else None
+
+
+async def process_start(pid: int) -> str | None:
+    """When one process started, as `Proc.start` says it, or None when it is gone or unreadable.
+
+    The start time is what tells a process from a later one that was given its pid.
+    """
+    if IS_LINUX:
+        return await asyncio.to_thread(_linux_start, pid)
+    code, out = await _run("ps", "-o", "lstart=", "-p", str(pid), env=START_ENV)
+    start = " ".join(out.split())
+    return start if code == 0 and start else None
+
+
 async def scan_processes() -> Scan:
     """Every visible process with its pid, ppid, start marker and command line."""
     if IS_LINUX:
         return await asyncio.to_thread(_linux_scan)
-    code, out = await _run("ps", "-axww", "-o", "pid=,ppid=,lstart=,tty=,command=")
+    code, out = await _run("ps", "-axww", "-o", "pid=,ppid=,lstart=,tty=,command=", env=START_ENV)
     if code != 0:
         return Scan(procs=[], complete=False)
     procs: list[Proc] = []

@@ -23,7 +23,16 @@ from rc_client.proxy import DIRECT
 class FakeGateway:
     """A minimal `/ws/device` endpoint that records what the device sends."""
 
-    def __init__(self, *, reject_first: bool = False) -> None:
+    def __init__(
+        self, *, reject_first: bool = False, before_ack: list[Any] | None = None, ack: bool = True
+    ) -> None:
+        # Frames sent after the hello and ahead of its acknowledgement, as raw text or as objects,
+        # and whether the acknowledgement comes at all.
+        self.before_ack = before_ack or []
+        self.ack = ack
+        # How many of the next connections are closed the moment they open, as a gateway that is
+        # still starting up does.
+        self.drop_next = 0
         self.received: list[dict[str, Any]] = []
         self.tokens: list[str | None] = []
         self.connections = 0
@@ -58,12 +67,20 @@ class FakeGateway:
         if self.reject_first and self.connections == 1:
             await socket.close()
             return
+        if self.drop_next > 0:
+            self.drop_next -= 1
+            await socket.close()
+            return
         self._sockets.append(socket)
         try:
             async for raw in socket:
                 frame = json.loads(raw)
                 self.received.append(frame)
                 if frame.get("type") == "hello":
+                    for early in self.before_ack:
+                        await socket.send(early if isinstance(early, str) else json.dumps(early))
+                    if not self.ack:
+                        continue
                     await socket.send(
                         json.dumps(
                             {
@@ -312,6 +329,202 @@ def test_the_logged_reason_hides_the_token_and_is_bounded() -> None:
 # ------------------------------------------- what the link does on connect
 
 
+async def test_a_request_that_reaches_the_device_before_the_ack_is_served(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gateway can make a device reachable before it acknowledges the hello, so an app's request
+    can arrive first. It is served over the same connection, not answered by hanging up."""
+    gateway = FakeGateway(
+        before_ack=[{"type": "session.history", "id": "r-1", "from": "app-1", "session_id": "s-1"}]
+    )
+    await gateway.start()
+    served_while_connected: list[bool] = []
+
+    async def history(frame: dict[str, Any]) -> dict[str, Any]:
+        served_while_connected.append(link.connected)
+        return {"events": [], "has_more": False}
+
+    link = GatewayLink(
+        gateway.url,
+        "device-token",
+        hello=hello_payload,
+        handlers={"session.history": history},
+        proxy=DIRECT,
+    )
+    link.start()
+    reply = await gateway.wait_for("reply")
+
+    assert reply == {
+        "type": "reply",
+        "id": "r-1",
+        "from": "app-1",
+        "ok": True,
+        "result": {"events": [], "has_more": False},
+    }
+    assert gateway.connections == 1
+    assert served_while_connected == [True], "it is served once the ack is in, not before"
+    await link.stop()
+    await gateway.stop()
+
+
+async def test_requests_that_come_before_the_ack_are_served_in_the_order_they_came() -> None:
+    gateway = FakeGateway(
+        before_ack=[
+            {"type": "session.send", "id": "r-1", "from": "app-1", "text": "one"},
+            {"type": "ping"},
+            {"type": "session.send", "id": "r-2", "from": "app-2", "text": "two"},
+        ]
+    )
+    await gateway.start()
+
+    async def send(frame: dict[str, Any]) -> dict[str, Any]:
+        return {"echo": frame["text"]}
+
+    link = await link_to(gateway, {"session.send": send})
+
+    async def answered() -> None:
+        while len(gateway.frames("reply")) < 2:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(answered(), timeout=5)
+    replies = gateway.frames("reply")
+    assert [(reply["id"], reply["result"]) for reply in replies] == [
+        ("r-1", {"echo": "one"}),
+        ("r-2", {"echo": "two"}),
+    ]
+    assert len(gateway.frames("pong")) == 1
+    assert gateway.connections == 1
+    await link.stop()
+    await gateway.stop()
+
+
+async def test_a_request_of_a_kind_the_device_does_not_know_is_refused_not_hung_up_on() -> None:
+    gateway = FakeGateway(before_ack=[{"type": "session.teleport", "id": "r-3", "from": "app-3"}])
+    await gateway.start()
+
+    link = await link_to(gateway, {})
+    reply = await gateway.wait_for("reply")
+
+    assert reply["id"] == "r-3"
+    assert reply["error"]["code"] == "unsupported"
+    assert gateway.connections == 1
+    await link.stop()
+    await gateway.stop()
+
+
+async def test_a_frame_that_is_not_a_frame_before_the_ack_does_not_end_the_link() -> None:
+    gateway = FakeGateway(before_ack=["not json at all", "[1, 2]", '"text"'])
+    await gateway.start()
+
+    link = await link_to(gateway, {})
+
+    assert link.connected
+    assert gateway.connections == 1
+    await link.stop()
+    await gateway.stop()
+
+
+async def test_a_gateway_that_sends_more_than_a_few_frames_before_the_ack_is_hung_up_on(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """What waits for the ack is kept in memory, so it is bounded; the link goes, and comes back."""
+    monkeypatch.setattr(rc_gateway, "MAX_EARLY_FRAMES", 3)
+    monkeypatch.setattr(rc_gateway, "BACKOFF_STEPS", (0.05,))
+    gateway = FakeGateway(before_ack=[{"type": "ping"}] * 4)
+    await gateway.start()
+    link = GatewayLink(gateway.url, "device-token", hello=hello_payload, handlers={}, proxy=DIRECT)
+    link.start()
+
+    async def redialled() -> None:
+        while gateway.connections < 3:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(redialled(), timeout=5)
+
+    assert not link.connected, "no connection of that kind is ever served"
+    assert gateway.frames("pong") == []
+    assert "too many frames before hello_ack" in [record.getMessage() for record in caplog.records]
+    await link.stop()
+    await gateway.stop()
+
+
+@pytest.mark.parametrize("frames", [2, 1])
+async def test_a_gateway_that_sends_more_bytes_than_the_cap_before_the_ack_is_hung_up_on(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, frames: int
+) -> None:
+    """The count alone leaves room for 256 frames of 80 MiB: what waits is bounded in bytes too."""
+    monkeypatch.setattr(rc_gateway, "MAX_EARLY_BYTES", 1000)
+    monkeypatch.setattr(rc_gateway, "BACKOFF_STEPS", (0.05,))
+    size = 600 if frames == 2 else 2000
+    gateway = FakeGateway(before_ack=[{"type": "ping", "padding": "x" * size}] * frames)
+    await gateway.start()
+    link = GatewayLink(gateway.url, "device-token", hello=hello_payload, handlers={}, proxy=DIRECT)
+    link.start()
+
+    async def redialled() -> None:
+        while gateway.connections < 3:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(redialled(), timeout=5)
+
+    assert not link.connected
+    assert gateway.frames("pong") == []
+    assert "too much data before hello_ack" in [record.getMessage() for record in caplog.records]
+    await link.stop()
+    await gateway.stop()
+
+
+async def test_a_gateway_that_stays_under_the_byte_cap_is_served(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(rc_gateway, "MAX_EARLY_BYTES", 1000)
+    gateway = FakeGateway(before_ack=[{"type": "ping", "padding": "x" * 300}] * 2)
+    await gateway.start()
+
+    link = await link_to(gateway, {})
+
+    assert link.connected and gateway.connections == 1
+    assert len(gateway.frames("pong")) == 2
+    await link.stop()
+    await gateway.stop()
+
+
+async def test_a_gateway_that_sends_as_many_frames_as_the_cap_allows_is_served(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(rc_gateway, "MAX_EARLY_FRAMES", 3)
+    gateway = FakeGateway(before_ack=[{"type": "ping"}] * 3)
+    await gateway.start()
+
+    link = await link_to(gateway, {})
+
+    assert link.connected and gateway.connections == 1
+    assert len(gateway.frames("pong")) == 3
+    await link.stop()
+    await gateway.stop()
+
+
+async def test_a_gateway_that_never_acknowledges_the_hello_is_given_up_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(rc_gateway, "ACK_TIMEOUT", 0.2)
+    monkeypatch.setattr(rc_gateway, "BACKOFF_STEPS", (0.05,))
+    gateway = FakeGateway(ack=False, before_ack=[{"type": "ping"}])
+    await gateway.start()
+    link = GatewayLink(gateway.url, "device-token", hello=hello_payload, handlers={}, proxy=DIRECT)
+    link.start()
+
+    async def redialled() -> None:
+        while gateway.connections < 2:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(redialled(), timeout=5)
+    assert not link.connected
+    assert len(gateway.frames("hello")) >= 2
+    await link.stop()
+    await gateway.stop()
+
+
 async def test_the_pump_answers_requests_while_connect_work_is_still_running(
     gateway: FakeGateway,
 ) -> None:
@@ -393,6 +606,95 @@ def test_a_close_code_is_read_from_the_exception() -> None:
     )
     assert close_code(closed) == 4401
     assert close_code(RcError("timeout", "no frames")) is None
+
+
+# ------------------------------------------- a gateway that restarts (1012)
+
+
+def test_a_restarting_gateway_is_asked_again_about_every_second_for_half_a_minute() -> None:
+    backoff = rc_gateway.Backoff()
+    delays = [backoff.next(1012, stayed_up=True, now=100.0)]
+    for second in range(1, 30):
+        delays.append(backoff.next(None, stayed_up=False, now=100.0 + second))
+
+    low, high = 1.0 - rc_gateway.RESTART_JITTER, 1.0 + rc_gateway.RESTART_JITTER
+    assert all(low <= delay <= high for delay in delays)
+    assert len(set(delays)) > 1, (
+        "a little unevenly, so devices cut off together do not arrive together"
+    )
+
+
+def test_after_the_half_minute_the_usual_backoff_goes_on_from_where_it_was() -> None:
+    backoff = rc_gateway.Backoff()
+    steps = rc_gateway.BACKOFF_STEPS
+    assert backoff.next(None, stayed_up=False, now=0.0) == steps[0]
+    assert backoff.next(None, stayed_up=False, now=1.0) == steps[1]
+
+    backoff.next(1012, stayed_up=False, now=10.0)
+    for second in range(11, 40):
+        assert backoff.next(None, stayed_up=False, now=float(second)) < 1.2
+
+    assert backoff.next(None, stayed_up=False, now=40.5) == steps[2]
+    assert backoff.next(None, stayed_up=False, now=45.0) == steps[3]
+
+
+def test_a_connection_that_stayed_up_before_the_restart_starts_the_backoff_over() -> None:
+    backoff = rc_gateway.Backoff()
+    for second in range(4):
+        backoff.next(None, stayed_up=False, now=float(second))
+
+    backoff.next(1012, stayed_up=True, now=100.0)
+
+    assert backoff.next(None, stayed_up=False, now=131.0) == rc_gateway.BACKOFF_STEPS[0]
+
+
+def test_a_second_restart_extends_the_half_minute() -> None:
+    backoff = rc_gateway.Backoff()
+    backoff.next(1012, stayed_up=True, now=0.0)
+    backoff.next(1012, stayed_up=False, now=25.0)
+
+    assert backoff.next(None, stayed_up=False, now=50.0) < 1.2
+    assert backoff.next(None, stayed_up=False, now=56.0) == rc_gateway.BACKOFF_STEPS[0]
+
+
+def test_a_connection_that_another_one_replaced_waits_even_in_the_half_minute() -> None:
+    backoff = rc_gateway.Backoff()
+    backoff.next(1012, stayed_up=True, now=0.0)
+
+    assert backoff.next(rc_gateway.REPLACED_CLOSE_CODE, stayed_up=False, now=5.0) >= (
+        rc_gateway.REPLACED_DELAY
+    )
+
+
+def test_a_gateway_that_closes_for_any_other_reason_gets_the_usual_backoff() -> None:
+    backoff = rc_gateway.Backoff()
+    assert backoff.next(1011, stayed_up=False, now=0.0) == rc_gateway.BACKOFF_STEPS[0]
+    assert backoff.next(1011, stayed_up=False, now=1.0) == rc_gateway.BACKOFF_STEPS[1]
+    assert backoff.next(None, stayed_up=False, now=2.0) == rc_gateway.BACKOFF_STEPS[2]
+
+
+async def test_a_link_cut_by_a_restart_keeps_asking_while_the_gateway_comes_up(
+    gateway: FakeGateway, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without the window the second try waits two seconds, and the third four."""
+    monkeypatch.setattr(rc_gateway, "BACKOFF_STEPS", (2.0, 4.0, 8.0))
+    monkeypatch.setattr(rc_gateway, "RESTART_RETRY", 0.05)
+    monkeypatch.setattr(rc_gateway, "RESTART_WINDOW", 5.0)
+    link = await link_to(gateway, {})
+    gateway.ready.clear()
+    gateway.drop_next = 3
+
+    await gateway.close_current(1012, "service restart")
+
+    async def back() -> None:
+        await gateway.ready.wait()
+        while not link.connected:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(back(), timeout=1.5)
+
+    assert gateway.connections == 5
+    await link.stop()
 
 
 @pytest.mark.parametrize("code", [4401, 4403])

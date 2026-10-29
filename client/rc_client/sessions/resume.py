@@ -20,9 +20,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from ..errors import RcError
+from ..errors import RcError, TerminalNotReady
 from ..logging_setup import logger
 from ..models import Session, SessionResume, now_ms
+from .busy import BUSY_STATES
 from .limits import FIVE_HOURS, LimitStop
 
 if TYPE_CHECKING:  # pragma: no cover - imported for types only
@@ -53,11 +54,13 @@ MAX_ATTEMPTS = 3
 # `at` of a resume that has been sent: the record stays only to count the
 # attempts, and nothing is pending on the session.
 FIRED = 0
+# A resume that could not go because the terminal that held the session is not there yet is tried
+# again after this, and given up on after this many tries (`_fire`).
+DEFER_MS = 60 * 1000
+MAX_DEFERRALS = 3
 # Controls a limit stop schedules a resume for. A `terminal` session gets none:
 # the device has no way in.
 RESUMABLE_CONTROL = frozenset({"remote", "shared"})
-# States in which a turn is under way, so somebody took the session further.
-BUSY_STATES = frozenset({"starting", "running", "needs_approval", "needs_input"})
 
 TERMINAL_CLOSED = "The terminal that owned this session was closed."
 PERSON_SENT = "you sent a message"
@@ -103,6 +106,8 @@ class ResumeScheduler:
         self.registry = hub.registry
         self._clock = clock
         self._records: dict[str, PendingResume] = {}
+        # How many times each session's resume has been put off for a terminal that was not ready.
+        self._deferred: dict[str, int] = {}
         self._enabled = False
         self._task: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
@@ -276,7 +281,10 @@ class ResumeScheduler:
             await self._forget(record, "cancelled", ALREADY_RUNNING)
             return
         if record.control == "shared" and session.control == "none":
-            await self._forget(record, "dropped", TERMINAL_CLOSED)
+            # Just after a restart every session reads as held by nobody until the scan finds its
+            # CLI and its bridge dials back, so this is put off like a terminal that is not ready.
+            # One that really was closed is dropped once the tries are spent.
+            await self._defer(record, TERMINAL_CLOSED)
             return
         record.at = FIRED
         self._store(record)
@@ -289,7 +297,28 @@ class ResumeScheduler:
                 source="resume",
             )
         except RcError as exc:
-            await self._forget(record, "dropped", exc.message)
+            if isinstance(exc, TerminalNotReady) or exc.code == "conflict":
+                # The terminal that holds the session has not reconnected, or the session still
+                # reads as the terminal's: a restart's wait, which a minute may end.
+                await self._defer(record, exc.message)
+            else:
+                await self._forget(record, "dropped", exc.message)
+        else:
+            self._deferred.pop(record.session_id, None)
+
+    async def _defer(self, record: PendingResume, reason: str) -> None:
+        """The terminal that held the session is not there yet: try again shortly.
+
+        Nobody is going to ask for this resume again, and the wait is a restart's, so it is put
+        off a minute at a time, a few times, before it is given up on.
+        """
+        tries = self._deferred.get(record.session_id, 0) + 1
+        if tries > MAX_DEFERRALS:
+            await self._forget(record, "dropped", reason)
+            return
+        self._deferred[record.session_id] = tries
+        record.at = self._clock() + DEFER_MS
+        await self._remember(record, "rescheduled")
 
     # --------------------------------------------------------------- records
 
@@ -312,6 +341,7 @@ class ResumeScheduler:
     async def _forget(self, record: PendingResume, status: str | None, reason: str) -> None:
         """Drop a record, saying why when the apps are owed a row."""
         self._records.pop(record.session_id, None)
+        self._deferred.pop(record.session_id, None)
         self.registry.delete_resume(record.session_id)
         entry = self.hub.entries.get(record.session_id)
         if entry is None:

@@ -35,6 +35,7 @@ from .looplag import watch_loop_lag
 from .models import AgentInfo
 from .registry import Registry
 from .sessions.attach import AttachServer
+from .sessions.busy import busy_sessions
 from .sessions.hub import SessionHub
 from .sessions.mirror import MirrorService
 from .terminal import TerminalManager
@@ -46,8 +47,6 @@ AGENT_REFRESH_INTERVAL = 900.0
 # How long the first hello of a run waits for the first scan to say which terminals still hold
 # their sessions. The scan runs while the link connects, so this is the most it can cost.
 FIRST_SCAN_WAIT = 3.0
-# A session in one of these states is doing work an update would throw away.
-BUSY_STATES = frozenset({"starting", "running", "needs_approval", "needs_input"})
 FROM_SOURCE = "this client was installed from source; update it on the host"
 
 
@@ -99,6 +98,10 @@ class Daemon:
         # Amendment A35: the resumes the device owes, read back before anything
         # can publish a session, so a restart does not lose one.
         self.hub.resumes.load()
+        # Before the agents: the bridges and terminal proxies of the CLIs that outlived the last
+        # daemon have been dialling back since it went, and adopting Codex's threads and joining
+        # Grok's leader below takes seconds that they need not wait out.
+        await self._prepare_attachment()
         await self.codex.start(resolve_codex())
         # A leader the person's configuration asks for, started here when no TUI
         # has started one yet (A28). Failing to reach it is not fatal: Grok
@@ -110,7 +113,6 @@ class Daemon:
             device=self.config.device_id,
             agents=",".join(info.agent for info in self.agents if info.available),
         )
-        await self._prepare_attachment()
         # Before the link, so the first scan runs while it connects and the first hello can say
         # which terminals still hold their sessions.
         self.mirror.start()
@@ -171,6 +173,9 @@ class Daemon:
                     loop.remove_signal_handler(signal_number)
 
     async def shutdown(self) -> None:
+        # Before the channel socket goes: a bridge that closes from here on is this daemon's own
+        # doing, and its CLI is still there.
+        self.hub.begin_close()
         for name in ("_refresh_task", "_lag_task", "_update_task", "_sweep_task"):
             task: asyncio.Task[None] | None = getattr(self, name)
             if task is not None:
@@ -230,6 +235,13 @@ class Daemon:
         await self.link.send(frame)
 
     async def _on_ready(self) -> None:
+        # The scan is what the gateway backfills from, so a failure to say what is queued must not
+        # cost it, and the two things to say do not depend on each other.
+        for announce in (self.hub.clear_stale_queues, self.hub.republish_queues):
+            try:
+                await announce()
+            except Exception:
+                log.exception("telling the gateway about the Up next queues failed")
         await self.mirror.scan_once()
 
     async def _hello(self) -> dict[str, Any]:
@@ -350,19 +362,16 @@ class Daemon:
             raise RcError("conflict", "already on this build")
         if self._update_task is not None and not self._update_task.done():
             raise RcError("conflict", "an update is already running")
-        busy = self._busy_sessions()
+        busy = busy_sessions(self.hub.entries.values())
         if busy:
             plural = "s are" if busy > 1 else " is"
             raise RcError("conflict", f"{busy} session{plural} running")
+        if self.terminals.count:
+            # A38: a shell ends with the daemon, and nothing in the gateway's index shows one.
+            plural = "s are" if self.terminals.count > 1 else " is"
+            raise RcError("conflict", f"{self.terminals.count} terminal{plural} open")
         self._update_task = asyncio.create_task(self._update(requested), name="self-update")
         return {"accepted": True, "from": current}
-
-    def _busy_sessions(self) -> int:
-        return sum(
-            1
-            for entry in self.hub.entries.values()
-            if entry.runner is not None and entry.session.state in BUSY_STATES
-        )
 
     async def _update(self, build: str) -> None:
         """Watch the detached updater, so a failure is reported before the restart."""
