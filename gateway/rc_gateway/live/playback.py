@@ -5,9 +5,10 @@ between the words; either way the Live API offers no way to take back audio alre
 sideband alone does not control playback", the docs say: playback is the client's). So the gateway
 holds the audio and releases it at the speed of speech, keeping the browser's queue only
 ``LEAD_SECONDS`` deep, and it tells voice from silence frame by frame, so that "the assistant is
-speaking" means voice and not merely audio. When the person talks over the assistant the gateway
-drops what it holds, tells the browser to drop what it has, and discards what the model still sends
-while the person is speaking, so the stale part of a reply is never heard.
+speaking" means voice and not merely audio, and how long the model has been quiet is known. When the
+person talks over the assistant and the model stops for them (``barge_in.py`` decides that), the
+gateway drops what it holds, tells the browser to drop what it has, and discards what the model
+still sends while the person is speaking, so the stale part of a reply is never heard.
 
 The lead is as deep as it is because the browser's flush stops everything it has queued at once, so
 a deep queue costs nothing when the person interrupts, and it carries playback across a stall in
@@ -103,6 +104,14 @@ class OutputPacer:
         self.dropped_bytes = 0
         #: Bytes of the audio taken in that were voice and not silence, whatever became of them.
         self.voiced_bytes = 0
+        #: How long the model had been quiet where the audio taken in runs out, in bytes of audio:
+        #: the silence it sent since its last voice, and the time between in which it sent nothing.
+        self._quiet = 0
+        #: Where the audio taken in runs out, each piece played at real time from its arrival or
+        #: from the end of the one before: past it, the model has sent nothing.
+        self._stream_end: float | None = None
+        #: When the voice now audible began: the first of it taken in while nothing was audible.
+        self.segment_started: float | None = None
         #: Times the model's audio arrived after the browser's queue had run dry mid-reply, the
         #: seconds of silence that cost, and the longest of those silences.
         self.starved = 0
@@ -125,6 +134,8 @@ class OutputPacer:
         if not data:
             return False
         self._note_starvation(now)
+        was_audible = self.audible(now)
+        self._quiet += self._gap_bytes(now)
         voiced = False
         for start in range(0, len(data), FRAME_BYTES):
             frame = data[start : start + FRAME_BYTES]
@@ -134,9 +145,28 @@ class OutputPacer:
             self._held_bytes += len(frame)
             if is_voice:
                 self.voiced_bytes += len(frame)
+                self._quiet = 0
+            else:
+                self._quiet += len(frame)
             voiced = voiced or is_voice
+        if voiced and not was_audible:
+            self.segment_started = now
+        start_at = now if self._stream_end is None else max(self._stream_end, now)
+        self._stream_end = start_at + len(data) / BYTES_PER_SECOND
         self._drop_oldest()
         return voiced
+
+    def quiet_bytes(self, now: float) -> int:
+        """How long the model has been quiet, in bytes of audio: the silence it sent since its last
+        voice, and the time since then in which it sent nothing at all, so that a stream that stops
+        is as quiet as one of silence."""
+        return self._quiet + self._gap_bytes(now)
+
+    def _gap_bytes(self, now: float) -> int:
+        """The time since the audio taken in ran out, in bytes of audio; nothing before any came."""
+        if self._stream_end is None or now <= self._stream_end:
+            return 0
+        return round((now - self._stream_end) * BYTES_PER_SECOND)
 
     def _note_starvation(self, now: float) -> None:
         """Count audio that arrives when the browser has played everything it was sent.
@@ -198,8 +228,17 @@ class OutputPacer:
         return max(MIN_WAKE_SECONDS, self._playhead - self._lead - now)
 
     def clear(self, now: float) -> int:
-        """Drop what is held, and stand for a browser that has just emptied its own queue."""
-        dropped = self._held_bytes
+        """Drop what is held, and stand for a browser that has just emptied its own queue.
+
+        Returns the bytes dropped, less the quiet they end with: the quiet the model went into is
+        no loss to the person. The model's stream ends where what was dropped was cut off.
+        """
+        quiet_end = 0
+        for frame, is_voice in reversed(self._held):
+            if is_voice:
+                break
+            quiet_end += len(frame)
+        dropped = self._held_bytes - quiet_end
         self._held.clear()
         self._held_bytes = 0
         self._held_voice = 0
@@ -207,6 +246,8 @@ class OutputPacer:
         self._playhead = now
         self._voice_end = -math.inf
         self._sent = False
+        if self._stream_end is not None:
+            self._stream_end = min(self._stream_end, now)
         return dropped
 
 
@@ -257,9 +298,9 @@ class Playback:
         """Whether the assistant is speaking: voice is on its way to the browser or being heard."""
         return self.pacer.audible(self._clock())
 
-    def speaking(self, grace: float) -> bool:
-        """The same, with only ``grace`` seconds counted past the end of the voice."""
-        return self.pacer.speaking(self._clock(), grace)
+    def discarding(self) -> bool:
+        """Whether the model's audio is being thrown away, after an interruption."""
+        return self._clock() < self._suppress_until
 
     def add(self, pcm: bytes) -> bool:
         """Take audio from the model, unless the person is talking over the assistant.
@@ -275,7 +316,10 @@ class Playback:
         return voiced
 
     async def interrupt(self) -> int:
-        """The person began to speak while the assistant was audible: cut it off. Returns bytes."""
+        """The person talked over the assistant and the model stopped for them: cut it off.
+
+        Returns the bytes dropped of what it still held (not the quiet that said it stopped).
+        """
         now = self._clock()
         dropped = self.pacer.clear(now)
         self.discarded_bytes += dropped
@@ -292,6 +336,11 @@ class Playback:
         started = self._interrupted_at
         if started is not None and now < started + SUPPRESS_CAP_SECONDS:
             self._suppress_until = max(self._suppress_until, now + SUPPRESS_HOLD_SECONDS)
+
+    def end_interruption(self) -> None:
+        """The person began again over an assistant heard again: the last interruption is over, and
+        their speech no longer keeps anything discarded until another is confirmed."""
+        self._interrupted_at = None
 
     async def run(self) -> None:
         """Send audio as it falls due, until cancelled."""

@@ -108,6 +108,11 @@ offering Start. The status is for the panel; the check at the socket is what enf
   URL), header `Authorization: Bearer <key>`. Compression is off. The library's own logger for this
   socket (`rc_gateway.live.wire`) is pinned at WARNING, so no log level shows its frames or its
   handshake (which carries the key).
+- A connection the Live API refuses outright (an HTTP status instead of the upgrade, such as 403
+  for a country, region or territory it does not serve) ends the call `upstream_refused` (4502). The
+  line `live upstream refused the connection` carries the status and the `code` of the error in
+  the answer's JSON body (`unsupported_country_region_territory`, say), only when it looks like an
+  identifier; nothing else of the answer is read, neither its message nor its headers.
 - First message `session.start` with the `session` configuration; audio starts after
   `session.started`. The configuration (`live/prompts.py`): `model`, `instructions` (the voice
   model's prompt, built as the Live prompting guide describes, with the backend's capabilities and
@@ -168,12 +173,12 @@ Without an event to react to, the gateway listens for itself:
 - **Playout delay** (`playback`'s `delay_ms`). The browser holds each frame for its playout delay
   before it plays it, so the voice is heard that much later than the gateway sent it. The gateway
   adds the delay the browser reported (400 ms before the first report) to the end of the voice:
-  `Playback.audible()` and `speaking()` count the voice as heard until the browser has played it.
-  Those two answer what the `state` message says, whether a person starting to speak is
-  interrupting (barge-in), whether the call is idle, whether the confirm gate takes the assistant
-  to be speaking (a spoken yes is not an answer while the read-back is still being heard), and
-  whether the assistant was already audible when the reply timer starts. The delay moves nothing
-  else: not the pacing, and not the starvation estimate.
+  `Playback.audible()` counts the voice as heard until the browser has played it. It answers what
+  the `state` message says, whether a person starting to speak may be interrupting (barge-in) and
+  so whether the confirm gate takes the assistant to be speaking (a spoken yes is not an answer
+  while the read-back is still being heard), whether the call is idle, and whether the assistant
+  was already audible when the reply timer starts. The delay moves nothing else: not the pacing,
+  not the starvation estimate, and not the model's own silence that confirms a barge-in.
 - **Starvation** (`OutputPacer`). The pacer estimates when the browser will have played everything
   it was sent, taking each frame to play in real time from the moment it was sent. Audio that
   arrives while nothing is held, after something was sent since the last interruption, and when
@@ -197,20 +202,64 @@ Without an event to react to, the gateway listens for itself:
   half-second pause.
 - **Detection** (`live/vad.py`). An energy detector on the microphone frames the gateway already
   receives: speech is audio above both an absolute floor (about -38 dBFS) and 3x the room's level
-  (the quietest of the last 3 s), for 100 ms; it ends 300 ms after the last loud frame.
-- **Barge-in.** When speech begins while the assistant is audible, the gateway drops what it holds,
-  sends `flush`, and discards what the model still sends while the person goes on talking (0.3 s
-  past the last loud frame, at most 3 s from the start). The browser's player stops every scheduled
-  source at once. Nothing is sent to the Live API: there is nothing to cancel or truncate, and the
-  model, which hears the person, stops itself. It is not told what the person heard (the guide: "the
-  model doesn't know what the user heard").
+  (the quietest of the last 3 s), for 100 ms; it ends 300 ms after the last loud frame. While the
+  assistant is audible, speech begins only at about -30 dBFS (`OVER_ASSISTANT_THRESHOLD`), held for
+  300 ms without a dip (`OVER_ASSISTANT_ONSET_MS`): what a loudspeaker brings back of the
+  assistant's own voice through the echo canceller is mostly fainter (a Mac call measured -40 to
+  -43 dBFS) and comes in short peaks, while a person who means to cut in speaks up and goes on for
+  a syllable or two. Speech already under way goes on at the usual level.
+- **Barge-in** (`live/barge_in.py`). Speech that begins while the assistant is audible is only a
+  suspicion: on a loudspeaker the assistant's own voice, coming back through the microphone, can
+  start the detector's speech (see "What real calls showed"). The model shows which it was. Its
+  stream is continuous, so a model that stops for the person streams silence, and one that sends
+  nothing at all instead is as quiet: time past the end of the audio received, each piece counted
+  from its arrival at real time (so audio sent ahead of time is no gap), counts as silence. The
+  suspicion is confirmed when the model, still talking as the person began (quiet for less than
+  0.5 s), goes quiet within 1 s of the speech start (`CONFIRM_WINDOW_SECONDS`) and stays quiet for
+  0.5 s (`YIELD_SILENCE_SECONDS`, the pause after which the assistant no longer counts as
+  speaking, so a pause between its words does not count). Only then does the gateway do what it
+  once did at the speech start: drop what it holds, send `flush`, and discard what the model still
+  sends while the person goes on talking (0.3 s past the last loud frame, at most 3 s from the
+  confirmation). The browser's player stops every scheduled source at once. A real interruption is
+  so cut off at most 1.5 s after the speech start, and as soon as the model has been quiet for
+  half a second; the window is no longer because a longer one would let more pauses between the
+  model's sentences pass for stopping. A model still talking as the window closes, or one that had
+  already stopped (only its last words were still being heard), was not interrupted: nothing is
+  flushed or discarded, the browser plays on, and the suspicion counts as a false interruption. A
+  new speech start over the assistant before the last one is decided gives that one up as false and
+  gets a window of its own, so a person who cuts in soon after an echo is judged on their own
+  speech. While a suspicion waits, the model's audio is taken in and sent as usual, and a new
+  suspicion ends an earlier interruption's discard, so that discard cannot be drawn out over audio
+  that is only suspected. The decision is taken on every microphone frame and every piece of the
+  model's audio, and on the call's watch tick in case neither comes. Nothing is sent to the Live
+  API: there is nothing to cancel or truncate, and the model, which hears the person, stops itself.
+  It is not told what the person heard (the guide: "the model doesn't know what the user heard").
+- **What it still cannot tell.** An echo whose speech start falls within about half a second of
+  the end of one of the assistant's sentences, or of a pause in it, is confirmed by that quiet as
+  if the model had stopped for a person, and the short tail the browser still had queued is cut
+  off; a stall of 0.5 s or more in the stream of a model that is still talking is taken for
+  stopping too (real calls have shown stalls of 0.15 to 0.7 s).
+- **Tuning.** Four numbers decide all of this, and real calls on a test gateway are what tune them:
+  the window (`CONFIRM_WINDOW_SECONDS`, 1.0 s) and the quiet that confirms (`YIELD_SILENCE_SECONDS`,
+  0.5 s) in `live/barge_in.py`, and the onset gate while the assistant is audible
+  (`OVER_ASSISTANT_THRESHOLD`, about -30 dBFS, and `OVER_ASSISTANT_ONSET_MS`, 300 ms) in
+  `live/vad.py`. The `live barge-in` lines say how each speech start over the assistant went
+  (`confirmed`, `wait_ms`, `voice_ms`, `start_level`, `segment_ms`, `discarded_ms`; see "Usage
+  record"), and the usage line counts them (`interruptions`, `false_interruptions`) beside
+  `speech_ms` and `discarded_audio_ms`. A real interruption decided false with `voice_ms` well
+  short of `wait_ms` says the model stopped too late for the window; confirmed lines where nobody
+  cut in say the quiet is too short or the window too long; `start_level` against the threshold
+  says how much echo the onset gate keeps out, and many `false_interruptions` that it keeps out too
+  little.
 - The same detector and the transcripts drive the idle hang-up; the guide warns that gaps between
   transcript events are not silence.
 - **Echo.** The client's own echo cancellation, noise suppression and level control are on (the
-  browser's, or an app's own). If a speaker's echo still makes the assistant cut itself off, set
-  `LIVE_BARGE_IN=false`: the assistant is never cut off by the gateway then (the model's own
-  handling of an interruption still applies, but queued audio is no longer flushed). The thresholds
-  are guesses until tried on real devices.
+  browser's, or an app's own). Echo that still gets past the onset gate starts the detector's
+  speech, but the model talks on through it, so it no longer cuts the assistant off (but see "What
+  it still cannot tell"); it shows as `false_interruptions`. With `LIVE_BARGE_IN=false` the gateway
+  never cuts the assistant off (the model's own handling of an interruption still applies, but
+  queued audio is no longer flushed), and an interruption the model stops for still spoils a draft
+  being read back.
 
 ### Tools and drafts
 
@@ -251,18 +300,24 @@ Without an event to react to, the gateway listens for itself:
   sentences that is longer than 0.5 s looks like an answer once 2 s have been counted). A refusal
   leaves the sum as it is, so a short read-back that was refused and is read again arms it.
 - **An interjection spoils the draft for voice.** The person talking over the assistant, or within
-  that half second after it, spoils the draft: from then on `confirm_send` for it is refused with
-  `read_back_interrupted`, whatever the assistant says next (the sum is emptied and takes no more
-  voice), until a new draft is handed over, which starts a fresh sum. The refusal tells the model
-  that the developer interrupted the read-back, to call `prepare_message` again and read the new
-  draft back in full, or that the developer can press Send. The other refusals, `not_read_back` and
-  `not_confirmed`, tell it to read the whole draft back, that a yes from before the read-back did
-  not count, and that the developer can press Send. A late fragment of the original request's
-  transcript, and a transcript of noise after the read-back, do not answer it. Each refused
-  spoken confirmation logs one `live tool refused` line with the tool, the reason and the seconds
-  of voice the gate had counted (codes and numbers only), so the 2 s can be checked against real
-  calls. The gate cannot tell a yes from a cough: it only makes sure that the shape of an answer
-  happened.
+  that half second after it, spoils the draft when the model stops for them (the barge-in's
+  confirmation, which decides this with `LIVE_BARGE_IN=false` too): from then on `confirm_send` for
+  it is refused with `read_back_interrupted`, whatever the assistant says next (the sum is emptied
+  and takes no more voice), until a new draft is handed over, which starts a fresh sum. Speech the
+  model talks through (its own voice coming back, say), or that begins after it had already
+  stopped, neither spoils the draft nor answers it. A `confirm_send` that comes while the model
+  has yet to show which it was is held until it has (at most 1.5 s): a yes followed by a "wait"
+  the model stops for is spoiled and sends nothing, as it would have been at the speech start
+  before; a yes followed by an echo the model talks through goes ahead. The refusal tells the
+  model that the developer interrupted the read-back, to call `prepare_message` again and read the
+  new draft back in full, or that the developer can press Send. The other refusals,
+  `not_read_back` and `not_confirmed`, tell it to read the whole draft back, that a yes from before
+  the read-back did not count, and that the developer can press Send. A late fragment of the
+  original request's transcript, and a transcript of noise after the read-back, do not answer it.
+  Each refused spoken confirmation logs one `live tool refused` line with the tool, the reason and
+  the seconds of voice the gate had counted (codes and numbers only), so the 2 s can be checked
+  against real calls. The gate cannot tell a yes from a cough: it only makes sure that the shape of
+  an answer happened.
 - **The panel is the hard confirmation.** It opens by itself when a draft is waiting: its Send and
   Cancel buttons need no gate. When a spoken yes does send, the panel is told as it is for a press
   of Send: `draft.result` with `ok: true`, then the `draft` update with `null`. The card is not
@@ -353,8 +408,11 @@ none of it.
 
 Every call that reached the Live API logs one line, `live call usage`, with ids and numbers only
 (never what was said, transcribed or sent): `account`, `call_id`, `session_id`, `reason`, `seconds`
-(wall time), `interruptions`, `messages_sent`, then what OpenAI reported, what the gateway
-measured and what the meter billed.
+(wall time), `interruptions`, `false_interruptions`, `messages_sent`, then what OpenAI reported,
+what the gateway measured and what the meter billed. `interruptions` counts the speech over the
+assistant that the model stopped for and the gateway cut off (`flush`; none with
+`LIVE_BARGE_IN=false`), and `false_interruptions` the speech starts over the assistant that it did
+not stop for (see "Playback and barge-in").
 
 What OpenAI reported:
 
@@ -368,8 +426,10 @@ What OpenAI reported:
 What the gateway measured, to show where the time of a call went. Whatever did not happen is `0`;
 a median, a maximum or a latest value with nothing behind it is `null`:
 
-- `discarded_audio_ms`: assistant audio thrown away because the person talked over it (what the
-  gateway still held at the interruption, plus what the model sent during the discard window).
+- `discarded_audio_ms`: assistant audio thrown away because the person talked over it and the model
+  stopped for them (what the gateway still held when that was confirmed, less the quiet it ended
+  with, which said the model had stopped, plus what the model sent during the discard window that
+  followed).
 - `dropped_audio_ms`: audio dropped from the front because the model ran more than 30 s ahead.
 - `starved`, `starved_ms`, `starved_max_ms`: how many times the browser's queue ran dry in the
   middle of a reply because the model's audio came late (gaps of 50 ms or more), the silence that
@@ -400,11 +460,30 @@ service and the model, which the gateway adds nothing to (apart from the detecto
 `starved` (and `starved_max_ms`, the longest stall) agreeing with `browser_underruns` says the
 model's audio was late; a browser that reports more underruns than `starved` lost audio after the
 gateway had sent it on time (the network between them, or the tab). A large `discarded_audio_ms`
-with few `interruptions` is long replies cut off once; many `interruptions` with little speech
-points at echo (`LIVE_BARGE_IN`). For a long call with almost no assistant audio: a `speech_ms` of
-0 says the person never spoke (or the detector never heard them); `speech_ms` with no
-`input_transcripts` says the speech did not reach the service as words; and both present with
-`replies` of 0 say the model did not answer.
+with few `interruptions` is long replies cut off once; many `false_interruptions` are echo or
+noise reaching the detector, which the model talked through and which cost no audio; many
+`interruptions` with little speech still point at echo (`LIVE_BARGE_IN`). For a long call with
+almost no assistant audio: a `speech_ms` of 0 says the person never spoke (or the detector never
+heard them); `speech_ms` with no `input_transcripts` says the speech did not reach the service as
+words; and both present with `replies` of 0 say the model did not answer.
+
+Each speech start over the assistant also logs one `live barge-in` line once it is decided, with
+numbers only:
+
+- `call_id`, and `confirmed`: whether the model stopped for it.
+- `segment_ms`: from the first voice of what the assistant was saying reaching the gateway to the
+  speech start. The browser plays that voice its playout delay later, so the delay is inside it.
+- `start_level`: the mean absolute amplitude (of 32 768) of the 100 ms of loud audio that started
+  the speech. The detector's floor is 400, about -38 dBFS.
+- `wait_ms`: from the speech start to the decision. On a confirmed one the model stopped about
+  500 ms before it, when the silence that confirmed it began; a false one decided at `0` began
+  after the model had already stopped.
+- `voice_ms`: the model's voice that reached the gateway meanwhile. On a false one, a `voice_ms`
+  close to `wait_ms` is a model that talked through it.
+- `discarded_ms`: what the interruption threw away, less the quiet that confirmed it, and `0` for
+  a false one. A confirmed one is written when its discard is over, so this is all of it.
+
+Whatever is undecided when the call ends is written then, as a false one.
 
 What the meter reported (`record()` in `live/meter.py`):
 
@@ -614,6 +693,16 @@ delegates often pays that more than once per answer, which is why the backend is
 session ids to tools: a name that matches several sessions is refused, and the retry is another
 round trip.
 
+A call on a Mac's loudspeaker, voice processing on, had the gateway take speech for an
+interruption 16 times over 19 replies, back when a barge-in cut off at the speech start. Most of
+them were not: the reply timer found the assistant's voice a median 663 ms after such speech
+ended, where the discard window ends and well before a real answer comes (about 1.3 s), so the
+model had talked on, and the gateway had cut the start or the end out of long replies (21.6 s
+discarded at the gateway, on top of what the app flushed) while the captions showed all of it.
+Echo of the assistant's own voice is the likely cause; no line per interruption was logged then to
+prove it, which the `live barge-in` lines now are. That is why a barge-in now waits for the model
+to stop (see "Playback and barge-in").
+
 What makes a call feel slow (a false barge-in, a stall, the backend's round trips, the network
 between the browser and the gateway) cannot be read from the logs a call leaves by default. That
 is what the timings and counters on the usage line, the `working` hint, the browser's `playback`
@@ -638,6 +727,13 @@ apart.
   playout delay and the discard window feel right: `starved` and the browser's `browser_underruns`
   on the usage line say whether the delay was enough. That the audio arrives at exactly real time
   has been seen, but not under load or for long replies.
+- That a model which stops for the person goes quiet soon enough to be confirmed, whether it
+  streams silence or nothing: the `live barge-in` lines' `wait_ms` and `voice_ms` show whether
+  quiet that begins within 1 s of the speech start and lasts 0.5 s fits real interruptions (false
+  ones with `voice_ms` well short of `wait_ms` are a model that stopped too late), whether pauses
+  between its sentences or stalls in its stream pass for stopping (confirmed ones on speech that was
+  not the person's), and whether the onset gate while the assistant is audible keeps echo out and
+  lets a person in (`start_level`, `false_interruptions`); see "Tuning".
 - That the backend passes ids, so that `ambiguous_session` stops coming up, and that it reads "this
   session" as the `on_screen` entry (a few calls with the panel open on a session page show it).
 - The detector's thresholds and the browser's echo cancellation on real microphones and speakers.

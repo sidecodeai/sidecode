@@ -9,6 +9,8 @@ from typing import Any
 
 import pytest
 from websockets.asyncio.server import ServerConnection, serve
+from websockets.datastructures import Headers
+from websockets.http11 import Request, Response
 
 from rc_gateway.live.config import LiveConfig
 from rc_gateway.live.errors import LiveError
@@ -80,6 +82,54 @@ async def test_only_something_that_looks_like_an_error_code_is_logged_from_a_ref
     [record] = [r for r in caplog.records if r.getMessage() == "live session did not start"]
     assert record.fields["error_code"] == "unknown"  # type: ignore[attr-defined]
     assert "ZZ-FREE" not in repr([r.__dict__ for r in caplog.records])
+
+
+REGION_REFUSAL = {
+    "error": {
+        "message": "ZZ-MESSAGE-ZZ Country, region, or territory not supported",
+        "type": "request_forbidden",
+        "param": None,
+        "code": "unsupported_country_region_territory",
+    }
+}
+
+
+@pytest.mark.parametrize(
+    ("body", "logged"),
+    [
+        (json.dumps(REGION_REFUSAL), "unsupported_country_region_territory"),
+        (json.dumps({"error": {"code": "ZZ-FREE TEXT-ZZ, not a code"}}), "unknown"),
+        (json.dumps({"error": "ZZ-MESSAGE-ZZ"}), "unknown"),
+        ("<html>ZZ-MESSAGE-ZZ</html>", "unknown"),
+        ("", "unknown"),
+    ],
+)
+async def test_a_refused_connection_logs_the_error_code_and_nothing_else_of_the_answer(
+    caplog: pytest.LogCaptureFixture, body: str, logged: str
+) -> None:
+    raw = body.encode()
+
+    def refuse(connection: ServerConnection, request: Request) -> Response:
+        headers = Headers(
+            {
+                "Content-Type": "application/json",
+                "Content-Length": str(len(raw)),
+                "X-Request-Id": "ZZ-HEADER-ZZ",
+            }
+        )
+        return Response(403, "Forbidden", headers, raw)
+
+    async with serve(SilentServer().handler, "127.0.0.1", 0, process_request=refuse) as server:
+        config = config_for(server.sockets[0].getsockname()[1])
+        with caplog.at_level(logging.INFO), pytest.raises(LiveError) as refused:
+            await connect_upstream(config, session_config(config))
+    assert refused.value.code == "upstream_refused"
+    ours = [r for r in caplog.records if r.name.startswith("rc_gateway")]
+    [record] = [r for r in ours if r.getMessage() == "live upstream refused the connection"]
+    assert record.fields == {"status": 403, "error_code": logged}  # type: ignore[attr-defined]
+    text = repr([(r.getMessage(), getattr(r, "fields", {})) for r in ours])
+    for secret in ("ZZ-MESSAGE-ZZ", "ZZ-HEADER-ZZ", "ZZ-FREE"):
+        assert secret not in text
 
 
 async def test_a_service_that_closes_instead_of_starting_is_refused() -> None:

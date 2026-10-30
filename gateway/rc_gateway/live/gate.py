@@ -8,7 +8,7 @@ requires the shape of an answer, in this order, for the draft in question:
 2. at least ``READBACK_SECONDS`` of the assistant's voice then arrives (``voice_out``), summed from
    the draft being handed over: the read-back;
 3. the assistant has been silent for at least 0.5 s after the read-back started (the call counts
-   it as speaking until then), and the person's voice then begins (``person_onset``), seen by
+   it as audible until then), and the person's voice then begins (``person_onset``), seen by
    the gateway's own detector on the microphone;
 4. an input transcript arrives after that (``person_transcript``).
 
@@ -18,12 +18,17 @@ again arms it. Voice from before the draft existed (the delegation's acknowledge
 and neither is the silence the service streams between replies.
 
 The person talking while the assistant is speaking, or inside the half second after it, is an
-interjection, and it spoils the draft for voice confirmation: from then on ``refusal`` answers
-``read_back_interrupted`` whatever the assistant says next, until a new draft is handed over
-(``draft_ready``), which starts a fresh sum. The model is told to prepare the message again and read
-the new draft back in full; the panel's Send needs no gate and stays open to the developer. A late
-fragment of the original request's transcript, and noise heard after the read-back, do not answer
-it. The gate stays soft: it cannot tell a yes from a cough.
+interjection when the model stops for them: the call confirms it as it confirms an interruption
+(``barge_in.py``), and only then tells the gate. That spoils the draft for voice confirmation: from
+then on ``refusal`` answers ``read_back_interrupted`` whatever the assistant says next, until a new
+draft is handed over (``draft_ready``), which starts a fresh sum. The model is told to prepare the
+message again and read the new draft back in full; the panel's Send needs no gate and stays open to
+the developer. Speech the model talks through (its own voice coming back through a loudspeaker,
+say), or that begins after it had already stopped, is neither an interjection nor an answer. The
+call holds a confirmation that comes while the model has yet to show which it was until it has,
+so the gate is asked only once an interjection over the yes would have spoiled it. A late fragment
+of the original request's transcript, and noise heard after the read-back, do not answer it. The
+gate stays soft: it cannot tell a yes from a cough.
 """
 
 from __future__ import annotations
@@ -69,11 +74,12 @@ class ConfirmGate:
         if self._voiced >= READBACK_SECONDS - _TOLERANCE:
             self._reading = True
 
-    def person_onset(self, *, assistant_speaking: bool) -> None:
-        """The person began to speak. While the assistant is speaking, that spoils the draft."""
+    def person_onset(self, *, interrupting: bool) -> None:
+        """The person began to speak: after the assistant, or over it in an interruption the model
+        confirmed by stopping for them (``interrupting``), which spoils the draft."""
         if self._draft_id is None:
             return
-        if assistant_speaking:
+        if interrupting:
             self._interrupted = True
             self._voiced = 0.0
             self._reading = False

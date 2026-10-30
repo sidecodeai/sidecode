@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import logging
+import struct
 from pathlib import Path
 from typing import Any
 
@@ -17,14 +18,22 @@ from rc_gateway.live.playback import LEAD_SECONDS, PLAYOUT_DELAY_SECONDS
 
 from .fakes import LOUD, QUIET, FakeBrowser, FakeClock, FakeUpstream, pcm_ms, until
 from .harness import (
+    CUT_IN_FRAMES,
     PATIENT,
     READ_BACK_SECONDS,
     Harness,
+    audio,
     b64,
+    barge_in_lines,
     confirm,
     first,
     function_call,
+    model_stops,
+    model_talks_on,
     person_says,
+    person_speaks,
+    person_stops,
+    person_talks_on,
     prepared,
     read_back,
     read_back_sent,
@@ -317,6 +326,67 @@ async def test_an_acknowledgement_spoken_before_the_draft_does_not_arm_the_gate(
     await h.stop()
 
 
+async def test_a_person_cutting_in_soon_after_an_echo_is_judged_on_a_window_of_their_own(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock()
+    h, draft_id = await prepared(tmp_path, clock)
+    h.upstream.push(audio(pcm_ms(1500)))  # the read-back is being said: its audio runs 1.5 s
+    await until(lambda: h.browser.audio_ms() >= 1500)
+    await person_says(h, None, frames=CUT_IN_FRAMES)  # its echo, which the model talks through
+    clock.advance(0.8)
+    await person_says(h, "Wait, no.", frames=CUT_IN_FRAMES)  # and now the person cuts in
+    # It stopped for them when its audio ran out, 0.7 s later: past the echo's window, inside
+    # theirs. Half a second after that it is cut off, and the draft is spoiled for voice.
+    clock.advance(1.2)
+    await person_talks_on(h)
+    assert len(h.browser.of("flush")) == 1
+    assert (await confirm(h, draft_id, "c2"))["error"] == "read_back_interrupted"
+    await h.stop()
+
+
+async def test_a_spoken_yes_waits_for_speech_over_the_assistant_and_a_wait_it_stops_for_voids_it(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock()
+    h, draft_id = await prepared(tmp_path, clock)
+    await read_back(h, clock)
+    await person_says(h, "Yes.")
+    h.upstream.push(audio(pcm_ms(1000)))  # "Sending it now."
+    await until(lambda: h.browser.audio_ms() >= READ_BACK_SECONDS * 1000 + 1000)
+    clock.advance(0.5)
+    await person_says(h, "Wait!", frames=CUT_IN_FRAMES)  # over it
+    held = asyncio.create_task(confirm(h, draft_id, "c2"))
+    await asyncio.sleep(0.1)
+    # The yes is held until the model shows what the speech over it was.
+    assert not held.done()
+    assert h.rig._requests() == []
+    await model_stops(h)  # it stops for them
+    assert (await held)["error"] == "read_back_interrupted"
+    assert h.rig._requests() == []  # nothing went to the computer
+    await h.stop()
+
+
+async def test_a_spoken_yes_goes_once_the_speech_over_the_assistant_proves_to_be_its_echo(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock()
+    h, draft_id = await prepared(tmp_path, clock)
+    await read_back(h, clock)
+    await person_says(h, "Yes.")
+    h.upstream.push(audio(pcm_ms(1000)))  # "Sending it now."
+    await until(lambda: h.browser.audio_ms() >= READ_BACK_SECONDS * 1000 + 1000)
+    clock.advance(0.5)
+    await person_says(h, None, frames=CUT_IN_FRAMES)  # its own voice coming back
+    sending = asyncio.create_task(confirm(h, draft_id, "c2"))
+    await asyncio.sleep(0.1)
+    assert h.rig._requests() == []  # held until the model shows what that was
+    await model_talks_on(h, clock)  # it talks on through the window
+    await h.rig.answer_device()
+    assert (await sending)["sent"] is True
+    await h.stop()
+
+
 async def test_a_late_fragment_of_the_original_request_is_not_an_answer(tmp_path: Path) -> None:
     clock = FakeClock()
     h, draft_id = await prepared(tmp_path, clock)
@@ -333,10 +403,11 @@ async def test_an_interjection_during_the_read_back_spoils_the_draft_for_voice(
 ) -> None:
     clock = FakeClock()
     h, draft_id = await prepared(tmp_path, clock)
-    # The read-back is being said when the person talks over it.
+    # The read-back is being said when the person talks over it, and the model stops for them.
     h.upstream.push({"type": "session.output_audio.delta", "delta": b64(pcm_ms(200))})
     await until(lambda: h.browser.audio_ms() >= 200)
-    await person_says(h, "Wait, no, tell it something else.")
+    await person_says(h, "Wait, no, tell it something else.", frames=CUT_IN_FRAMES)
+    await model_stops(h)
     assert h.browser.of("flush") != []
     assert (await confirm(h, draft_id, "c2"))["error"] == "read_back_interrupted"
 
@@ -348,17 +419,24 @@ async def test_an_interjection_during_the_read_back_spoils_the_draft_for_voice(
     await h.stop()
 
 
-async def test_echo_or_noise_during_the_read_back_is_an_interjection_that_spoils_the_draft(
+async def test_echo_during_the_read_back_that_the_model_talks_through_spoils_nothing(
     tmp_path: Path,
 ) -> None:
     clock = FakeClock()
     h, draft_id = await prepared(tmp_path, clock)
-    # Loud audio on the microphone while the read-back plays, and a transcript of it.
-    h.upstream.push({"type": "session.output_audio.delta", "delta": b64(pcm_ms(200))})
-    await until(lambda: h.browser.audio_ms() >= 200)
-    await person_says(h, "the assistant's own words, heard again")
-    clock.advance(2)
-    assert (await confirm(h, draft_id, "c2"))["error"] == "read_back_interrupted"
+    # Loud audio on the microphone while the read-back plays, and a transcript of it: its own
+    # voice coming back through the loudspeaker, which the model talks through.
+    h.upstream.push(audio(pcm_ms(1000)))
+    await until(lambda: h.browser.audio_ms() >= 1000)
+    await person_says(h, "the assistant's own words, heard again", frames=CUT_IN_FRAMES)
+    await model_talks_on(h, clock)
+    assert h.browser.of("flush") == []
+    # The read-back was neither cut off nor spoiled: once it has been heard, a yes sends it.
+    clock.advance(3)
+    await person_says(h, "Yes.")
+    sending = asyncio.create_task(confirm(h, draft_id, "c2"))
+    await h.rig.answer_device()
+    assert (await sending)["sent"] is True
     await h.stop()
 
 
@@ -386,7 +464,7 @@ async def test_the_persons_voice_answers_only_after_half_a_second_of_silence(
     await read_back_sent(h, clock)
     # The read-back was sent, is held by the browser for its playout delay and then played: it
     # finishes being heard `silence` seconds before the person speaks. Sooner than half a second
-    # after it, they are talking over it, and that spoils the draft for voice confirmation.
+    # after it, they are talking over its last words, and that is no answer to it.
     clock.advance(READ_BACK_SECONDS - 1.0 + PLAYOUT_DELAY_SECONDS + silence)
     await person_says(h, "Yes.")
     if answers:
@@ -394,28 +472,31 @@ async def test_the_persons_voice_answers_only_after_half_a_second_of_silence(
         await h.rig.answer_device()
         assert (await sending)["sent"] is True
     else:
-        assert (await confirm(h, draft_id, "c2"))["error"] == "read_back_interrupted"
+        assert (await confirm(h, draft_id, "c2"))["error"] == "not_confirmed"
     await h.stop()
 
 
-async def test_a_sound_in_a_pause_between_the_sentences_of_the_read_back_spoils_the_draft(
+async def test_a_sound_in_a_pause_of_the_read_back_that_the_model_talks_on_after_is_no_answer(
     tmp_path: Path,
 ) -> None:
     clock = FakeClock()
     h, draft_id = await prepared(tmp_path, clock)
-    # The first sentence, then a pause of 0.4 s in which the person coughs and the recogniser
-    # writes it down.
+    # The first sentence, then a pause in which the person coughs, 0.4 s into it, and the
+    # recogniser writes it down.
     h.upstream.push({"type": "session.output_audio.delta", "delta": b64(pcm_ms(200))})
     await until(lambda: h.browser.audio_ms() >= 200)
     clock.advance(0.6)
-    await person_says(h, "Mm.")
-    # The cough is over and the second sentence follows, and then the person's yes. Neither is
-    # taken for the answer to a read-back: the cough was an interjection.
-    clock.advance(0.5)
+    await person_says(h, "Mm.", frames=CUT_IN_FRAMES)
+    # The second sentence follows before the pause is half a second long: the model talked on, so
+    # the cough interrupted nothing, and it is not taken for the answer to the read-back either.
+    clock.advance(0.05)
     await read_back(h, clock)
-    assert (await confirm(h, draft_id, "c2"))["error"] == "read_back_interrupted"
+    assert (await confirm(h, draft_id, "c2"))["error"] == "not_confirmed"
+    # The person's yes after the read-back is.
     await person_says(h, "Yes.")
-    assert (await confirm(h, draft_id, "c3"))["error"] == "read_back_interrupted"
+    sending = asyncio.create_task(confirm(h, draft_id, "c3"))
+    await h.rig.answer_device()
+    assert (await sending)["sent"] is True
     await h.stop()
 
 
@@ -438,25 +519,146 @@ async def test_the_button_needs_none_of_this_and_the_cancel_button_forgets_the_a
 # ---- interruption ----
 
 
-async def test_the_person_talking_over_the_assistant_flushes_and_silences_it(
+async def test_the_person_talking_over_the_assistant_flushes_and_silences_it_once_it_stops(
     tmp_path: Path,
 ) -> None:
-    h = await start(tmp_path)
-    h.upstream.push({"type": "session.output_audio.delta", "delta": b64(pcm_ms(3000))})
+    clock = FakeClock()
+    h = await start(tmp_path, clock=clock, config=PATIENT)
+    h.upstream.push(audio(pcm_ms(3000)))
     await until(lambda: h.browser.audio_ms() > 0)
 
-    for _ in range(8):
-        h.browser.mic(LOUD)
-    await until(lambda: bool(h.browser.of("flush")))
+    await person_speaks(h, frames=CUT_IN_FRAMES)
+    # Not yet: until the model shows it heard them, the speech may be its own voice coming back.
+    assert h.browser.of("flush") == []
+    clock.advance(0.3)
+    await model_stops(h)
     assert len(h.browser.of("flush")) == 1
     heard = h.browser.audio_ms()
     assert heard <= (LEAD_SECONDS + 0.2) * 1000
 
-    # What the model says while the person is still talking is not sent.
-    h.upstream.push({"type": "session.output_audio.delta", "delta": b64(pcm_ms(500))})
-    await asyncio.sleep(0.1)
+    # What the model says while the person is still talking is not sent, and nothing is flushed
+    # again.
+    h.upstream.push(audio(pcm_ms(500)))
+    await model_stops(h)
     assert h.browser.audio_ms() == heard
+    assert len(h.browser.of("flush")) == 1
     await h.stop()
+
+
+async def test_a_model_whose_stream_simply_stops_for_the_person_is_cut_off_too(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock()
+    h = await start(tmp_path, clock=clock, config=PATIENT)
+    h.upstream.push(audio(pcm_ms(1000)))  # its audio runs until 1001.0
+    await until(lambda: h.browser.audio_ms() == 1000)
+    clock.advance(0.8)
+    await person_speaks(h, frames=CUT_IN_FRAMES)  # over its last words; then it sends nothing
+    clock.advance(0.69)
+    await person_talks_on(h)
+    assert h.browser.of("flush") == []
+    clock.advance(0.01)
+    await person_talks_on(h)  # half a second since its audio ran out
+    assert len(h.browser.of("flush")) == 1
+    await h.stop()
+
+
+async def test_speech_over_the_assistant_must_be_loud_and_long_to_be_heard_as_speech(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="rc_gateway.live")
+    clock = FakeClock()
+    h = await start(tmp_path, clock=clock, config=PATIENT)
+    h.upstream.push(audio(pcm_ms(3000)))
+    await until(lambda: h.browser.audio_ms() > 0)
+
+    def speakers() -> list[str]:
+        return [message["speaker"] for message in h.browser.of("state")]
+
+    await person_speaks(h)  # 160 ms: speech when the assistant is quiet, not over it
+    clock.advance(0.5)
+    await person_stops(h)
+    sent = len(h.upstream.of("session.input_audio.append"))
+    for _ in range(25):  # half a second at about -32 dBFS: the same
+        h.browser.mic(struct.pack("<h", 800) * 480)
+    await until(lambda: len(h.upstream.of("session.input_audio.append")) == sent + 25)
+    assert "user" not in speakers()
+    clock.advance(0.5)
+    await person_speaks(h, frames=CUT_IN_FRAMES)
+    assert speakers()[-1] == "user"
+    h.browser.command(type="hangup")
+    await h.finished()
+    # Only the last was taken for a possible interruption.
+    assert len(barge_in_lines(caplog)) == 1
+
+
+async def test_speech_over_an_assistant_that_talks_on_flushes_and_discards_nothing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="rc_gateway.live")
+    clock = FakeClock()
+    h = await start(tmp_path, clock=clock, config=PATIENT)
+    h.upstream.push(audio(pcm_ms(1000)))
+    await until(lambda: h.browser.audio_ms() == 1000)
+    clock.advance(0.6)
+    await person_speaks(h, frames=CUT_IN_FRAMES)  # its own voice through the loudspeaker, say
+    await model_talks_on(h, clock, seconds=1.0)  # through the window
+    clock.advance(0.1)  # and on past it
+    await person_stops(h)
+    assert h.browser.of("flush") == []
+    assert h.browser.audio_ms() == 2000  # every word of it reached the browser
+    h.browser.command(type="hangup")
+    await h.finished()
+    [record] = usage_records(caplog)
+    assert (record["interruptions"], record["false_interruptions"]) == (0, 1)
+    assert record["discarded_audio_ms"] == 0
+    # Decided as the window closed with the model still talking.
+    assert barge_in_lines(caplog) == [
+        {
+            "call_id": h.call.call_id,
+            "confirmed": False,
+            "segment_ms": 600,
+            "start_level": 4000,
+            "wait_ms": 1100,
+            "voice_ms": 1000,
+            "discarded_ms": 0,
+        }
+    ]
+
+
+async def test_an_interruption_leaves_its_line_once_its_discard_is_over(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="rc_gateway.live")
+    clock = FakeClock()
+    h = await start(tmp_path, clock=clock, config=PATIENT)
+    h.upstream.push(audio(pcm_ms(1000)))
+    await until(lambda: h.browser.audio_ms() == 1000)
+    clock.advance(0.6)
+    await person_speaks(h, frames=CUT_IN_FRAMES)
+    clock.advance(0.2)
+    await model_stops(h)  # its quiet was still held: dropped with the flush, and not counted
+    h.upstream.push(audio(pcm_ms(300)))  # what it says while the person talks: thrown away
+    await h.upstream.settled()
+    assert barge_in_lines(caplog) == []  # the discard is still running
+    clock.advance(1.0)
+    await person_stops(h)
+    assert barge_in_lines(caplog) == [
+        {
+            "call_id": h.call.call_id,
+            "confirmed": True,
+            "segment_ms": 600,
+            "start_level": 4000,
+            "wait_ms": 200,
+            "voice_ms": 0,
+            "discarded_ms": 300,
+        }
+    ]
+    h.browser.command(type="hangup")
+    await h.finished()
+    [record] = usage_records(caplog)
+    assert (record["interruptions"], record["false_interruptions"]) == (1, 0)
+    assert record["discarded_audio_ms"] == 300
 
 
 async def test_the_assistant_is_heard_again_once_the_person_stops(tmp_path: Path) -> None:
@@ -464,13 +666,12 @@ async def test_the_assistant_is_heard_again_once_the_person_stops(tmp_path: Path
     h = await start(tmp_path, clock=clock)
     h.upstream.push({"type": "session.output_audio.delta", "delta": b64(pcm_ms(2000))})
     await until(lambda: h.browser.audio_ms() > 0)
-    for _ in range(8):
-        h.browser.mic(LOUD)
-    await until(lambda: bool(h.browser.of("flush")))
+    await person_speaks(h, frames=CUT_IN_FRAMES)
+    await model_stops(h)
+    assert h.browser.of("flush") != []
 
     clock.advance(1.0)
-    h.browser.mic(QUIET)
-    await until(lambda: len(h.upstream.of("session.input_audio.append")) == 9)
+    await person_stops(h)
     h.upstream.push({"type": "session.output_audio.delta", "delta": b64(pcm_ms(40))})
     await until(lambda: h.call._playback.audible())
     await h.stop()
@@ -481,6 +682,7 @@ async def test_speech_while_the_assistant_is_quiet_interrupts_nothing(tmp_path: 
     for _ in range(8):
         h.browser.mic(LOUD)
     await until(lambda: len(h.upstream.of("session.input_audio.append")) == 8)
+    await model_stops(h)
     assert h.browser.of("flush") == []
     await h.stop()
 
@@ -493,8 +695,9 @@ async def test_with_barge_in_off_the_assistant_is_never_cut_off(tmp_path: Path) 
     for _ in range(8):
         h.browser.mic(LOUD)
     await until(lambda: len(h.upstream.of("session.input_audio.append")) == 8)
+    await model_stops(h)  # not even when the model stops for them
     assert h.browser.of("flush") == []
-    await until(lambda: h.browser.audio_ms() == 1000, timeout=3)
+    await until(lambda: h.browser.audio_ms() == 1500, timeout=3)
     await h.stop()
 
 
@@ -1044,6 +1247,7 @@ async def test_one_usage_line_carries_ids_seconds_and_what_openai_reported(
         "reason",
         "seconds",
         "interruptions",
+        "false_interruptions",
         "messages_sent",
         "voice_seconds",
         "usage_final",
@@ -1083,6 +1287,7 @@ async def test_one_usage_line_carries_ids_seconds_and_what_openai_reported(
     assert record["seconds"] >= 0
     # A call in which none of it happened says so in numbers: zero where something is counted, and
     # null where there is nothing to take a median or a latest value of.
+    assert [record[name] for name in ("interruptions", "false_interruptions")] == [0, 0]
     assert [record[name] for name in ("discarded_audio_ms", "dropped_audio_ms")] == [0, 0]
     assert [record[name] for name in ("starved", "starved_ms", "replies")] == [0, 0, 0]
     nothing = ("reply_ms_median", "reply_ms_max", "backend_ms_median", "backend_ms_max")

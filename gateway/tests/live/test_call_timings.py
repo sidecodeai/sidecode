@@ -12,13 +12,15 @@ import pytest
 from rc_gateway.live.config import LiveConfig
 from rc_gateway.live.stats import REPLY_WINDOW_SECONDS
 
-from .fakes import LOUD, QUIET, FakeClock, pcm_ms, until
+from .fakes import QUIET, FakeClock, pcm_ms, until
 from .harness import (
+    CUT_IN_FRAMES,
     PATIENT,
     Harness,
     audio,
     backend_event,
     function_call,
+    model_stops,
     person_speaks,
     person_stops,
     start,
@@ -67,13 +69,14 @@ async def test_audio_cut_off_by_an_interruption_is_counted_as_discarded(
     h = await start(tmp_path, clock=FakeClock(), config=PATIENT)
     h.upstream.push(audio(pcm_ms(3000)))
     await until(lambda: h.browser.audio_ms() >= FIRST_LEAD_MS)
-    for _ in range(8):
-        h.browser.mic(LOUD)
-    await until(lambda: bool(h.browser.of("flush")))
+    await person_speaks(h, frames=CUT_IN_FRAMES)
+    await model_stops(h)  # its quiet queues behind what is still held
+    assert h.browser.of("flush") != []
     h.upstream.push(audio(pcm_ms(500)))  # said while the person is talking: thrown away
     await h.upstream.settled()
     record = await hang_up(h, caplog)
     assert record["interruptions"] == 1
+    # What was still held and what came after, but not the quiet that said it stopped.
     assert record["discarded_audio_ms"] == (3000 - FIRST_LEAD_MS) + 500
     assert (record["dropped_audio_ms"], record["starved"]) == (0, 0)
 
@@ -111,7 +114,8 @@ async def test_the_first_word_is_timed_from_the_end_of_the_persons_speech(
     h.upstream.push(audio(pcm_ms(200)))
     await until(lambda: h.browser.audio_ms() >= 400)
 
-    await person_speaks(h)
+    await person_speaks(h, frames=CUT_IN_FRAMES)  # over it, and it stops for them
+    await model_stops(h)
     clock.advance(0.5)
     await person_stops(h)
     clock.advance(2.1)
@@ -166,7 +170,7 @@ async def test_an_assistant_that_is_still_speaking_when_the_person_stops_is_not_
     h = await start(tmp_path, clock=clock, config=config)
     h.upstream.push(audio(pcm_ms(3000)))
     await until(lambda: h.browser.audio_ms() >= FIRST_LEAD_MS)
-    await person_speaks(h)  # talking over it, and it does not stop
+    await person_speaks(h, frames=CUT_IN_FRAMES)  # talking over it, and it does not stop
     clock.advance(0.5)
     await person_stops(h)
     clock.advance(0.2)

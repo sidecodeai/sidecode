@@ -15,6 +15,7 @@ from starlette.testclient import WebSocketTestSession
 
 from rc_gateway.app import create_app
 from rc_gateway.auth import SESSION_COOKIE_NAME
+from rc_gateway.live.barge_in import YIELD_SILENCE_SECONDS
 from rc_gateway.live.service import LiveService
 from rc_gateway.state import GatewayState
 
@@ -318,7 +319,7 @@ def test_the_working_hint_the_session_on_screen_and_the_players_counters_travel_
     assert record["replies"] == 0
 
 
-def test_the_person_talking_over_the_assistant_flushes_the_browser(
+def test_the_person_talking_over_the_assistant_flushes_the_browser_once_it_stops(
     live: TestClient, admin: dict[str, str], server: FakeLiveServer
 ) -> None:
     with live.websocket_connect("/ws/live", headers=admin) as ws:
@@ -326,9 +327,13 @@ def test_the_person_talking_over_the_assistant_flushes_the_browser(
         wire.until("ready")
         server.push({"type": "session.output_audio.delta", "delta": b64(pcm_ms(4000))})
         wire.until_audio(1920)
-        wire.send_audio(LOUD, 10)
+        wire.send_audio(LOUD, 16)  # long and loud enough to be speech over the assistant
+        while wire.until("state")["speaker"] != "user":
+            pass
+        # The gateway has heard them; the model stops for them and streams silence.
+        silence = pcm_ms(round(YIELD_SILENCE_SECONDS * 1000), level=0)
+        server.push({"type": "session.output_audio.delta", "delta": b64(silence)})
         wire.until("flush")
-        assert wire.until("state")["speaker"] in {"assistant", "user"}
         ws.send_json({"type": "hangup"})
         wire.until("ended")
 

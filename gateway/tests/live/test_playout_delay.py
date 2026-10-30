@@ -21,9 +21,11 @@ from rc_gateway.live.config import LiveConfig
 
 from .fakes import FakeClock, pcm_ms, until
 from .harness import (
+    CUT_IN_FRAMES,
     PATIENT,
     Harness,
     audio,
+    barge_in_lines,
     confirm,
     person_says,
     person_speaks,
@@ -76,18 +78,25 @@ async def test_the_state_says_assistant_until_the_browser_has_played_the_voice(
 
 
 @pytest.mark.parametrize(("delay_ms", "after", "heard"), TIMELINE)
-async def test_a_person_speaking_while_the_browser_is_still_playing_the_voice_interrupts_it(
-    tmp_path: Path, delay_ms: int | None, after: float, heard: bool
+async def test_a_person_speaking_while_the_browser_is_still_playing_the_voice_may_interrupt_it(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    delay_ms: int | None,
+    after: float,
+    heard: bool,
 ) -> None:
+    caplog.set_level(logging.INFO, logger="rc_gateway.live")
     clock = FakeClock()
     h = await start(tmp_path, clock=clock, config=PATIENT)
     report(h, delay_ms)
     await voice_sent(h)  # all of it went to the browser: nothing is held back
     clock.advance(after)
-    await person_speaks(h)
-    assert bool(h.browser.of("flush")) is heard
-    assert h.call._playback.interruptions == int(heard)
-    await h.stop()
+    await person_speaks(h, frames=CUT_IN_FRAMES)
+    h.browser.command(type="hangup")
+    await h.finished()  # whatever was suspected is written down by the end of the call
+    # Only speech begun while the voice was still being heard is taken for a possible
+    # interruption, and each one leaves its line.
+    assert len(barge_in_lines(caplog)) == int(heard)
 
 
 #: The same, for a read-back of 2.2 s: `after` counts from when the clock stands 1 s into it, which
@@ -113,8 +122,8 @@ async def test_the_confirm_gate_counts_the_voice_as_heard_until_the_browser_has_
     clock.advance(after)
     await person_says(h, "Yes.")
     if heard:
-        # They spoke while it was still being read: an interjection, not an answer to it.
-        assert (await confirm(h, draft_id, "c2"))["error"] == "read_back_interrupted"
+        # They spoke while it was still being heard: no answer to it.
+        assert (await confirm(h, draft_id, "c2"))["error"] == "not_confirmed"
     else:
         sending = asyncio.create_task(confirm(h, draft_id, "c2"))
         await h.rig.answer_device()
@@ -161,7 +170,7 @@ async def test_an_assistant_the_browser_is_still_playing_is_not_timed_as_answeri
     report(h, delay_ms)
     await voice_sent(h)  # heard until 1.1 s with the assumed delay, until 0.7 s with none
     clock.advance(0.3)
-    await person_speaks(h)  # over it, which nothing cuts off
+    await person_speaks(h, frames=CUT_IN_FRAMES)  # over it, which nothing cuts off
     clock.advance(0.5)  # 0.8 s after the voice was sent
     await person_stops(h)
     clock.advance(0.7)

@@ -12,15 +12,31 @@ from typing import Any
 
 import pytest
 
+from rc_gateway.live.barge_in import YIELD_SILENCE_SECONDS
 from rc_gateway.live.call import LiveCall
 from rc_gateway.live.config import LiveConfig
+from rc_gateway.live.vad import OVER_ASSISTANT_ONSET_MS
 
-from .fakes import LOUD, QUIET, FakeBrowser, FakeClock, FakeUpstream, pcm_ms, until
+from .fakes import (
+    LOUD,
+    QUIET,
+    FakeBrowser,
+    FakeClock,
+    FakeUpstream,
+    noise_floor_ms,
+    pcm_ms,
+    until,
+)
 from .rig import MINE, LiveRig, live_rig
 
 CONFIG = LiveConfig(api_key="k", idle_seconds=60, max_call_seconds=600)
 #: Never idle within the test: only the hard cap or the service's own expiry can end it.
 PATIENT = LiveConfig(api_key="k", idle_seconds=10_000, max_call_seconds=600)
+#: Loud microphone frames of 20 ms the person says something with: enough to begin speech while
+#: the assistant is quiet (``ONSET_MS``), and not while it is audible.
+SPEECH_FRAMES = 8
+#: Enough to begin speech over the assistant too (``OVER_ASSISTANT_ONSET_MS``), and a little more.
+CUT_IN_FRAMES = round(OVER_ASSISTANT_ONSET_MS / 20) + 1
 
 
 @dataclass
@@ -170,25 +186,25 @@ async def read_back(h: Harness, clock: FakeClock) -> None:
     clock.advance(3)
 
 
-async def person_says(h: Harness, transcript: str | None) -> None:
+async def person_says(h: Harness, transcript: str | None, *, frames: int = SPEECH_FRAMES) -> None:
     """The person speaks (the detector hears it), and the words are transcribed."""
     sent = len(h.upstream.of("session.input_audio.append"))
     h.browser.mic(QUIET)  # the microphone never stops: this is what ends an earlier utterance
-    for _ in range(8):
+    for _ in range(frames):
         h.browser.mic(LOUD)
-    await until(lambda: len(h.upstream.of("session.input_audio.append")) == sent + 9)
+    await until(lambda: len(h.upstream.of("session.input_audio.append")) == sent + 1 + frames)
     if transcript is not None:
         h.upstream.push({"type": "session.input_transcript.delta", "delta": transcript})
         await h.upstream.settled()
 
 
-async def person_speaks(h: Harness) -> None:
+async def person_speaks(h: Harness, *, frames: int = SPEECH_FRAMES) -> None:
     """Loud microphone frames long enough for speech to begin, all at the clock's current time."""
     sent = len(h.upstream.of("session.input_audio.append"))
     h.browser.mic(QUIET)
-    for _ in range(8):
+    for _ in range(frames):
         h.browser.mic(LOUD)
-    await until(lambda: len(h.upstream.of("session.input_audio.append")) == sent + 9)
+    await until(lambda: len(h.upstream.of("session.input_audio.append")) == sent + 1 + frames)
 
 
 async def person_stops(h: Harness) -> None:
@@ -196,3 +212,34 @@ async def person_stops(h: Harness) -> None:
     sent = len(h.upstream.of("session.input_audio.append"))
     h.browser.mic(QUIET)
     await until(lambda: len(h.upstream.of("session.input_audio.append")) == sent + 1)
+
+
+async def person_talks_on(h: Harness) -> None:
+    """One more loud frame of the person's speech, at the clock's current time."""
+    sent = len(h.upstream.of("session.input_audio.append"))
+    h.browser.mic(LOUD)
+    await until(lambda: len(h.upstream.of("session.input_audio.append")) == sent + 1)
+
+
+async def model_stops(h: Harness) -> None:
+    """The model stops talking, as it does for a person it hears: its stream goes on quiet, as
+    much of it as says it stopped."""
+    h.upstream.push(audio(noise_floor_ms(round(YIELD_SILENCE_SECONDS * 1000))))
+    await h.upstream.settled()
+
+
+async def model_talks_on(h: Harness, clock: FakeClock, seconds: float = 1.2) -> None:
+    """The model goes on talking, at the pace the service streams it: 100 ms every 100 ms."""
+    for _ in range(round(seconds * 10)):
+        clock.advance(0.1)
+        h.upstream.push(audio(pcm_ms(100)))
+        await h.upstream.settled()
+
+
+def barge_in_lines(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
+    """The line each speech start over the assistant left, once decided."""
+    return [
+        r.fields  # type: ignore[attr-defined]
+        for r in caplog.records
+        if r.getMessage() == "live barge-in"
+    ]

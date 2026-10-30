@@ -31,6 +31,12 @@ def pcm_ms(milliseconds: int, level: int = 1000) -> bytes:
     return struct.pack("<h", level) * (SAMPLE_RATE * milliseconds // 1000)
 
 
+def noise_floor_ms(milliseconds: int, level: int = 100) -> bytes:
+    """The model's quiet as a real stream carries it: ``milliseconds`` of a faint hiss (samples of
+    ``level``, alternating in sign, about -50 dBFS), under what the gateway takes for its voice."""
+    return struct.pack("<hh", level, -level) * (SAMPLE_RATE * milliseconds // 2000)
+
+
 class FakeClock:
     """A clock a test moves by hand, so limits can be crossed without waiting for them."""
 

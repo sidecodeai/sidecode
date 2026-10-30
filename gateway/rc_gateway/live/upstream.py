@@ -97,7 +97,11 @@ async def connect_upstream(
             logger=_WIRE_LOGGER,
         )
     except InvalidStatus as exc:
-        log.warning("live upstream refused the connection", status=exc.response.status_code)
+        log.warning(
+            "live upstream refused the connection",
+            status=exc.response.status_code,
+            error_code=_refusal_code(exc.response.body),
+        )
         raise LiveError("upstream_refused", "the voice service refused the call") from exc
     except (OSError, WebSocketException, TimeoutError) as exc:
         log.warning("live upstream unreachable", error=type(exc).__name__)
@@ -114,6 +118,17 @@ async def connect_upstream(
         await upstream.close()
         raise
     return upstream, started
+
+
+def _refusal_code(body: bytes | bytearray) -> str:
+    """The error code in the JSON body of a refused connection, if it looks like one. Nothing else
+    is taken from the answer: not its message, and none of its headers."""
+    try:
+        answer = json.loads(body)
+    except (ValueError, RecursionError):
+        return safe_code(None)
+    error = answer.get("error") if isinstance(answer, dict) else None
+    return safe_code(error.get("code") if isinstance(error, dict) else None)
 
 
 async def _await_started(upstream: UpstreamLink) -> dict[str, Any]:

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from collections.abc import Callable
 
 import pytest
 
 from rc_gateway.live.audio import MAX_FRAME_BYTES, MIN_FRAME_BYTES, MicFrameGate, mean_abs
+from rc_gateway.live.barge_in import CONFIRM_WINDOW_SECONDS, YIELD_SILENCE_SECONDS, BargeIn
 from rc_gateway.live.errors import LiveError
 from rc_gateway.live.playback import (
     FRAME_BYTES,
@@ -22,7 +25,7 @@ from rc_gateway.live.playback import (
 )
 
 from .fakes import FRAME_BYTES as MIC_FRAME_BYTES
-from .fakes import LOUD, QUIET, FakeClock, pcm_ms, until
+from .fakes import LOUD, QUIET, FakeClock, noise_floor_ms, pcm_ms, until
 
 BYTES_PER_SECOND = 48_000
 
@@ -287,6 +290,376 @@ async def test_frames_already_taken_are_not_sent_after_an_interruption() -> None
     # At most the frame that was already being written when the interruption came.
     assert len(sent) <= at_flush + 1
     assert flushed_after == [at_flush]
+
+
+# ---- a speech start over the assistant, and what the model shows it was ----
+
+
+def barge_in_for(
+    playback: Playback, clock: FakeClock, *, flush: bool = True, told: list[float] | None = None
+) -> BargeIn:
+    """The barge-in rules over ``playback``; ``told`` notes when an interjection was confirmed."""
+    noted = told if told is not None else []
+    return BargeIn(
+        playback,
+        call_id="call",
+        flush=flush,
+        interjection=lambda: noted.append(clock.now),
+        clock=clock,
+    )
+
+
+def suspected(
+    clock: FakeClock, sink: Sink, *, flush: bool = True, told: list[float] | None = None
+) -> tuple[Playback, BargeIn]:
+    """The assistant speaking (its audio runs until 1000.4), and speech begun over it at 1000.0."""
+    playback = Playback(sink.frame, sink.flush, clock=clock)
+    barge_in = barge_in_for(playback, clock, flush=flush, told=told)
+    playback.add(pcm_ms(400))
+    assert barge_in.person_began(4000.0)
+    return playback, barge_in
+
+
+def test_the_model_has_a_second_to_go_quiet_for_half_a_second() -> None:
+    assert (CONFIRM_WINDOW_SECONDS, YIELD_SILENCE_SECONDS) == (1.0, 0.5)
+
+
+async def test_a_model_that_talks_on_through_the_window_was_not_interrupted() -> None:
+    clock, sink = FakeClock(), Sink()
+    told: list[float] = []
+    playback, barge_in = suspected(clock, sink, told=told)
+    for _ in range(12):  # 100 ms of voice every 100 ms, as the service streams it
+        clock.advance(0.1)
+        playback.add(pcm_ms(100))
+        assert await barge_in.settle() is False
+    assert sink.flushes == 0
+    assert (playback.interruptions, playback.discarded_bytes) == (0, 0)
+    assert (barge_in.false_interruptions, told) == (1, [])
+    assert playback.pacer.held_bytes == 1600 * 48  # every word of it kept for the browser
+
+
+async def test_a_model_that_goes_quiet_for_the_person_is_cut_off_once() -> None:
+    clock, sink = FakeClock(), Sink()
+    told: list[float] = []
+    playback, barge_in = suspected(clock, sink, told=told)
+    clock.advance(0.2)
+    playback.add(pcm_ms(200))  # it talks on while it takes them in
+    assert await barge_in.settle() is False
+    for _ in range(4):  # then stops: 100 ms of its quiet every 100 ms
+        clock.advance(0.1)
+        playback.add(noise_floor_ms(100))
+        assert await barge_in.settle() is False
+    # Nothing was flushed or thrown away while it was only suspected.
+    assert (sink.flushes, playback.discarded_bytes) == (0, 0)
+    clock.advance(0.1)
+    playback.add(noise_floor_ms(100))  # half a second of it
+    assert await barge_in.settle() is True
+    assert (sink.flushes, playback.interruptions, told) == (1, 1, [clock.now])
+    # All it still held, as an interruption drops, but for the quiet that said it stopped.
+    assert playback.discarded_bytes == 600 * 48
+    for _ in range(10):
+        clock.advance(0.1)
+        playback.add(noise_floor_ms(100))
+        assert await barge_in.settle() is False
+    assert sink.flushes == 1
+    assert barge_in.false_interruptions == 0
+
+
+@pytest.mark.parametrize(
+    ("stops_at", "confirmed"),
+    [(0.4, True), (CONFIRM_WINDOW_SECONDS, True), (CONFIRM_WINDOW_SECONDS + 0.01, False)],
+)
+async def test_a_model_that_goes_quiet_inside_the_window_is_confirmed_half_a_second_later(
+    stops_at: float, confirmed: bool
+) -> None:
+    clock, sink = FakeClock(), Sink()
+    playback, barge_in = suspected(clock, sink)
+    # It talks on until `stops_at` after the speech start, and then sends nothing at all.
+    playback.add(pcm_ms(round((stops_at - 0.4) * 1000)))
+    clock.now = 1000.0 + stops_at + YIELD_SILENCE_SECONDS - 0.01
+    assert await barge_in.settle() is False
+    clock.now = 1000.0 + stops_at + YIELD_SILENCE_SECONDS
+    assert await barge_in.settle() is confirmed
+    assert (sink.flushes, playback.interruptions) == (int(confirmed), int(confirmed))
+    assert barge_in.false_interruptions == int(not confirmed)
+
+
+@pytest.mark.parametrize("quiet", [noise_floor_ms, lambda ms: pcm_ms(ms, level=0)])
+@pytest.mark.parametrize(("quiet_ms", "confirmed"), [(400, False), (480, False), (500, True)])
+async def test_half_a_second_of_quiet_says_the_model_stopped_and_a_pause_does_not(
+    quiet: Callable[[int], bytes], quiet_ms: int, confirmed: bool
+) -> None:
+    clock, sink = FakeClock(), Sink()
+    playback, barge_in = suspected(clock, sink)
+    clock.advance(0.1)
+    playback.add(quiet(quiet_ms))
+    assert await barge_in.settle() is confirmed
+    # After a pause between its sentences it talks on, through the window.
+    clock.advance(0.1)
+    playback.add(pcm_ms(100))
+    clock.advance(1.0)
+    playback.add(pcm_ms(100))
+    assert await barge_in.settle() is False
+    assert sink.flushes == int(confirmed)
+    assert barge_in.false_interruptions == int(not confirmed)
+
+
+async def test_a_speech_start_after_the_model_had_stopped_cuts_off_nothing() -> None:
+    clock, sink = FakeClock(), Sink()
+    playback = Playback(sink.frame, sink.flush, clock=clock)
+    barge_in = barge_in_for(playback, clock)
+    playback.add(pcm_ms(400) + noise_floor_ms(500))  # its reply, and the quiet after it
+    assert playback.audible()  # its last words are still to be heard
+    # Decided at once: there is nothing left for it to stop, and the browser plays its last words.
+    assert barge_in.person_began(4000.0)
+    assert barge_in.false_interruptions == 1
+    assert await barge_in.settle() is False
+    assert (sink.flushes, playback.discarded_bytes) == (0, 0)
+
+
+async def test_audio_sent_ahead_of_time_is_no_gap_however_long_after_it_came() -> None:
+    clock, sink = FakeClock(), Sink()
+    playback, barge_in = suspected(clock, sink)
+    playback.add(pcm_ms(1500))  # sent at once: its audio runs until 1001.9
+    clock.now = 1001.0
+    assert await barge_in.settle() is False
+    assert barge_in.false_interruptions == 0
+
+
+async def test_a_speech_start_after_the_stream_had_stopped_cuts_off_nothing() -> None:
+    clock, sink = FakeClock(), Sink()
+    playback = Playback(sink.frame, sink.flush, clock=clock)
+    barge_in = barge_in_for(playback, clock)
+    playback.add(pcm_ms(400))  # its reply, and then nothing at all
+    clock.advance(0.4 + YIELD_SILENCE_SECONDS)
+    assert playback.audible()  # its last words are still to be heard
+    assert barge_in.person_began(4000.0)
+    assert await barge_in.settle() is False
+    assert (sink.flushes, barge_in.false_interruptions) == (0, 1)
+
+
+async def test_speech_while_the_assistant_is_not_audible_is_not_suspected() -> None:
+    clock, sink = FakeClock(), Sink()
+    playback = Playback(sink.frame, sink.flush, clock=clock)
+    barge_in = barge_in_for(playback, clock)
+    playback.add(noise_floor_ms(500))  # quiet only
+    assert barge_in.person_began(4000.0) is False
+    playback.add(noise_floor_ms(500))
+    assert await barge_in.settle() is False
+    assert (sink.flushes, barge_in.false_interruptions) == (0, 0)
+
+
+async def test_with_barge_in_off_a_confirmed_interruption_cuts_off_nothing() -> None:
+    clock, sink = FakeClock(), Sink()
+    told: list[float] = []
+    playback, barge_in = suspected(clock, sink, flush=False, told=told)
+    playback.add(noise_floor_ms(500))
+    # Still confirmed, and the read-back gate is told, but nothing is flushed or discarded.
+    assert await barge_in.settle() is True
+    assert told == [clock.now]
+    assert (sink.flushes, playback.interruptions, playback.discarded_bytes) == (0, 0, 0)
+
+
+async def test_a_new_speech_start_before_the_last_is_decided_gets_a_window_of_its_own() -> None:
+    clock, sink = FakeClock(), Sink()
+    told: list[float] = []
+    playback, barge_in = suspected(clock, sink, told=told)
+    playback.add(pcm_ms(1000))  # it talks on: its audio runs until 1001.4
+    clock.now = 1000.8
+    assert await barge_in.settle() is False
+    assert barge_in.person_began(4000.0)  # the person, this time
+    assert barge_in.false_interruptions == 1  # the first is given up as false
+    # It stops for them at 1001.4, past the first speech start's window, inside the second's.
+    clock.now = 1001.4 + YIELD_SILENCE_SECONDS
+    assert await barge_in.settle() is True
+    assert (sink.flushes, told) == (1, [clock.now])
+    assert barge_in.false_interruptions == 1
+
+
+async def test_a_wait_for_the_verdict_ends_with_it_and_after_the_gate_was_told() -> None:
+    clock, sink = FakeClock(), Sink()
+    told: list[float] = []
+    playback, barge_in = suspected(clock, sink, told=told)
+    seen: list[list[float]] = []
+
+    async def wait() -> None:
+        await barge_in.settled()
+        seen.append(list(told))
+
+    waiting = asyncio.create_task(wait())
+    await asyncio.sleep(0.01)
+    assert not waiting.done()
+    # A second speech start takes the first one's place: still undecided.
+    clock.advance(0.3)
+    playback.add(pcm_ms(100))
+    assert barge_in.person_began(4000.0)
+    await asyncio.sleep(0.01)
+    assert not waiting.done()
+    playback.add(noise_floor_ms(500))
+    assert await barge_in.settle() is True
+    await asyncio.wait_for(waiting, 1)
+    assert seen == [[clock.now]]
+
+
+async def test_a_wait_for_the_verdict_on_speech_the_model_talks_through_tells_no_one() -> None:
+    clock, sink = FakeClock(), Sink()
+    told: list[float] = []
+    playback, barge_in = suspected(clock, sink, told=told)
+    waiting = asyncio.create_task(barge_in.settled())
+    playback.add(pcm_ms(1200))  # it talks on: its audio runs until 1001.6
+    clock.now = 1001.2
+    playback.add(pcm_ms(100))
+    assert await barge_in.settle() is False
+    await asyncio.wait_for(waiting, 1)
+    assert told == []
+    await asyncio.wait_for(barge_in.settled(), 1)  # nothing waits to be decided: no wait at all
+
+
+# ---- a speech start over the assistant, and the discard windows ----
+
+
+async def test_once_confirmed_the_discard_runs_as_before_from_the_confirmation() -> None:
+    clock, sink = FakeClock(), Sink()
+    playback, barge_in = suspected(clock, sink)
+    clock.advance(0.6)
+    playback.add(noise_floor_ms(500))
+    assert await barge_in.settle() is True  # 0.6 s after the speech start
+    confirmed_at = clock.now
+    # The person talks on: their speech keeps the model's audio discarded, for as long as the cap
+    # allows from the confirmation (which is past the cap from the speech start).
+    while clock.now < confirmed_at + SUPPRESS_CAP_SECONDS - 0.1:
+        clock.advance(0.1)
+        playback.person_speaking()
+        playback.add(pcm_ms(100))
+        assert not playback.audible()
+    # And a new speech start meanwhile is not suspected: nothing is audible to interrupt.
+    assert barge_in.person_began(4000.0) is False
+    clock.advance(SUPPRESS_HOLD_SECONDS + 0.2)
+    playback.add(pcm_ms(100))
+    assert playback.audible()
+    assert sink.flushes == 1
+
+
+async def test_a_new_speech_start_soon_after_an_interruption_discards_nothing_until_confirmed() -> (
+    None
+):
+    clock, sink = FakeClock(), Sink()
+    playback, barge_in = suspected(clock, sink)
+    playback.add(noise_floor_ms(500))
+    assert await barge_in.settle() is True
+    discarded = playback.discarded_bytes
+    # The person stops, the discard lapses, and the model answers them...
+    clock.advance(SUPPRESS_HOLD_SECONDS + 0.1)
+    playback.add(pcm_ms(400))
+    # ...and well inside the first interruption's cap, its own voice starts the detector's speech
+    # again, which goes on for every frame the call reports.
+    assert barge_in.person_began(4000.0)
+    for _ in range(5):
+        playback.person_speaking()
+        clock.advance(0.1)
+        playback.add(pcm_ms(100))
+        assert await barge_in.settle() is False
+    # What the model says meanwhile is taken in, not thrown away on the old interruption's account.
+    assert playback.discarded_bytes == discarded
+    assert playback.pacer.held_bytes == 900 * 48
+    assert sink.flushes == 1
+
+
+def test_clearing_cuts_the_stream_off_where_its_audio_is_dropped() -> None:
+    pacer = OutputPacer()
+    pacer.add(pcm_ms(5000), 0.0)  # far ahead of real time: its audio would run until 5.0
+    pacer.clear(1.0)
+    # Nothing came after the audio that was dropped at 1.0: the model has been quiet since.
+    assert pacer.quiet_bytes(1.6) == 600 * 48
+
+
+# ---- what each speech start over the assistant leaves in the log ----
+
+
+def barge_in_lines(caplog: pytest.LogCaptureFixture) -> list[dict[str, object]]:
+    return [
+        r.fields  # type: ignore[attr-defined]
+        for r in caplog.records
+        if r.getMessage() == "live barge-in"
+    ]
+
+
+async def test_a_false_interruption_is_written_down_when_it_is_decided(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="rc_gateway.live.barge_in")
+    clock, sink = FakeClock(), Sink()
+    clock.advance(0.25)
+    playback, barge_in = suspected(clock, sink)
+    playback.add(pcm_ms(1500))  # it talks on: its audio runs until 1002.15
+    clock.advance(1.5)
+    playback.add(pcm_ms(100))
+    await barge_in.settle()
+    assert barge_in_lines(caplog) == [
+        {
+            "call_id": "call",
+            "confirmed": False,
+            "segment_ms": 0,
+            "start_level": 4000,
+            "wait_ms": 1500,
+            "voice_ms": 1600,
+            "discarded_ms": 0,
+        }
+    ]
+
+
+async def test_an_interruption_is_written_down_with_all_it_discarded_once_that_is_over(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="rc_gateway.live.barge_in")
+    clock, sink = FakeClock(), Sink()
+    playback = Playback(sink.frame, sink.flush, clock=clock)
+    barge_in = barge_in_for(playback, clock)
+    playback.add(pcm_ms(400))
+    clock.advance(0.25)
+    playback.add(pcm_ms(300))
+    assert barge_in.person_began(1234.4)  # 0.25 s into what the assistant says
+    clock.advance(0.25)
+    playback.add(pcm_ms(100))
+    playback.add(noise_floor_ms(500))
+    assert await barge_in.settle() is True
+    playback.add(pcm_ms(200))  # what it says while the person talks: thrown away
+    assert await barge_in.settle() is False
+    assert barge_in_lines(caplog) == []  # the discard is still running
+    clock.advance(SUPPRESS_HOLD_SECONDS)
+    await barge_in.settle()
+    # The 800 ms of voice it still held and the 200 ms after; not the quiet that confirmed it.
+    assert barge_in_lines(caplog) == [
+        {
+            "call_id": "call",
+            "confirmed": True,
+            "segment_ms": 250,
+            "start_level": 1234,
+            "wait_ms": 250,
+            "voice_ms": 100,
+            "discarded_ms": 1000,
+        }
+    ]
+
+
+async def test_what_is_undecided_when_the_call_ends_is_written_down_then(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="rc_gateway.live.barge_in")
+    clock, sink = FakeClock(), Sink()
+    _, pending = suspected(clock, sink)
+    clock.advance(0.3)
+    pending.close()
+    assert pending.false_interruptions == 1
+    playback, cutting = suspected(clock, sink)
+    playback.add(noise_floor_ms(500))
+    assert await cutting.settle() is True
+    cutting.close()
+    lines = barge_in_lines(caplog)
+    assert [(line["confirmed"], line["wait_ms"], line["discarded_ms"]) for line in lines] == [
+        (False, 300, 0),
+        (True, 0, 400),
+    ]
 
 
 # ---- voice and silence ----
@@ -590,7 +963,6 @@ async def test_a_delay_the_browser_reports_replaces_the_assumed_one() -> None:
     # The browser says it holds a frame for a whole second: heard until 1.7 s.
     playback.set_playout_delay(1.0)
     assert playback.audible()
-    assert playback.speaking(0.3)
     clock.advance(0.6)
     assert not playback.audible()
     task.cancel()

@@ -11,9 +11,11 @@ from rc_gateway.live.gate import READBACK_SECONDS
 
 from .fakes import FakeClock, pcm_ms, until
 from .harness import (
+    CUT_IN_FRAMES,
     audio,
     confirm,
     function_call,
+    model_stops,
     person_says,
     prepared,
     read_back,
@@ -76,7 +78,8 @@ async def test_nothing_said_after_an_interjection_arms_the_spoiled_draft_however
     h, draft_id = await prepared(tmp_path, clock)
     h.upstream.push(audio(pcm_ms(1500)))  # the read-back begins
     await until(lambda: h.browser.audio_ms() >= 1500)
-    await person_says(h, "Wait, no, forget it.")  # and the person cuts in
+    await person_says(h, "Wait, no, forget it.", frames=CUT_IN_FRAMES)  # the person cuts in
+    await model_stops(h)  # and the model stops for them
     assert h.browser.of("flush") != []
     clock.advance(2.0)
     h.upstream.push(audio(pcm_ms(1200)))  # "Let me check."
@@ -120,7 +123,8 @@ async def test_a_new_draft_read_back_in_full_is_confirmed_after_an_interjection(
     h, draft_id = await prepared(tmp_path, clock)
     h.upstream.push(audio(pcm_ms(1500)))
     await until(lambda: h.browser.audio_ms() >= 1500)
-    await person_says(h, "Wait, no, tell it something else.")
+    await person_says(h, "Wait, no, tell it something else.", frames=CUT_IN_FRAMES)
+    await model_stops(h)
     clock.advance(2.0)
     await read_back(h, clock)
     assert (await confirm(h, draft_id, "c2"))["error"] == "read_back_interrupted"

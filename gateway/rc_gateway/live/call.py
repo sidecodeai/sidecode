@@ -23,6 +23,7 @@ from typing import Any
 
 from ..logging import logger
 from .audio import MicFrameGate
+from .barge_in import BargeIn
 from .browser import BrowserLink
 from .config import LiveConfig
 from .draft_panel import DraftPanel
@@ -64,10 +65,6 @@ STEP_TIMEOUT_SECONDS = 8.0
 UPSTREAM_CLOSE_SLACK_SECONDS = 4.0
 CAPTION_MAX_CHARS = 500
 MIN_EXPIRY_SECONDS = 5.0
-#: The assistant counts as speaking until this long after its last voice has been heard. A person's
-#: voice that begins sooner (a sound in a pause between the read-back's sentences, a reply on top
-#: of its last words) interrupts the read-back; only after this much silence does it answer it.
-GATE_GRACE_SECONDS = 0.5
 #: Errors from the Live API in a row, with nothing else heard between, after which the call ends.
 MAX_CONSECUTIVE_ERRORS = 3
 
@@ -132,6 +129,13 @@ class LiveCall:
         self._command_gate = CommandGate(clock=clock)
         self._vad = EnergyVad()
         self._playback = Playback(self._browser.send_bytes, self._send_flush, clock=clock)
+        self._barge_in = BargeIn(
+            self._playback,
+            call_id=self.call_id,
+            flush=config.barge_in,
+            interjection=self._interjection,
+            clock=clock,
+        )
         self._replies = ReplyTimer()
         self._input = InputMeter()
         self._work = WorkTracker()
@@ -223,6 +227,7 @@ class LiveCall:
             self._stop_meter()
             await self._attempt(self._meter.settled(), self._step_timeout)
         finally:
+            self._barge_in.close()
             self._log_usage()
             self._done.set()
 
@@ -273,6 +278,7 @@ class LiveCall:
             reason=self.end_reason,
             seconds=int(self.duration()),
             interruptions=self._playback.interruptions,
+            false_interruptions=self._barge_in.false_interruptions,
             messages_sent=self.drafts.sent,
             **self.usage.record(),
             **self._playback.record(),
@@ -333,23 +339,25 @@ class LiveCall:
     async def _on_mic(self, frame: bytes) -> None:
         self._mic_gate.check(frame)
         now = self._clock()
-        heard = self._vad.process(frame, now)
+        heard = self._vad.process(frame, now, assistant_audible=self._playback.audible())
         self._time_replies(heard)
+        # What the model has shown so far is decided before a new speech start is taken up.
+        await self._barge_in.settle()
         if heard.speaking:
             self._input.speech(len(frame))
             self._last_activity = now
-            if heard.onset:
-                # Asked before any interruption clears what is playing.
-                self._gate.person_onset(
-                    assistant_speaking=self._playback.speaking(GATE_GRACE_SECONDS)
-                )
+            if heard.onset and not self._barge_in.person_began(heard.onset_level):
+                self._gate.person_onset(interrupting=False)
             if self._config.barge_in:
-                if heard.onset and self._playback.audible():
-                    await self._playback.interrupt()
                 self._playback.person_speaking()
         await self._refresh_state()
         audio = base64.b64encode(frame).decode("ascii")
         await self._upstream.send({"type": "session.input_audio.append", "audio": audio})
+
+    def _interjection(self) -> None:
+        """Speech over the assistant that it stopped for spoils a draft being read back; speech it
+        talked through changes nothing."""
+        self._gate.person_onset(interrupting=True)
 
     def _on_playback(self, command: dict[str, Any]) -> None:
         """Keep the player's report, and take its playout delay into the assistant's voice."""
@@ -445,6 +453,7 @@ class LiveCall:
             return
         elif kind == "session.output_audio.delta":
             self._on_audio(event.get("delta"))
+            await self._barge_in.settle()
         elif kind == "session.output_transcript.delta":
             await self._on_transcript(SPEAKER_ASSISTANT, event.get("delta"))
         elif kind == "session.input_transcript.delta":
@@ -524,13 +533,17 @@ class LiveCall:
         return True
 
     async def _answer_tool(self, item: dict[str, Any]) -> None:
-        started = self._clock()
-        self._last_activity = started
+        self._last_activity = self._clock()
         name = str(item.get("name"))
         sends = name == SEND_TOOL
         if sends:
             self._panel.begin_send()
         try:
+            if sends:
+                # A spoken yes is judged once speech over the assistant has been decided: a "wait"
+                # the model stops for spoils the read-back before the yes can send it.
+                await self._barge_in.settled()
+            started = self._clock()
             output = await self._tools.run(name, str(item.get("arguments") or ""))
             self._work.tool_ran(self._clock() - started)
             if not self.active:
@@ -578,6 +591,7 @@ class LiveCall:
             if self._idle(now):
                 self.request_finish("idle")
                 return
+            await self._barge_in.settle()  # in case nothing else comes to decide it
             await self._panel.publish()
             await self._publish_working()
             if now - last_tick >= TIME_TICK_SECONDS:

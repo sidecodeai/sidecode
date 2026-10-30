@@ -148,7 +148,7 @@ def hear_the_answer(rig: LiveRig, draft_id: str) -> None:
     """The shape of an answer the gate asks for: a read-back, then the person's voice and words."""
     rig.gate.draft_ready(draft_id)
     rig.gate.voice_out(READBACK_SECONDS)
-    rig.gate.person_onset(assistant_speaking=False)
+    rig.gate.person_onset(interrupting=False)
     rig.gate.person_transcript()
 
 
@@ -176,7 +176,7 @@ async def test_a_message_is_a_draft_first_and_a_spoken_yes_must_come_later(
     assert "press Send on screen" in refused["message"]
     assert rig.hub.device.queue.empty()
 
-    rig.gate.person_onset(assistant_speaking=False)
+    rig.gate.person_onset(interrupting=False)
     rig.gate.person_transcript()
     confirmed = asyncio.create_task(rig.call("confirm_send", draft_id=draft["draft_id"]))
     request = await rig.answer_device("queued")
@@ -474,7 +474,7 @@ async def test_each_refusal_tells_the_model_what_to_do_next(tmp_path: Path) -> N
     assert "a yes from before the draft was read back does not count" in not_confirmed["message"]
     assert "press Send on screen" in not_confirmed["message"]
 
-    rig.gate.person_onset(assistant_speaking=True)
+    rig.gate.person_onset(interrupting=True)
     interrupted = await refused_for(rig, draft)
     assert interrupted["error"] == "read_back_interrupted"
     for phrase in ("interrupted the read-back", "prepare_message again", "in full", "press Send"):
@@ -493,7 +493,7 @@ async def test_a_refused_spoken_confirmation_logs_one_line_with_the_reason_and_t
         await refused_for(rig, draft)  # not read back: 1.23 s of voice counted
         rig.gate.voice_out(1.0)
         await refused_for(rig, draft)  # read back, not answered: 2.23 s
-        rig.gate.person_onset(assistant_speaking=True)
+        rig.gate.person_onset(interrupting=True)
         await refused_for(rig, draft)  # interrupted: the tally is gone
         await refused_for(rig, "no-such-draft")  # not the gate's refusal: no tally
     refused = [

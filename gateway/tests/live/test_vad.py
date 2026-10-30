@@ -11,6 +11,8 @@ from rc_gateway.live.vad import (
     HANGOVER_SECONDS,
     ONSET_MS,
     OUTPUT_THRESHOLD,
+    OVER_ASSISTANT_ONSET_MS,
+    OVER_ASSISTANT_THRESHOLD,
     EnergyVad,
     VoiceDetector,
 )
@@ -41,6 +43,87 @@ def test_speech_begins_after_the_onset_run_and_reports_it_once() -> None:
     assert (first) * FRAME_SECONDS * 1000 < ONSET_MS
     assert [onset for _, onset in seen].count(True) == 1
     assert all(speaking for speaking, _ in seen[first:])
+
+
+def test_the_onset_carries_the_mean_level_of_the_loud_run_that_began_it() -> None:
+    vad = EnergyVad()
+    vad.process(QUIET, 0.0)
+    levels = [1000, 2000, 3000, 4000, 5000]
+    results = [
+        vad.process(struct.pack("<h", level) * 480, (index + 1) * FRAME_SECONDS)
+        for index, level in enumerate(levels)
+    ]
+    assert [result.onset for result in results] == [False] * 4 + [True]
+    assert results[-1].onset_level == pytest.approx(3000.0)
+    assert [result.onset_level for result in results[:-1]] == [0.0] * 4
+    # A quiet frame ends the run: the next one is measured on its own.
+    vad = EnergyVad()
+    vad.process(struct.pack("<h", 9000) * 480, 0.0)
+    vad.process(QUIET, 0.02)
+    results = [vad.process(LOUD, 0.04 + index * FRAME_SECONDS) for index in range(5)]
+    assert results[-1].onset and results[-1].onset_level == pytest.approx(4000.0)
+
+
+def level(value: float) -> bytes:
+    """20 ms at a steady mean amplitude of ``value``."""
+    return struct.pack("<h", int(value)) * 480
+
+
+def over_assistant(vad: EnergyVad, frame: bytes, count: int, start: float) -> list[bool]:
+    """Whether speech began on each of ``count`` frames heard while the assistant is audible."""
+    return [
+        vad.process(frame, start + index * FRAME_SECONDS, assistant_audible=True).onset
+        for index in range(count)
+    ]
+
+
+def test_over_the_assistant_speech_must_be_louder_and_last_longer_to_begin() -> None:
+    assert (OVER_ASSISTANT_THRESHOLD, OVER_ASSISTANT_ONSET_MS) == (1000.0, 300.0)
+    onsets = over_assistant(EnergyVad(), LOUD, 20, 0.0)
+    assert onsets.index(True) == round(OVER_ASSISTANT_ONSET_MS / 20) - 1  # the 15th frame
+    assert onsets.count(True) == 1
+    # The same audio while the assistant is quiet begins speech by the usual gate.
+    alone = [result for _, result in frames(EnergyVad(), LOUD, 20, 0.0)]
+    assert alone.index(True) == round(ONSET_MS / 20) - 1
+
+
+def test_over_the_assistant_a_level_under_its_gate_never_begins_speech() -> None:
+    under = level(OVER_ASSISTANT_THRESHOLD * 0.8)  # about -32 dBFS
+    assert not any(over_assistant(EnergyVad(), under, 100, 0.0))
+    assert any(onset for _, onset in frames(EnergyVad(), under, 100, 0.0))
+
+
+def test_over_the_assistant_the_level_must_hold_without_a_dip() -> None:
+    vad = EnergyVad()
+    dipped = [LOUD] * 10 + [level(OVER_ASSISTANT_THRESHOLD * 0.8)] + [LOUD] * 14
+    onsets = [
+        vad.process(frame, index * FRAME_SECONDS, assistant_audible=True).onset
+        for index, frame in enumerate(dipped)
+    ]
+    assert not any(onsets)  # 24 loud frames, never 15 in a row
+    assert vad.process(LOUD, 25 * FRAME_SECONDS, assistant_audible=True).onset
+
+
+def test_over_the_assistant_its_onset_level_is_that_of_the_whole_run() -> None:
+    vad = EnergyVad()
+    results = [
+        vad.process(level(1000 + 100 * index), index * FRAME_SECONDS, assistant_audible=True)
+        for index in range(15)
+    ]
+    assert results[-1].onset
+    assert results[-1].onset_level == pytest.approx(1700.0)
+
+
+def test_speech_already_under_way_goes_on_over_the_assistant_at_the_usual_level() -> None:
+    vad = EnergyVad()
+    frames(vad, LOUD, 10, 0.0)  # begun while the assistant was quiet
+    under = level(OVER_ASSISTANT_THRESHOLD * 0.8)
+    results = [
+        vad.process(under, 0.2 + index * FRAME_SECONDS, assistant_audible=True)
+        for index in range(20)
+    ]
+    assert all(result.speaking for result in results)
+    assert not any(result.onset for result in results)
 
 
 def test_a_click_is_not_speech() -> None:
