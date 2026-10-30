@@ -1,6 +1,6 @@
 [project]
 name = "rc-gateway"
-version = "1.18.2"
+version = "1.18.4"
 description = "SideCode gateway: routes apps and devices, indexes sessions, proxies STT and push"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
