@@ -759,7 +759,7 @@ wheels = [
 
 [[package]]
 name = "rc-gateway"
-version = "1.18.4"
+version = "1.18.6"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
