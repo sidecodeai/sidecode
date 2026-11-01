@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from rc_client import daemon as daemon_module
@@ -29,78 +30,21 @@ from rc_client.agents.registry import DetectContext
 from rc_client.config import Config, ensure_dirs
 from rc_client.daemon import Daemon
 from rc_client.models import AgentAccount, AgentInfo, AgentLimit, now_ms
-
-# The usage body `GET /api/oauth/usage` answers with, emptied of anything
-# private: a five-hour window, a week, and a week confined to one model.
-USAGE_BODY: dict[str, Any] = {
-    "five_hour": {"utilization": 16.0, "resets_at": "2026-09-15T15:40:00.000000+00:00"},
-    "seven_day": {"utilization": 54.0, "resets_at": "2026-09-16T22:00:00.000000+00:00"},
-    "seven_day_opus": None,
-    "limits": [
-        {
-            "kind": "session",
-            "group": "session",
-            "percent": 16,
-            "severity": "normal",
-            "resets_at": "2026-09-15T15:40:00.000000+00:00",
-            "scope": None,
-            "is_active": False,
-        },
-        {
-            "kind": "weekly_all",
-            "group": "weekly",
-            "percent": 54,
-            "severity": "normal",
-            "resets_at": "2026-09-16T22:00:00.000000+00:00",
-            "scope": None,
-            "is_active": False,
-        },
-        {
-            "kind": "weekly_scoped",
-            "group": "weekly",
-            "percent": 64,
-            "severity": "normal",
-            "resets_at": "2026-09-16T22:00:00.000000+00:00",
-            "scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None},
-            "is_active": True,
-        },
-    ],
-}
-
-
-def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload), encoding="utf-8")
-
-
-def claude_credential(expires_at: int, subscription: str = "max") -> dict[str, Any]:
-    return {
-        "claudeAiOauth": {
-            "accessToken": "test-access-token",
-            "refreshToken": "test-refresh-token",
-            "expiresAt": expires_at,
-            "subscriptionType": subscription,
-            "rateLimitTier": "default_claude_max_5x",
-        }
-    }
+from tests.usage_helpers import (
+    USAGE_BODY,
+    USAGE_WINDOWS,
+    claude_credential,
+    failing,
+    ok,
+    serve,
+    write_json,
+)
 
 
 def id_token(claims: dict[str, Any]) -> str:
     """A JWT whose payload is `claims`; only the payload is ever decoded."""
     payload = base64.urlsafe_b64encode(json.dumps(claims).encode("utf-8")).decode("ascii")
     return f"header.{payload.rstrip('=')}.signature"
-
-
-def usage_calls(monkeypatch: pytest.MonkeyPatch, body: dict[str, Any] | None) -> list[str]:
-    """Stand in for the network, and record that it was reached at all."""
-    calls: list[str] = []
-
-    async def fetch(token: str) -> tuple[dict[str, Any] | None, str]:
-        calls.append("fetched")
-        return (body, "") if body is not None else (None, "could not reach api.anthropic.com")
-
-    monkeypatch.setattr(anthropic_usage, "fetch", fetch)
-    return calls
 
 
 # ------------------------------------------------------------------- Claude
@@ -199,18 +143,14 @@ async def test_the_usage_body_becomes_a_session_a_week_and_a_scoped_week(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     write_json(claude_account.credentials_file(), claude_credential(now_ms() + 3_600_000))
-    calls = usage_calls(monkeypatch, USAGE_BODY)
+    served = serve(monkeypatch, ok())
 
     accounts = await claude_account.detect(limits=True)
 
-    assert calls == ["fetched"]
+    assert len(served.requests) == 1
     account = accounts[0]
     assert account.limits is not None
-    assert [limit.to_dict() for limit in account.limits] == [
-        {"window_minutes": 300, "used_percent": 16, "resets_at": 1789486800000},
-        {"window_minutes": 10080, "used_percent": 54, "resets_at": 1789596000000},
-        {"window_minutes": 10080, "scope": "Fable", "used_percent": 64, "resets_at": 1789596000000},
-    ]
+    assert [limit.to_dict() for limit in account.limits] == USAGE_WINDOWS
     assert account.limits_error is None
     assert account.limits_checked_at is not None
 
@@ -228,11 +168,11 @@ async def test_an_expired_token_is_reported_rather_than_refreshed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     write_json(claude_account.credentials_file(), claude_credential(now_ms() - 1_000))
-    calls = usage_calls(monkeypatch, USAGE_BODY)
+    served = serve(monkeypatch, ok())
 
     accounts = await claude_account.detect(limits=True)
 
-    assert calls == [], "an expired token must never be sent anywhere"
+    assert served.requests == [], "an expired token must never be sent anywhere"
     assert accounts[0].limits is None
     assert accounts[0].limits_error == claude_account.EXPIRED
     assert accounts[0].limits_checked_at is not None
@@ -242,12 +182,12 @@ async def test_a_usage_call_that_fails_leaves_the_account_with_one_line_of_why(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     write_json(claude_account.credentials_file(), claude_credential(now_ms() + 3_600_000))
-    usage_calls(monkeypatch, None)
+    serve(monkeypatch, failing(httpx.ConnectError("refused")))
 
     accounts = await claude_account.detect(limits=True)
 
     assert accounts[0].limits is None
-    assert accounts[0].limits_error == "could not reach api.anthropic.com"
+    assert accounts[0].limits_error == "could not reach api.anthropic.com: ConnectError"
 
 
 # -------------------------------------------------------------------- Codex
@@ -395,7 +335,7 @@ async def test_pi_reports_one_account_per_provider_and_renames_the_codex_one(
             "xai": {"type": "oauth", "access": "test-access-token", "expires": now_ms() + 600_000},
         },
     )
-    calls = usage_calls(monkeypatch, USAGE_BODY)
+    served = serve(monkeypatch, ok())
 
     accounts = await pi_account.detect(limits=True)
 
@@ -406,7 +346,7 @@ async def test_pi_reports_one_account_per_provider_and_renames_the_codex_one(
     ]
     # Only Anthropic exposes windows this device can read; the others carry
     # neither limits nor an error, which is the wire's "there are none".
-    assert calls == ["fetched"]
+    assert len(served.requests) == 1
     assert accounts[0].limits is not None and len(accounts[0].limits) == 3
     assert accounts[2].limits is None and accounts[2].limits_error is None
 

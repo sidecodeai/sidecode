@@ -4,22 +4,25 @@ Claude Code and pi can both be signed in to Anthropic, and both keep an access
 token the vendor's usage endpoint accepts, so the read lives here once. The
 token buys one GET and nothing else: it is never stored, never refreshed and
 never written to a log or on to the wire — only the percentages come back out.
+
+`usage_fetch` makes the request and `usage_memory` holds what the device keeps
+between two of them. This module turns what came back into an account's windows,
+or into the one line that says why there are none.
 """
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-import httpx
-
+from ..logging_setup import logger
 from ..models import AgentAccount, AgentLimit, now_ms
+from .usage_fetch import HOST, Reading, fetch
+from .usage_memory import UsageMemory
 
-HOST = "api.anthropic.com"
-USAGE_URL = f"https://{HOST}/api/oauth/usage"
-OAUTH_BETA = "oauth-2025-04-20"
-TIMEOUT = 5.0
+log = logger("rc_client.anthropic_usage")
 
 SESSION_MINUTES = 300
 WEEKLY_MINUTES = 10080
@@ -31,69 +34,134 @@ WINDOWS = {
     "weekly_scoped": WEEKLY_MINUTES,
 }
 EXPIRED = "signed-in token expired; sign in again to read the quota"
+REJECTED = "signed-in token rejected (HTTP 401); sign in again to read the quota"
 NO_TOKEN = "no signed-in token to read the quota with"
+NO_WINDOWS = f"{HOST} reported no quota windows this device recognises"
+
+# What the device keeps between reads, for the life of the process.
+memory = UsageMemory()
 
 
 @dataclass(slots=True)
 class Bearer:
     """An Anthropic access token, when it stops working, and who can renew it.
 
-    `expired_message` is what the person is told once `expires_at` has passed:
-    only they can refresh the token, by opening the agent that owns it.
+    `expired_message` is what the person is told once `expires_at` has passed
+    and `rejected_message` what they are told when the vendor refuses the token
+    before that: only they can refresh it, by opening the agent that owns it.
     """
 
     token: str
     expires_at: int | None = None
     expired_message: str = EXPIRED
+    rejected_message: str = REJECTED
 
 
-async def fill_limits(account: AgentAccount, bearer: Bearer | None) -> None:
-    """Read `account`'s windows, or say in one line why they are missing."""
+# Reads the agent's credential again, for a token that may have just been rotated.
+Renew = Callable[[], Awaitable[Bearer | None]]
+
+
+async def fill_limits(
+    agent: str,
+    account: AgentAccount,
+    bearer: Bearer | None,
+    proxy: str = "",
+    renew: Renew | None = None,
+) -> None:
+    """Read `account`'s windows, or say in one line why they are missing.
+
+    `agent` is the one whose credential it is. A token the vendor refuses may have been rotated
+    since it was read, so `renew` is asked for the credential once and the read is repeated once
+    with a token that differs. When the vendor cannot answer right now (it is limiting reads, has a
+    server error, is slow or unreachable) the windows read last stand in if they are recent
+    (`fall_back`); a failure only the person can mend never lets them.
+    """
     account.limits_checked_at = now_ms()
     if bearer is None or not bearer.token:
         account.limits_error = NO_TOKEN
         return
-    if bearer.expires_at is not None and bearer.expires_at <= now_ms():
+    if _expired(bearer):
         account.limits_error = bearer.expired_message
         return
-    body, error = await fetch(bearer.token)
-    if body is None:
-        account.limits_error = error
+    reading = await _read(bearer.token, proxy)
+    if reading.status == 401 and renew is not None:
+        fresh = await renew()
+        if fresh is not None and fresh.token not in ("", bearer.token) and not _expired(fresh):
+            bearer = fresh
+            reading = await _read(fresh.token, proxy)
+    _apply(agent, account, bearer, reading)
+
+
+def fall_back(agent: str, account: AgentAccount, reason: str) -> None:
+    """Fill `account` from the windows read last when they are recent, else say why there are none.
+
+    A recent earlier reading answers without a `limits_error`: it carries the time it was read at,
+    and an app that draws the line draws no meter. The reason goes to the log instead, for whoever
+    asks why the numbers are not new.
+    """
+    now = now_ms()
+    who = _who(agent, account)
+    kept = memory.recall(who, now) if who is not None else None
+    if kept is None:
+        account.limits_checked_at = now
+        account.limits_error = reason
         return
-    account.limits = parse(body)
+    account.limits = list(kept.limits)
+    account.limits_checked_at = kept.checked_at
+    log.info(
+        "anthropic usage served from an earlier read",
+        reason=reason,
+        age_s=(now - kept.checked_at) // 1000,
+        windows=len(kept.limits),
+    )
 
 
 def parse(body: dict[str, Any]) -> list[AgentLimit]:
-    """The windows a usage body reports, preferring its `limits` rows."""
+    """The windows a usage body reports: its `limits` rows, else the older pair."""
     rows = body.get("limits")
-    if isinstance(rows, list) and rows:
-        return [limit for row in rows if (limit := _row(row)) is not None]
-    return _legacy(body)
+    found = (
+        [limit for row in rows if (limit := _row(row)) is not None]
+        if isinstance(rows, list)
+        else []
+    )
+    return found or _legacy(body)
 
 
-async def fetch(token: str) -> tuple[dict[str, Any] | None, str]:
-    """The usage body the token buys, or the one line that says why there is none."""
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "anthropic-beta": OAUTH_BETA,
-        "Accept": "application/json",
-    }
-    try:
-        # Dialled directly, like every other call this device makes: OAuth usage
-        # is never relayed, so the host is always Anthropic's own.
-        async with httpx.AsyncClient(timeout=TIMEOUT, trust_env=False) as client:
-            response = await client.get(USAGE_URL, headers=headers)
-    except httpx.HTTPError as exc:
-        return None, f"could not reach {HOST}: {type(exc).__name__}"
-    if response.status_code != 200:
-        return None, f"{HOST} answered HTTP {response.status_code}"
-    try:
-        body = response.json()
-    except ValueError:
-        return None, f"{HOST} returned a usage body this device cannot read"
-    if not isinstance(body, dict):
-        return None, f"{HOST} returned a usage body this device cannot read"
-    return body, ""
+async def _read(token: str, proxy: str) -> Reading:
+    return await memory.read(token, lambda: fetch(token, proxy))
+
+
+def _apply(agent: str, account: AgentAccount, bearer: Bearer, reading: Reading) -> None:
+    if reading.body is None:
+        if reading.status == 401:
+            account.limits_error = bearer.rejected_message
+        elif reading.transient:
+            fall_back(agent, account, reading.error)
+        else:
+            account.limits_error = reading.error
+        return
+    limits = parse(reading.body)
+    if not limits:
+        account.limits_error = NO_WINDOWS
+        return
+    who = _who(agent, account)
+    if who is not None:
+        memory.remember(who, limits, reading.at)
+    account.limits = limits
+    account.limits_checked_at = reading.at
+
+
+def _who(agent: str, account: AgentAccount) -> str | None:
+    """Whose windows they are, so that no other account ever inherits them.
+
+    Nothing but the email tells two accounts of one vendor apart, so an account with none is
+    nobody's: its windows are neither kept nor stood in for.
+    """
+    return f"{agent}:{account.provider}:{account.email}" if account.email else None
+
+
+def _expired(bearer: Bearer) -> bool:
+    return bearer.expires_at is not None and bearer.expires_at <= now_ms()
 
 
 def _row(row: Any) -> AgentLimit | None:
@@ -103,12 +171,18 @@ def _row(row: Any) -> AgentLimit | None:
     percent = row.get("percent")
     if minutes is None or isinstance(percent, bool) or not isinstance(percent, int | float):
         return None
-    return AgentLimit(
-        window_minutes=minutes,
-        used_percent=percent,
-        resets_at=_moment(row.get("resets_at")),
-        scope=_scope(row.get("scope")),
-    )
+    return _limit(minutes, percent, _moment(row.get("resets_at")), _scope(row.get("scope")))
+
+
+def _limit(
+    minutes: int, percent: float, resets_at: int | None, scope: str | None = None
+) -> AgentLimit | None:
+    try:
+        return AgentLimit(
+            window_minutes=minutes, used_percent=percent, resets_at=resets_at, scope=scope
+        )
+    except (ArithmeticError, ValueError):  # a percent too large to be a float
+        return None
 
 
 def _scope(scope: Any) -> str | None:
@@ -128,13 +202,8 @@ def _legacy(body: dict[str, Any]) -> list[AgentLimit]:
         used = window.get("utilization")
         if isinstance(used, bool) or not isinstance(used, int | float):
             continue
-        limits.append(
-            AgentLimit(
-                window_minutes=minutes,
-                used_percent=used,
-                resets_at=_moment(window.get("resets_at")),
-            )
-        )
+        if limit := _limit(minutes, used, _moment(window.get("resets_at"))):
+            limits.append(limit)
     return limits
 
 

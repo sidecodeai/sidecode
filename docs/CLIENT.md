@@ -131,7 +131,9 @@ rc-client enroll --gateway https://rc.example.com --pair RC-7K42-QX9M --proxy ht
 ```
 
 `config.toml` keeps the answer as `proxy`, and it is only ever `""` — dial directly — or one
-`http://` or `https://` URL, used for every dial. **`env` is not stored**: it means "work it out
+`http://` or `https://` URL, used for every dial. The Anthropic quota read (A33) is one of them, to
+`api.anthropic.com` instead of the gateway: a host whose only way out is a proxy has no other way to
+ask for it. **`env` is not stored**: it means "work it out
 here, now". At enrollment the host reads its own proxy settings with the standard library's rules —
 `HTTPS_PROXY` for an `https://` gateway, which is what the `wss://` link uses, `HTTP_PROXY` only for
 a plain-http one, nothing at all when `NO_PROXY` bypasses the gateway's host, and on macOS the
@@ -351,8 +353,39 @@ first model of the catalogue and `medium` are used; Grok's `default_model` and
 and from the catalogue's own default when that file says nothing. Detection never starts an agent
 process beyond `--version`.
 
-An agent that is not installed is reported with `available: false` rather than hidden, so the apps
-can say why a device offers only one agent.
+The apps wait twenty seconds for the reply to `device.agents`, so detection is bounded where an app
+is waiting and nowhere else. Only that request, the one for quota, gives up on an agent: one that has
+answered before and takes longer than eight seconds (`AGENT_TIMEOUT`) is reported as it last was, so
+that one slow probe (pi's `--version` and `--list-models`, a Keychain that does not answer) cannot
+cost the reply the agents that did answer. The quarter-hour refresh and a shared daemon that
+appeared are nobody's wait and must be right rather than quick, so they wait for the agent, as they
+always did, and an old answer is never published for them. An agent that has never answered, as at
+the first scan of a start, is waited for by every request: there is nothing to report in its place.
+
+A request for quota gets, for each of the slow agent's accounts, the windows it last had read, by
+the rule of a vendor that cannot answer (A33 below): while they are under thirty minutes old,
+without any that has reset since, and with no `limits_error`. An `account` with nothing recent
+enough to show carries `limits_error: "the device was too slow to check this agent, so its quota
+was not read"` if it is one that normally carries quota (an Anthropic sign-in of Claude Code or of
+pi, a ChatGPT sign-in of Codex), and any other stays as it was, as does one whose vendor truthfully
+reported no windows (an empty `limits` and no error). An account is matched to what it last said
+by the agent, the vendor, the email and its place among the accounts that share those, which is
+what tells apart the two sign-ins pi can hold to one vendor. One with no email is never given
+windows, because nothing says they were its own, and pi's never have one. For this the device
+keeps what each agent last said of each account's quota, windows included, which a plain
+detection in between does not take away, and neither does an answer that has only an error for the
+account: the windows it had read stay, dated by when they were read, until an answer says there are
+none or brings newer ones.
+
+The slow detection is left to finish rather than cut off, so no probe is abandoned half way, and
+what it brings is what the agent is reported as next, unless a detection that started after it has
+answered already. An ask for an agent whose detection with the same context is under way waits for
+that one instead of starting another, so asks made while an agent is slow cannot pile probes up
+behind it. An agent whose detection fails does not fail the reply either: it is reported as it last
+was, with `limits_error: "the device could not check this agent, so its quota was not read"` on a
+request for quota that has no recent windows to show, and one that never answered, a plugin that
+cannot even be imported included, is left out of the list. The warnings `agent detection timed
+out` and `agent detection failed` name the agent, the second with the exception's class.
 
 ### Accounts and quota (A33)
 
@@ -376,6 +409,21 @@ because Claude Code writes that item through the same tool. An endpoint is repor
 never as a URL, because a person's own relay is exactly where a base URL could carry a secret in
 its query string.
 
+**What the Keychain says.** A read of the Claude Code item has three outcomes. It gives the item.
+It gives nothing, because there is no such item (`security` exits 44) or no Keychain on this
+machine: a person signed in nowhere. Or the item cannot be handed over right now: any other exit, a
+`security` that does not answer within five seconds, or one that cannot start. The log records the
+class and the exit status, never what `security` printed (`claude keychain read`, with `outcome`
+`missing`, `unreadable`, `timeout` or `spawn_failed`, and `exit`), and a readable item without a
+`claudeAiOauth` block is a person signed out too (`claude credential read`, `outcome`
+`no_oauth_block`). Only the third outcome says nothing about the person, so the device keeps the
+account it last read, its plan, tier and email and never its token, and reports it again until a
+read says otherwise: the card does not lose its account line over a locked Keychain, and `hello`
+does not flicker. With quota asked for, that account gets the windows read last when they are
+recent enough to stand in (below), and otherwise `limits_error: "the login Keychain could not be
+read just now"`. A read that finds the item missing, or without an OAuth block, makes the device
+forget the account.
+
 **Quota is read on request, not on a timer.** `hello` and `agents.updated` carry accounts without
 `limits`, so re-detecting every quarter hour publishes nothing new; only the reply to
 `device.agents` carries `limits`, `limits_error` and `limits_checked_at`, and the daemon stores that
@@ -383,11 +431,55 @@ reply's agents `without_limits()` so the refresh loop's diff stays quiet. Each c
 second budget:
 
 - **Anthropic** (Claude Code, and a pi `anthropic` OAuth entry): `GET
-  https://api.anthropic.com/api/oauth/usage` with the account's own access token. Its `limits[]`
-  rows become one `AgentLimit` each — `session` a 300-minute window, `weekly_all` and
-  `weekly_scoped` a 10080-minute one, with `scope` the model's display name — and a body without
-  them falls back to `five_hour` and `seven_day`. A token whose `expiresAt` has passed is reported
-  as a `limits_error` and never sent anywhere; only the person can refresh it, by opening the agent.
+  https://api.anthropic.com/api/oauth/usage` with the account's own access token, through the proxy
+  `config.toml` holds. The five seconds are one deadline for the whole request, connecting, the
+  proxy, the handshake and the body, where the HTTP library's own limit restarts at each of those.
+  Its `limits[]` rows become one `AgentLimit` each — `session` a 300-minute window, `weekly_all` and
+  `weekly_scoped` a 10080-minute one, with `scope` the model's display name. When none of its rows
+  is a kind the device knows, `five_hour` and `seven_day` are used instead, and a body that gives no
+  window either is the `limits_error` "api.anthropic.com reported no quota windows this device
+  recognises", never an account with nothing under it. A token whose `expiresAt` has passed is
+  reported as a `limits_error` and never sent anywhere; only the person can refresh it, by opening
+  the agent. The reply's headers and body are never logged; each read that goes out leaves one
+  `info` line, `anthropic usage read`, with the keys it has of `status`, `error_type` (the vendor's
+  own `error.type`, when it names one in the usual place), `retry_after` (seconds), `content_type`,
+  `duration_ms` and, when no answer came, `failure` (the exception's class name). For example
+  `{"level": "info", "logger": "rc_client.anthropic_usage", "msg": "anthropic usage read",
+  "status": 429, "error_type": "rate_limit_error", "retry_after": 30, "content_type":
+  "application/json", "duration_ms": 412}`.
+  - **A 401** may mean the token was rotated after the device read it, so the credential is read
+    again, Claude Code's from the Keychain, and the request is repeated once when the token is a
+    different one that has not expired. A 401 that stays one is "signed-in token rejected (HTTP
+    401); open Claude Code once to refresh it", or "…; sign in again to read the quota" for pi.
+  - **Each failure has a line of its own**: 403 "this sign-in is not allowed to read the quota (HTTP
+    403)"; 429 "api.anthropic.com is limiting quota reads (HTTP 429); try again in 2 min", with the
+    wait from `Retry-After` (seconds, or a date) and "try again later" when it names none; a server
+    error "api.anthropic.com had a server error (HTTP 503)"; a timeout "api.anthropic.com did not
+    answer in time"; no connection "could not reach api.anthropic.com: ConnectError"; a 200 that is
+    not a usage body "api.anthropic.com returned a usage body this device cannot read". What the
+    vendor, or a proxy in the way, sends is somebody else's text and never raises: a `Retry-After`
+    that cannot be read names no wait, a body nested too deep to parse is that last line, and a
+    percentage too large to be a number is a window left out.
+  - **Windows read last stand in** when the vendor cannot answer just now: a 429, a 403, a server
+    error, a timeout or no connection, and a Keychain that cannot be read. The device keeps the
+    windows of each account's last good read in memory, never the token. While that read is under
+    thirty minutes old they are sent again as `limits`, with no `limits_error` and the
+    `limits_checked_at` of that read, and without any window whose `resets_at` has passed, because
+    its percentage is certainly out of date. Once the read is thirty minutes old, or when no window
+    is left, the account carries the line for the failure as above. The failure is logged beside the
+    stand-in (`anthropic usage served from an earlier read`, with `reason`, `age_s` and `windows`).
+    What only the person can mend always sends the line and never windows: no token, a token that
+    has expired, a 401 that stays one after the credential was read again. So does a body the device
+    cannot use and a status it does not know. The windows are kept for an agent, a vendor and an
+    email together, so one account never inherits another's, and an account with no email, which
+    pi's never has, is neither remembered nor stood in for. An agent too slow for `detect_all` is
+    answered by the same rule ("Agent discovery" above). The apps draw a meter without saying when
+    it was read, so the thirty minutes are what bounds how old a meter can be.
+  - **One request where one will do**: an answer is held for a minute, so apps asking together or
+    again cost one request, and a request already in flight is shared by whoever asks meanwhile; a
+    429 is held for as long as its `Retry-After` asks, a minute at least and ten at most. Other
+    failures are not held, so the next ask tries again. `limits_checked_at` is when the request was
+    answered, not when the app asked.
 - **Codex**: `account/rateLimits/read` on the shared app-server daemon, which is where the `/usage`
   command reads it too. `primary` and `secondary` become the windows, seconds turned into
   milliseconds; an account with only a weekly window reports one. No daemon means the one line
@@ -411,9 +503,9 @@ second budget:
   with no `limits_error`, because a private agent started for one read would make the requests and
   the writes every start of Grok makes.
 
-Every read is best effort: a missing, unreadable or malformed file is "signed in nowhere", and a
-dead daemon, a failed request or a timeout is one line of `limits_error` against an account that is
-still reported.
+Every read is best effort: a missing, unreadable or malformed file is "signed in nowhere", except
+a Keychain item that cannot be read right now, and a dead daemon, a failed request or a timeout is
+one line of `limits_error` against an account that is still reported.
 
 `session.set` validates `permission_mode` and `effort` against what the device advertises and
 answers `bad_request` otherwise. `model` stays open, because model ids are the agents' own and a
@@ -2875,8 +2967,9 @@ Raise detail with `rc-client --log-level debug run`.
 ## Network path
 
 The daemon dials the gateway directly unless the device was enrolled with a proxy, and it never
-consults the environment it happens to run in: the WebSocket link, enrollment, pairing and the
-`self-update` download all use the one URL `config.toml` holds, and `""` means a direct dial. The
+consults the environment it happens to run in: the WebSocket link, enrollment, pairing, the
+`self-update` download and the Anthropic quota read all use the one URL `config.toml` holds, and
+`""` means a direct dial. The
 link is a long-lived tunnel to a gateway the operator runs, so a proxy in the middle is something a
 person asks for, not something the machine decides. How to ask, and how `--proxy env` is resolved on
 the enrolling host, is "Reaching the gateway through a proxy" above.

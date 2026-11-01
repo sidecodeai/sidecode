@@ -18,6 +18,8 @@ from .. import anthropic_usage, credentials
 from ..anthropic_usage import Bearer
 from . import runtime
 
+# This agent's id, as `plugin.py` names it.
+AGENT = "pi"
 # pi names the Codex provider after the CLI; the wire names the vendor.
 PROVIDERS = {"openai-codex": "openai"}
 ANTHROPIC = "anthropic"
@@ -27,7 +29,7 @@ def auth_file() -> Path:
     return runtime.home() / "agent" / "auth.json"
 
 
-async def detect(limits: bool) -> list[AgentAccount]:
+async def detect(limits: bool, proxy: str = "") -> list[AgentAccount]:
     """One account per provider pi is signed in to, in the file's own order."""
     accounts: list[AgentAccount] = []
     for name, entry in credentials.table(auth_file()).items():
@@ -36,7 +38,7 @@ async def detect(limits: bool) -> list[AgentAccount]:
             continue
         account, bearer = made
         if limits and bearer is not None:
-            await anthropic_usage.fill_limits(account, bearer)
+            await anthropic_usage.fill_limits(AGENT, account, bearer, proxy)
         accounts.append(account)
     return accounts
 

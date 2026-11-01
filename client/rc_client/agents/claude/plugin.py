@@ -64,7 +64,7 @@ async def detect(context: DetectContext) -> AgentInfo:
     version = await runtime.probe_version(path) if path else None
     # An agent that is not here is not signed in anywhere either, and the wire
     # says "the device did not look" by leaving `accounts` out altogether (A33).
-    accounts = await account.detect(context.limits) if path else None
+    accounts = await account.detect(context.limits, proxy=context.proxy) if path else None
     # Typing into the terminal is the shim's doing, so what it can do depends
     # on the shim being installed and first on PATH. Stopping a turn is the
     # same keystroke route — Escape — so it rides on the same condition (A42).

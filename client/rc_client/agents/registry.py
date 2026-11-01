@@ -16,11 +16,13 @@ import asyncio
 import importlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from ..errors import RcError
 from ..models import AgentInfo, Command, Session
 from .base import SessionRunner
+from .detection import Detections
 
 if TYPE_CHECKING:  # pragma: no cover - imported for types only
     from ..sessions.channel import SessionChannel
@@ -58,6 +60,9 @@ class DetectContext:
     # How to ask the Grok leader for its account's window (A53); absent when
     # quota is not wanted. It says itself when leader mode is off.
     grok_billing: BillingReader | None = None
+    # How this device dials out, as `config.toml` keeps it: `""` is direct. The one call a
+    # detection makes over the network, the Anthropic quota read, dials the same way (A33).
+    proxy: str = ""
 
 
 @dataclass(slots=True)
@@ -123,6 +128,8 @@ class AgentPlugin(Protocol):
 
 
 _loaded: dict[str, AgentPlugin] = {}
+# What the device knows of its agents between two detections (`detection.py`).
+detections = Detections()
 
 
 def plugin(agent: str) -> AgentPlugin:
@@ -137,9 +144,21 @@ def plugin(agent: str) -> AgentPlugin:
 
 
 async def detect_all(context: DetectContext | None = None) -> list[AgentInfo]:
-    """Ask every agent what it offers, concurrently, in `AGENT_IDS` order."""
+    """Ask every agent what it offers, concurrently, in `AGENT_IDS` order.
+
+    A request for quota (`context.limits`) does not wait more than `AGENT_TIMEOUT` for an agent
+    that has answered before, and an agent that fails is answered with what it last said, or left
+    out of the list: neither holds up or fails the rest (`detection.py`).
+    """
     ready = context or DetectContext()
-    return list(await asyncio.gather(*(plugin(agent).detect(ready) for agent in AGENT_IDS)))
+    answers = await asyncio.gather(
+        *(detections.detect(agent, ready, partial(_ask, agent, ready)) for agent in AGENT_IDS)
+    )
+    return [info for info in answers if info is not None]
+
+
+def _ask(agent: str, context: DetectContext) -> Awaitable[AgentInfo]:
+    return plugin(agent).detect(context)
 
 
 async def runner_for(agent: str, spec: RunnerSpec) -> SessionRunner:

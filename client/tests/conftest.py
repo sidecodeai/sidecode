@@ -10,13 +10,17 @@ from pathlib import Path
 import pytest
 
 from rc_client import daemon as daemon_module
+from rc_client.agents import anthropic_usage, registry
 from rc_client.agents.claude import account as claude_account
+from rc_client.agents.claude import keychain as claude_keychain
 from rc_client.agents.claude import runtime as claude_runtime
 from rc_client.agents.claude import transcripts as claude_transcripts
 from rc_client.agents.codex import runtime as codex_runtime
 from rc_client.agents.codex.daemon import setup as codex_setup
+from rc_client.agents.detection import Detections
 from rc_client.agents.grok import runtime as grok_runtime
 from rc_client.agents.pi import runtime as pi_runtime
+from rc_client.agents.usage_memory import UsageMemory
 from rc_client.sessions import mirror as mirror_module
 from tests import agent_guard
 
@@ -67,7 +71,25 @@ def agent_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     async def no_keychain() -> str | None:
         return None
 
+    # The real reader lives in `keychain.py`, so it is replaced there as well, and the platform
+    # flag is turned off: no test may ask the login Keychain for the `Claude Code-credentials`
+    # item by any route. A test of the reader itself holds the function it imported, and fakes
+    # `security` and the platform for itself.
     monkeypatch.setattr(claude_account, "read_keychain", no_keychain)
+    monkeypatch.setattr(claude_keychain, "read_keychain", no_keychain)
+    monkeypatch.setattr(claude_keychain, "IS_MACOS", False)
+
+
+@pytest.fixture(autouse=True)
+def nothing_remembered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start every test with no quota, sign-in or detection remembered from an earlier one.
+
+    The device keeps the last good answer of each in memory, for a read that fails later
+    (A33): a test that left one behind would answer for the next.
+    """
+    monkeypatch.setattr(anthropic_usage, "memory", UsageMemory())
+    monkeypatch.setattr(claude_account, "signed_in", claude_account.SignIn())
+    monkeypatch.setattr(registry, "detections", Detections())
 
 
 @pytest.fixture(autouse=True)

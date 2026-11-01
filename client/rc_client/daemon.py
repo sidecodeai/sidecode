@@ -346,6 +346,7 @@ class Daemon:
             limits=limits,
             codex_rate_limits=self.codex.rate_limits if limits and ready else None,
             grok_billing=self.grok.billing if limits else None,
+            proxy=self.config.proxy,
         )
 
     # ----------------------------------------------------------------- update

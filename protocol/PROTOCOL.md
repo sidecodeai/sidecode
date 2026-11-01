@@ -837,9 +837,9 @@ session. pi holds one per provider it is signed in to; the other three hold at m
 | `tier` | string | no | A finer tier when the vendor exposes one, in words the device vouches for: `Max 5x` from Claude's rate-limit tier id `default_claude_max_5x`. Omitted when it only repeats `plan` |
 | `email` | string | no | The account's email when the agent records it locally |
 | `endpoint` | string | no | For `api_key`: the host the key is sent to when it is not the vendor's own (`ANTHROPIC_BASE_URL`, a Codex `model_providers` entry). Host only, never a path or a secret |
-| `limits` | `AgentLimit[]` | no | The rate-limit windows the device read for an `account`. Present only in a `device.agents` reply; empty when the vendor reported none. Absent, with no `limits_error`, when the device has no way to read them: a pi sign-in other than Anthropic's, or Grok Build with leader mode off (A53) |
+| `limits` | `AgentLimit[]` | no | The rate-limit windows the device read for an `account`. Present only in a `device.agents` reply; empty when the vendor reported none. Absent, with no `limits_error`, when the device has no way to read them: a pi sign-in other than Anthropic's, or Grok Build with leader mode off (A53). May be an earlier reading: when the vendor cannot answer just now, or the agent is too slow or fails, the device sends the windows of its last good read while that read is under 30 minutes old, without any window whose `resets_at` has passed, and `limits_checked_at` is the time of that read |
 | `limits_error` | string | no | Why `limits` is missing after the device tried — the token expired, the shared daemon is down, the network failed — in the device's words, one line |
-| `limits_checked_at` | timestamp | no | When the device read `limits` |
+| `limits_checked_at` | timestamp | no | When the device read `limits`; for windows that are an earlier reading, when that was. Without `limits`, when the device last tried |
 
 An `AgentLimit` is one window:
 
@@ -853,15 +853,18 @@ An `AgentLimit` is one window:
 `hello` and `agents.updated` carry `accounts` without `limits`, `limits_error` or
 `limits_checked_at`: they come from local files and change rarely, so a device that re-detects its
 agents every quarter hour republishes nothing new. Limits are read on request: the reply to
-`device.agents` (6) carries them fresh — one network or daemon call per account, under a short
-timeout — and the device keeps that reply out of what it republishes. An app that opens a device
-shows the stored accounts at once and asks `device.agents` for the meters; a device that is offline
-has accounts and no meters. `fixtures/objects/agent.claude-attach.json` (an Anthropic account with a
-tier and two windows, one confined to a model), `agent.codex-daemon.json` (an OpenAI account on plan
-`pro` with the shared daemon's two windows), `agent.grok.json` (an xAI account with no plan, on a
-device with Grok's leader mode off and so with no windows) and `agent.pi.json` (an Anthropic
-account beside an OpenAI key) are the worked examples, each as a `device.agents` reply would carry
-it.
+`device.agents` (6) carries them read for that reply — one network or daemon call per account, under
+a short timeout, though an Anthropic answer may be up to a minute old, because the device holds it
+that long so that several apps asking together cost one request, and an account whose vendor cannot
+answer just now, or whose agent is too slow or fails, gets its last good reading, under 30
+minutes old, in place of an error — and the device keeps that reply out of what it republishes. An
+app that opens a device shows the stored accounts at once and asks `device.agents` for the meters; a
+device that is offline has accounts and no meters. `fixtures/objects/agent.claude-attach.json` (an
+Anthropic account with a tier and two windows, one confined to a model), `agent.codex-daemon.json`
+(an OpenAI account on plan `pro` with the shared daemon's two windows), `agent.grok.json` (an xAI
+account with no plan, on a device with Grok's leader mode off and so with no windows) and
+`agent.pi.json` (an Anthropic account beside an OpenAI key) are the worked examples, each as a
+`device.agents` reply would carry it.
 
 Capabilities gate the UI. `steer` decides whether a message sent during a running turn is steered or
 queued; `takeover` decides whether a terminal-controlled session offers "Take over"; `history`
@@ -2716,7 +2719,7 @@ The gateway forwards these to the owning device and returns the device's reply.
 | `terminal.resize` | `device_id`, `terminal_id`, `cols`, `rows` | `{}` — 1–500 columns, 1–200 rows (A38) |
 | `terminal.attach` | `device_id`, `terminal_id` | `{terminal_id, cols, rows, scrollback}` — output goes to this app connection from now on; `scrollback` is base64 of the last 64 KiB the terminal produced (A38). `not_found` once the terminal is gone |
 | `terminal.close` | `device_id`, `terminal_id` | `{}` — ends the shell; idempotent (A38) |
-| `device.agents` | `device_id` | `{agents}` — the agents as `hello` reports them, with `accounts[].limits` read fresh for this reply (A33) |
+| `device.agents` | `device_id` | `{agents}` — the agents as `hello` reports them, with `accounts[].limits` read for this reply (A33) |
 | `device.update` | `device_id`, `build` | `{accepted: true, from}` — the device fetches the gateway's wheel, refuses it unless its SHA-256 is `build`, installs it, restarts its service and reconnects with the new `client_build` (A22). `conflict` when it already runs `build`, or when it is in use (A56): a session it drives is starting, running or waiting on the person; a session it drives or is attached to has queued messages; an attached terminal session has an open turn, a pending approval or question, or queued or undelivered steers; or a device terminal (A38) is open. `unsupported` when the client cannot update itself (installed from source). The gateway sends it on its own account, with `from: "gateway"`, whenever a device's build is not the served one and the device has been quiet for 120 s (A36, A56); the device's own answer is final, because the gateway cannot see steers or shells. An app sends it to retry a failed update. |
 
 Every request carries `id`. `session.stop` is idempotent. `session.delete` removes the session from
@@ -4099,8 +4102,10 @@ one app connection that asked. The gateway relays bytes and never reads them.
       from the `compact_boundary` row, and publishes a slash command typed at the terminal once, as
       `user_message {source: "terminal"}` that starts no turn (A32).
 - [ ] Reports each agent's `accounts` from the agent's own files in `hello` and `agents.updated`
-      without `limits`, answers `device.agents` with `limits` read fresh for every `account` — or
-      `limits_error` when the read failed — and never writes a credential or refreshes a token (A33).
+      without `limits`, answers `device.agents` with `limits` read for every `account` — an earlier
+      reading under 30 minutes old, dated by `limits_checked_at`, when the vendor could not answer
+      just now or the agent was too slow or failed — or `limits_error` when the read failed and none
+      can stand in, and never writes a credential or refreshes a token (A33).
 - [ ] Reads the end of a mirrored Claude turn from the assistant row's `stop_reason`, never from a
       row that happens to hold no `tool_use` — the CLI writes each content block as a row of its
       own — so a message held for a running turn goes out only once the turn has really ended; and

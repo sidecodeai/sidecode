@@ -1,37 +1,41 @@
 """How Claude Code is signed in on this device, and what is left of it (A33).
 
 Everything here is read-only. The OAuth credential comes from the login Keychain
-through the `security` CLI — the same tool Claude Code writes it with, so
-reading it back asks the Keychain for nothing new — or from
-`~/.claude/.credentials.json` on a machine with no Keychain. The account's email
-comes from `~/.claude.json`, and a configured key is recognised by name alone.
-The device never writes a credential, never refreshes a token, and never logs
-one.
+through the `security` CLI (`keychain.py`) or from `~/.claude/.credentials.json`
+on a machine with no Keychain. The account's email comes from `~/.claude.json`,
+and a configured key is recognised by name alone. The device never writes a
+credential, never refreshes a token, and never logs one.
+
+An item the Keychain cannot hand over right now is not a person who signed out:
+the account last read is reported again, without its token, until a read says
+otherwise.
 """
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import os
-import sys
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any
 
+from ...logging_setup import logger
 from ...models import UNSET, AgentAccount, PlanSetting
 from .. import anthropic_usage, credentials
 from ..anthropic_usage import Bearer
 from . import runtime
+from .keychain import KeychainUnreadable, read_keychain
 
+log = logger("rc_client.claude.account")
+
+# This agent's id, as `plugin.py` names it.
+AGENT = "claude"
 PROVIDER = "anthropic"
 VENDOR_HOST = "api.anthropic.com"
-KEYCHAIN_SERVICE = "Claude Code-credentials"
-KEYCHAIN_TIMEOUT = 5.0
-# A flag rather than an inline `sys.platform` test, so a type check run on Linux
-# still reads the Keychain path below as reachable.
-IS_MACOS = sys.platform == "darwin"
 EXPIRED = "signed-in token expired; open Claude Code once to refresh it"
+REJECTED = "signed-in token rejected (HTTP 401); open Claude Code once to refresh it"
+KEYCHAIN_BUSY = "the login Keychain could not be read just now"
 # Either of these, or an `apiKeyHelper`, puts Claude Code on a key rather than
 # on the person's own Anthropic account.
 KEY_SETTINGS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
@@ -40,8 +44,20 @@ BASE_URL = "ANTHROPIC_BASE_URL"
 # and then the words that are worth showing a person.
 TIER_PREFIX = "default_claude_"
 
-# Returns the Keychain item as the `security` CLI prints it, or nothing.
+# Returns the Keychain item as the `security` CLI prints it, or nothing; raises
+# `KeychainUnreadable` when the item may be there and cannot be read right now.
 KeychainReader = Callable[[], Awaitable[str | None]]
+
+
+@dataclass(slots=True)
+class SignIn:
+    """The account the credential last held, in memory and without its token."""
+
+    account: AgentAccount | None = None
+
+
+# What the Keychain last said, for a read that fails now.
+signed_in = SignIn()
 
 
 def credentials_file() -> Path:
@@ -59,47 +75,29 @@ def config_file() -> Path:
     return runtime.CLAUDE_HOME.parent / ".claude.json"
 
 
-async def detect(limits: bool, keychain: KeychainReader | None = None) -> list[AgentAccount]:
+async def detect(
+    limits: bool, keychain: KeychainReader | None = None, proxy: str = ""
+) -> list[AgentAccount]:
     """The one credential Claude Code runs on here, or nothing at all."""
     key = _key_account()
     if key is not None:
         return [key]
     reader = keychain or read_keychain
-    signin = _oauth_account(credentials.parse(await _credential(reader)))
+    try:
+        raw = await _credential(reader)
+    except KeychainUnreadable:
+        return _remembered(limits)
+    signin = _oauth_account(credentials.parse(raw))
     if signin is None:
+        signed_in.account = None
+        if raw:
+            log.info("claude credential read", outcome="no_oauth_block")
         return []
     account, bearer = signin
+    signed_in.account = account.without_limits()
     if limits:
-        await anthropic_usage.fill_limits(account, bearer)
+        await anthropic_usage.fill_limits(AGENT, account, bearer, proxy, partial(_renewed, reader))
     return [account]
-
-
-async def read_keychain() -> str | None:
-    """The Claude Code credential item, as the `security` CLI prints it."""
-    if not IS_MACOS:
-        return None
-    try:
-        process = await asyncio.create_subprocess_exec(
-            "security",
-            "find-generic-password",
-            "-s",
-            KEYCHAIN_SERVICE,
-            "-w",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-    except (OSError, ValueError):
-        return None
-    try:
-        out, _ = await asyncio.wait_for(process.communicate(), KEYCHAIN_TIMEOUT)
-    except TimeoutError:
-        process.kill()
-        with contextlib.suppress(ProcessLookupError):
-            await process.wait()
-        return None
-    if process.returncode != 0:
-        return None
-    return out.decode("utf-8", "replace").strip() or None
 
 
 async def _credential(reader: KeychainReader) -> str | None:
@@ -111,6 +109,26 @@ async def _credential(reader: KeychainReader) -> str | None:
         return credentials_file().read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
+
+
+async def _renewed(reader: KeychainReader) -> Bearer | None:
+    """The token the credential holds now, for a read the vendor refused (it may be new)."""
+    try:
+        signin = _oauth_account(credentials.parse(await _credential(reader)))
+    except KeychainUnreadable:
+        return None
+    return signin[1] if signin is not None else None
+
+
+def _remembered(limits: bool) -> list[AgentAccount]:
+    """The account last read, when the Keychain cannot be read now; nobody when none was."""
+    last = signed_in.account
+    if last is None:
+        return []
+    account = last.without_limits()
+    if limits:
+        anthropic_usage.fall_back(AGENT, account, KEYCHAIN_BUSY)
+    return [account]
 
 
 def _oauth_account(data: dict[str, Any]) -> tuple[AgentAccount, Bearer | None] | None:
@@ -128,7 +146,7 @@ def _oauth_account(data: dict[str, Any]) -> tuple[AgentAccount, Bearer | None] |
     token = credentials.text(block.get("accessToken"))
     expires = block.get("expiresAt")
     bearer = (
-        Bearer(token, expires if isinstance(expires, int) else None, EXPIRED)
+        Bearer(token, expires if isinstance(expires, int) else None, EXPIRED, REJECTED)
         if token is not None
         else None
     )
