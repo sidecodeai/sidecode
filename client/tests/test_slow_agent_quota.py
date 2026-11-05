@@ -16,9 +16,9 @@ import pytest
 
 from rc_client.agents import detection, registry
 from rc_client.agents.registry import DetectContext, detect_all
-from rc_client.agents.slow_agent import SLOW_AGENT, remember
+from rc_client.agents.slow_agent import FAILED_AGENT, SLOW_AGENT, remember
 from rc_client.models import AgentAccount, AgentInfo, AgentLimit
-from tests.detect_helpers import after, everyone, install, reporting, settle
+from tests.detect_helpers import after, everyone, install, raising, reporting, settle
 from tests.usage_helpers import READ_AT, Clock
 
 HALF_HOUR = 30 * 60
@@ -60,20 +60,35 @@ def slow(monkeypatch: pytest.MonkeyPatch, agent: str = "pi") -> asyncio.Event:
     return gate
 
 
+# An agent that cannot answer a request for quota is too slow to, or fails, in its own words.
+TROUBLES = [("slow", SLOW_AGENT), ("fails", FAILED_AGENT)]
+IN_TROUBLE = pytest.mark.parametrize(("kind", "line"), TROUBLES)
+
+
+def in_trouble(monkeypatch: pytest.MonkeyPatch, agent: str, kind: str) -> asyncio.Event:
+    """`agent` cannot answer from now on, in the way `kind` says; the gate frees a slow one."""
+    if kind == "fails":
+        broken = raising(RuntimeError("the adapter is broken"))
+        install(monkeypatch, {**everyone("2.0"), agent: broken})
+        return asyncio.Event()
+    return slow(monkeypatch, agent)
+
+
 async def ask_slow(
     monkeypatch: pytest.MonkeyPatch,
     earlier: list[AgentAccount],
     later: float = 0,
     agent: str = "pi",
+    kind: str = "slow",
 ) -> AgentInfo:
-    """`agent` answers a request for quota with `earlier`, and `later` seconds on is too slow to."""
+    """`agent` answers a request for quota with `earlier`, and `later` seconds on cannot."""
     monkeypatch.setattr(detection, "AGENT_TIMEOUT", 0.05)
     clock = Clock()
     monkeypatch.setattr(detection, "now_ms", clock.now_ms)
     install(monkeypatch, everyone("1.0", **{agent: earlier}))
     await detect_all(WITH_QUOTA)
     clock.advance(later)
-    gate = slow(monkeypatch, agent)
+    gate = in_trouble(monkeypatch, agent, kind)
 
     agents = await detect_all(WITH_QUOTA)
 
@@ -360,8 +375,9 @@ async def answer_then_ask_slow(
     agent: str,
     answers: Sequence[tuple[float, list[AgentAccount]]],
     later: float,
+    kind: str = "slow",
 ) -> AgentInfo:
-    """`agent` answers quota requests with each of `answers` at its time, and later is too slow."""
+    """`agent` answers quota requests with each of `answers` at its time, and later cannot."""
     monkeypatch.setattr(detection, "AGENT_TIMEOUT", 0.05)
     clock = Clock()
     monkeypatch.setattr(detection, "now_ms", clock.now_ms)
@@ -370,7 +386,7 @@ async def answer_then_ask_slow(
         install(monkeypatch, everyone("1.0", **{agent: accounts}))
         await detect_all(WITH_QUOTA)
     clock.advance(later - (clock.now - 1_000))
-    gate = slow(monkeypatch, agent)
+    gate = in_trouble(monkeypatch, agent, kind)
 
     agents = await detect_all(WITH_QUOTA)
 
@@ -379,16 +395,17 @@ async def answer_then_ask_slow(
     return next(info for info in agents if info.agent == agent)
 
 
+@IN_TROUBLE
 @pytest.mark.parametrize(("agent", "provider"), KEPT_FOR)
 async def test_an_answer_that_only_has_an_error_does_not_take_the_windows_away(
-    monkeypatch: pytest.MonkeyPatch, agent: str, provider: str
+    monkeypatch: pytest.MonkeyPatch, agent: str, provider: str, kind: str, line: str
 ) -> None:
     answers = [
         (0, [subscription(window(16), provider=provider)]),
         (600, [erring(provider=provider)]),
     ]
 
-    info = await answer_then_ask_slow(monkeypatch, agent, answers, later=1_200)
+    info = await answer_then_ask_slow(monkeypatch, agent, answers, later=1_200, kind=kind)
 
     [account] = accounts_of(info)
     assert account.limits == [window(16)], "ten minutes old, whatever the answer after it said"
@@ -396,31 +413,34 @@ async def test_an_answer_that_only_has_an_error_does_not_take_the_windows_away(
     assert account.limits_checked_at == READ_AT
 
 
+@IN_TROUBLE
 async def test_the_windows_an_error_leaves_are_judged_by_the_time_they_were_read(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, kind: str, line: str
 ) -> None:
     answers = [(0, [subscription(window(16))]), (20 * 60, [erring()])]
 
-    info = await answer_then_ask_slow(monkeypatch, "pi", answers, later=31 * 60)
+    info = await answer_then_ask_slow(monkeypatch, "pi", answers, later=31 * 60, kind=kind)
 
     [account] = accounts_of(info)
     assert account.limits is None, "an error 11 minutes ago does not make them 11 minutes old"
-    assert account.limits_error == SLOW_AGENT
+    assert account.limits_error == line
 
 
+@IN_TROUBLE
 async def test_one_error_after_another_still_leaves_the_windows_that_were_read(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, kind: str, line: str
 ) -> None:
     answers = [(0, [subscription(window(16))]), (300, [erring()]), (600, [erring("another error")])]
 
-    info = await answer_then_ask_slow(monkeypatch, "pi", answers, later=900)
+    info = await answer_then_ask_slow(monkeypatch, "pi", answers, later=900, kind=kind)
 
     [account] = accounts_of(info)
     assert account.limits == [window(16)]
 
 
+@IN_TROUBLE
 async def test_an_answer_that_says_there_are_none_replaces_the_windows(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, kind: str, line: str
 ) -> None:
     none = AgentAccount(
         provider="openai",
@@ -431,41 +451,44 @@ async def test_an_answer_that_says_there_are_none_replaces_the_windows(
     )
     answers = [(0, [subscription(window(16), provider="openai")]), (600, [none])]
 
-    info = await answer_then_ask_slow(monkeypatch, "codex", answers, later=1_200)
+    info = await answer_then_ask_slow(monkeypatch, "codex", answers, later=1_200, kind=kind)
 
     [account] = accounts_of(info)
     assert account.limits is None, "the vendor said there are none, whatever it said before"
     assert account.limits_error is None
 
 
+@IN_TROUBLE
 async def test_an_answer_that_has_no_way_to_read_replaces_the_windows(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, kind: str, line: str
 ) -> None:
     plain = AgentAccount(provider="anthropic", method="account", email=EMAIL)
     answers = [(0, [subscription(window(16))]), (600, [plain])]
 
-    info = await answer_then_ask_slow(monkeypatch, "pi", answers, later=1_200)
+    info = await answer_then_ask_slow(monkeypatch, "pi", answers, later=1_200, kind=kind)
 
     assert accounts_of(info) == [plain]
 
 
+@IN_TROUBLE
 async def test_an_error_after_windows_for_an_account_with_no_email_keeps_nothing(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, kind: str, line: str
 ) -> None:
     answers = [(0, [subscription(window(16), email=None)]), (600, [erring(email=None)])]
 
-    info = await answer_then_ask_slow(monkeypatch, "pi", answers, later=1_200)
+    info = await answer_then_ask_slow(monkeypatch, "pi", answers, later=1_200, kind=kind)
 
     [account] = accounts_of(info)
-    assert account.limits is None and account.limits_error == SLOW_AGENT
+    assert account.limits is None and account.limits_error == line
 
 
 # ------------------------------------------------ truthful empty lists, and twins
 
 
+@IN_TROUBLE
 @pytest.mark.parametrize("email", [EMAIL, None])
 async def test_an_account_that_truthfully_reports_no_windows_stays_as_it_is(
-    monkeypatch: pytest.MonkeyPatch, email: str | None
+    monkeypatch: pytest.MonkeyPatch, email: str | None, kind: str, line: str
 ) -> None:
     truthful = AgentAccount(
         provider="openai",
@@ -475,23 +498,24 @@ async def test_an_account_that_truthfully_reports_no_windows_stays_as_it_is(
         limits_checked_at=READ_AT,
     )
 
-    codex = await ask_slow(monkeypatch, [truthful], agent="codex", later=60)
+    codex = await ask_slow(monkeypatch, [truthful], agent="codex", later=60, kind=kind)
 
     assert accounts_of(codex) == [replace(truthful, limits=None, limits_checked_at=None)]
 
 
+@IN_TROUBLE
 async def test_accounts_that_share_an_identity_are_kept_apart(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, kind: str, line: str
 ) -> None:
     broken = erring(email=None)
     truthful = AgentAccount(
         provider="anthropic", method="account", limits=[], limits_checked_at=READ_AT
     )
 
-    pi = await ask_slow(monkeypatch, [broken, truthful], later=60)
+    pi = await ask_slow(monkeypatch, [broken, truthful], later=60, kind=kind)
 
     first, second = accounts_of(pi)
-    assert first.limits_error == SLOW_AGENT, "the first of the two said there was an error"
+    assert first.limits_error == line, "the first of the two said there was an error"
     assert second.limits is None and second.limits_error is None, "the second truthfully said none"
 
 
