@@ -513,7 +513,7 @@ describe('a batch dictation', () => {
     expect(result.current.error).toBeNull();
   });
 
-  it('keeps the segment still listening when a cut one fails, and ends with its words', async () => {
+  it('keeps listening when an older segment fails, and says so at Done', async () => {
     const { result, sockets, endings } = harness();
     act(() => result.current.start('batch'));
     await settle();
@@ -522,14 +522,19 @@ describe('a batch dictation', () => {
     await settle(30_000);
     expect(sockets).toHaveLength(3);
 
-    // That segment's words are gone, the others are not.
-    act(() => sockets[1]!.deliver({ type: 'stt.error', code: 'upstream', message: 'backend busy' }));
+    // That segment had stopped taking audio: its words are gone, and the
+    // person goes on speaking into the newest.
+    act(() =>
+      sockets[1]!.deliver({ type: 'stt.error', code: 'upstream', message: 'backend busy' }),
+    );
     await settle();
-    expect(sockets[2]!.toldToTranscribe).toBe(true);
-    expect(sockets[2]!.toldToDrop).toBe(false);
-    expect(result.current.state).toBe('finishing');
+    expect(result.current.state).toBe('listening');
+    expect(sockets[2]!.toldToTranscribe).toBe(false);
     expect(endings).toEqual([]);
 
+    act(() => result.current.done());
+    await settle();
+    expect(sockets[2]!.toldToTranscribe).toBe(true);
     act(() => sockets[2]!.deliver({ type: 'stt.final', text: 'third' }));
     await settle();
 
@@ -538,7 +543,26 @@ describe('a batch dictation', () => {
     expect(result.current.error).toBe('backend busy');
   });
 
-  it('keeps the listening segment when a cut one closes without its final', async () => {
+  it('stops listening when the newest segment fails, keeping the older ones', async () => {
+    const { result, sockets, endings } = harness();
+    act(() => result.current.start('batch'));
+    await settle();
+    await settle(30_000);
+
+    act(() =>
+      sockets[1]!.deliver({ type: 'stt.error', code: 'upstream', message: 'backend busy' }),
+    );
+    await settle();
+    expect(result.current.state).toBe('finishing');
+    expect(sockets[0]!.toldToDrop).toBe(false);
+
+    act(() => sockets[0]!.deliver({ type: 'stt.final', text: 'first' }));
+    await settle();
+    expect(endings).toEqual([{ text: 'first', interrupted: true }]);
+    expect(result.current.error).toBe('backend busy');
+  });
+
+  it('keeps listening when an older segment closes without its final', async () => {
     const { result, sockets, endings } = harness();
     act(() => result.current.start('batch'));
     await settle();
@@ -546,9 +570,12 @@ describe('a batch dictation', () => {
 
     act(() => sockets[0]!.onclose?.({}));
     await settle();
-    expect(sockets[1]!.toldToTranscribe).toBe(true);
+    expect(result.current.state).toBe('listening');
+    expect(sockets[1]!.toldToTranscribe).toBe(false);
     expect(sockets[1]!.toldToDrop).toBe(false);
 
+    act(() => result.current.done());
+    await settle();
     act(() => sockets[1]!.deliver({ type: 'stt.final', text: 'second' }));
     await settle();
     expect(endings).toEqual([{ text: 'second', interrupted: true }]);

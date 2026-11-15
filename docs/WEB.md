@@ -242,18 +242,20 @@ row, say — is not a pointer and ends nothing. The mic is hidden entirely when 
 `stt.enabled: false`.
 
 A batch dictation's words exist only in each segment's final, so losing a segment never goes
-unsaid. A failure, a socket that closes without its final, or a cut whose new socket cannot
-connect costs that segment alone: listening stops as Done would, the segments still out — the one
-taking audio included — are awaited, and the run then ends with what they held. A final that never
-comes within 30 s ends it the same way. A cut still connecting when Done is tapped had no audio
-yet, so its socket is closed, failed or not, and the run ends as soon as the others have spoken.
-The held text lands first, then the notice: the gateway's message, or "Transcription failed.". The
-notice has one source wherever the run is: the controller's error for the run the composer
-follows, and, for a run handed to the job store, the job, which ends `interrupted` carrying it
-(`DictationJob.notice`), so whichever composer opens the session shows the same banner. Typing
-does not clear it — `drop`, which every edit calls, keeps a job that carries a notice — and it goes
-when it is dismissed, the draft is sent, or a new dictation begins (`forget`). A live dictation's
-failures read as before.
+unsaid. A failure of a segment, a socket that closes without its final, or a cut whose new socket
+cannot connect costs that segment alone, and the others are awaited, never cancelled. The newest
+segment's loss stops listening as Done would; the run then ends with what the others held, at
+once when none is still out. An older segment, one already told to stop, that is lost is only
+noted: listening goes on, and the run ends with the notice at Done. The first loss's notice
+stands. A final that never comes within 30 s ends the run the same way. A cut still connecting
+when Done is tapped had no audio yet, so its socket is closed, failed or not, and the run ends as
+soon as the others have spoken. The held text lands first, then the notice: the gateway's message,
+or "Transcription failed.". The notice has one source wherever the run is: the controller's error
+for the run the composer follows, and, for a run handed to the job store, the job, which ends
+`interrupted` carrying it (`DictationJob.notice`), so whichever composer opens the session shows
+the same banner. Typing does not clear it — `drop`, which every edit calls, keeps a job that
+carries a notice — and it goes when it is dismissed, the draft is sent, or a new dictation begins
+(`forget`). A live dictation's failures read as before.
 
 Words that land never interrupt an input method. While the field is composing, between
 `compositionstart` and `compositionend`, a batch dictation's words — in the open composer or from

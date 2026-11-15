@@ -265,19 +265,26 @@ export function useVoice({
   );
 
   /**
-   * A batch segment lost its words, to a failure or to a close without its
-   * final. What the other segments heard is still worth having: listening stops
-   * as Done would, they are awaited, and the run then ends with what they held
-   * and the notice of the first loss.
+   * A batch segment lost its words: to a failure or to a close without its
+   * final. What the other segments heard is still worth having, so they are
+   * awaited, never cancelled, and the run ends with what they held and the
+   * notice of the first loss.
+   *
+   * The newest segment's loss stops listening as Done would. An older segment,
+   * already told to stop, that is lost is only noted: listening goes on, and
+   * the run ends with the notice at Done. With no segment still out, the end
+   * comes at once.
    */
   const lose = useCallback(
-    (run: Run, notice: DictationNotice) => {
+    (run: Run, notice: DictationNotice, older: boolean) => {
       run.lost ??= notice;
-      if (!run.finishing && current.current === run && stateRef.current === 'listening') {
-        setElapsedMs(wholeSeconds(Date.now() - startedAt.current));
-        move('finishing');
+      if (!older) {
+        if (!run.finishing && current.current === run && stateRef.current === 'listening') {
+          setElapsedMs(wholeSeconds(Date.now() - startedAt.current));
+          move('finishing');
+        }
+        stop(run);
       }
-      stop(run);
       if (run.segments.settled) fail(run, run.lost.message);
     },
     [move, stop, fail],
@@ -301,9 +308,11 @@ export function useVoice({
         case 'failed': {
           run.segments.end(index);
           const message = event.message || strings.voice.failed;
-          // A batch segment's words are only ever in its final, so a failure
-          // costs that segment alone: the others are still awaited.
-          if (run.mode === 'batch') lose(run, { message });
+          // A batch segment's words are only ever in its final, so its failure
+          // costs that segment, and the others still land.
+          if (run.mode === 'batch') {
+            lose(run, { message }, index !== run.segments.active);
+          }
           // A live segment that already handed the microphone on keeps what it
           // transcribed; only the live one can end the dictation.
           else if (index === run.segments.active) fail(run, message);
@@ -316,8 +325,9 @@ export function useVoice({
           // closed so has lost its words.
           if (!run.segments.isOpen(index)) return;
           run.segments.end(index);
-          if (run.mode === 'batch') lose(run, { message: strings.voice.failed });
-          else settle();
+          if (run.mode === 'batch') {
+            lose(run, { message: strings.voice.failed }, index !== run.segments.active);
+          } else settle();
       }
     },
     [publish, fail, lose],
@@ -347,8 +357,10 @@ export function useVoice({
         if (run.over) return false;
         if (run.finishing) {
           if (run.segments.settled) publish(run, true);
-        } else if (run.mode === 'batch') lose(run, { message: strings.voice.failed });
-        else fail(run, strings.voice.failed);
+        } else if (run.mode === 'batch') {
+          // The newest segment, which was to take the audio, is the one lost.
+          lose(run, { message: strings.voice.failed }, false);
+        } else fail(run, strings.voice.failed);
         return false;
       }
       // Connecting is the one await here, so the dictation can have ended while
