@@ -29,11 +29,12 @@ import type {
 } from '../../protocol/types';
 import { draftOf as answerDraftOf, useAnswers } from '../../stores/answers';
 import { jobOf, useDictationJobs, type PolishPlan } from '../../stores/dictationJobs';
-import { draftOf, useDrafts } from '../../stores/drafts';
+import { draftOf, landsAside, useDrafts } from '../../stores/drafts';
 import { useImeGuard } from './useImeGuard';
 import { sessionKey } from '../../stores/sessions';
 import { VoiceControls } from '../voice/VoiceControls';
 import { WorkingPill } from '../voice/WorkingPill';
+import { dictationMode, type DictationMode } from '../voice/dictationMode';
 import { mergeDraft } from '../voice/draft';
 import { primarySlot, type PolishPhase } from '../voice/primarySlot';
 import { canPolish, undoPolished, type PolishSpan } from '../voice/polish';
@@ -57,6 +58,12 @@ interface Props {
   /** A20: the question the session is waiting on, when there is one. */
   question: QuestionEvent | null;
   sttEnabled: boolean;
+  /**
+   * A57: whether the gateway's speech backend returns words while the audio is
+   * still arriving. False makes every dictation a batch one; absent — a gateway
+   * too old to say — keeps the live words.
+   */
+  sttStreaming?: boolean;
   /** A29: this gateway has a polish model, so the setting can take effect. */
   polishEnabled?: boolean;
   /**
@@ -99,6 +106,7 @@ export function Composer({
   queue,
   question,
   sttEnabled,
+  sttStreaming,
   polishEnabled = false,
   polishContext,
   commands = NO_COMMANDS,
@@ -136,12 +144,18 @@ export function Composer({
   const fileInput = useRef<HTMLInputElement>(null);
   const textRef = useRef(text);
   /**
-   * The draft dictation started from, and the value it last wrote. A transcript
-   * arrives between renders, so the field is read from this ref rather than
-   * from state, and `applied` is how a keystroke that landed in between is told
-   * apart from our own write.
+   * The draft dictation started from, the value it last wrote, how the run
+   * shows its words, and the queued message the field was editing when it
+   * started, if any (A57). A transcript arrives between renders, so the field
+   * is read from this ref rather than from state, and `applied` is how a
+   * keystroke that landed in between is told apart from our own write.
    */
-  const dictation = useRef<{ base: string; applied: string } | null>(null);
+  const dictation = useRef<{
+    base: string;
+    applied: string;
+    mode: DictationMode;
+    editTs: number | null;
+  } | null>(null);
   /**
    * `docs/DESIGN.md` § "The composer" — **While dictation runs, the field
    * follows the words**. A dictated write has no caret to keep the newest line
@@ -190,11 +204,12 @@ export function Composer({
   const dropPolish = useCallback(() => jobs.getState().drop(key), [jobs, key]);
 
   // This composer is the session's open one while it is mounted: a result that
-  // lands now is seen, and one that landed before is seen from here on.
+  // lands now is seen, and one that landed before is seen from here on. Its
+  // field holds a landing back while an input method composes (A57).
   useEffect(() => {
-    jobs.getState().open(key);
+    jobs.getState().open(key, ime.whenComposed);
     return () => jobs.getState().leave(key);
-  }, [jobs, key]);
+  }, [jobs, key, ime.whenComposed]);
 
   const terminalControlled = session.control === 'terminal';
   // A10: a shared session is a live CLI the device is attached to. Everything
@@ -380,9 +395,9 @@ export function Composer({
   );
 
   const startPolish = useCallback(
-    (span: PolishSpan) => {
+    (span: PolishSpan, mode: DictationMode) => {
       const plan = polishPlan();
-      if (plan && canPolish(span.dictated)) jobs.getState().polish(key, span, plan);
+      if (plan && canPolish(span.dictated)) jobs.getState().polish(key, span, plan, mode);
     },
     [polishPlan, jobs, key],
   );
@@ -411,7 +426,8 @@ export function Composer({
   const voice = useVoice({
     enabled: sttEnabled && !disabled,
     // Leaving mid-dictation hands the rest of it to the job store, which
-    // finishes the transcript and the polish into this session's draft.
+    // finishes the transcript and the polish into this session's draft; so
+    // does reaching for the field of a batch dictation (A57).
     onDetach: () => {
       const run = dictation.current;
       if (!run) return null;
@@ -420,7 +436,12 @@ export function Composer({
     },
     onTranscript: (transcript, isFinal) => {
       const run = dictation.current;
-      if (!run || textRef.current !== run.applied) return;
+      if (!run) return;
+      if (run.mode === 'batch') {
+        if (isFinal) landBatch(transcript, run.editTs);
+        return;
+      }
+      if (textRef.current !== run.applied) return;
       const next = mergeDraft(run.base, transcript);
       // Every transcript that changes the field leaves the end of the words in
       // view — while listening, and through the finishing spinner. A transcript
@@ -431,9 +452,37 @@ export function Composer({
       setDraft(next);
       // A29: polishing starts on the last transcript of a dictation, once the
       // words are in the field and the field is the person's again.
-      if (isFinal) startPolish({ base: run.base, dictated: transcript });
+      if (isFinal) startPolish({ base: run.base, dictated: transcript }, run.mode);
     },
   });
+
+  /**
+   * A57: a batch dictation's words arrive once, whole, after Done, and join
+   * whatever the field holds by then: words that got there first stay first
+   * and the transcript is appended, never written over them, as it is for a
+   * job that lands in the background. Polish then runs as for any dictation.
+   * They wait for an input method's composition to end, and belong to the
+   * draft the mic was pressed on, set aside while a queued message is edited,
+   * where they wait unpolished.
+   */
+  function landBatch(transcript: string, editTs: number | null) {
+    dictation.current = null;
+    ime.whenComposed(() => {
+      const draft = useDrafts.getState().drafts[key];
+      if (landsAside(draft, editTs)) {
+        const aside = draft?.editing?.aside.text ?? '';
+        useDrafts.getState().setAside(key, mergeDraft(aside, transcript));
+        return;
+      }
+      const before = textRef.current;
+      const next = mergeDraft(before, transcript);
+      if (next !== before) {
+        followTail.current = true;
+        setDraft(next);
+      }
+      startPolish({ base: before, dictated: transcript }, 'batch');
+    });
+  }
 
   const voiceBusy =
     voice.state === 'starting' || voice.state === 'listening' || voice.state === 'finishing';
@@ -447,8 +496,11 @@ export function Composer({
    * a polish still out (A43).
    */
   const jobPhase = job?.phase;
+  // A57: a batch transcript the person has typed over is still on its way, but
+  // Send's slot is theirs again; it is appended when it comes.
+  const awaitingWords = jobPhase === 'finishing' && job?.typedOver !== true;
   const polishPhase: PolishPhase =
-    jobPhase === 'polishing' || jobPhase === 'finishing'
+    jobPhase === 'polishing' || awaitingWords
       ? 'polishing'
       : job?.note
         ? 'polished'
@@ -456,12 +508,28 @@ export function Composer({
           ? 'failed'
           : 'idle';
   const voiceSlot = primarySlot(voice.state, polishPhase);
+  /**
+   * What went wrong with a dictation, in one place: the run on screen says it
+   * through the controller, and a batch run handed to the job store through
+   * its job, whichever composer opens the session (A57). Dismissing the job's
+   * forgets the job.
+   */
+  const jobNotice = jobPhase === 'interrupted' ? (job?.notice ?? null) : null;
+  const dictationNotice =
+    voice.state === 'error' && voice.error ? { message: voice.error } : jobNotice;
+  const dismissDictationNotice = voice.state === 'error' ? voice.dismissError : dropPolish;
   const slot = returning && voiceSlot === 'send' ? 'working' : voiceSlot;
 
   const startVoice = () => {
     dropPolish();
-    dictation.current = { base: textRef.current, applied: textRef.current };
-    voice.start();
+    const mode = dictationMode(sttStreaming);
+    dictation.current = {
+      base: textRef.current,
+      applied: textRef.current,
+      mode,
+      editTs: editing?.ts ?? null,
+    };
+    voice.start(mode);
   };
 
   /**
@@ -470,12 +538,14 @@ export function Composer({
    * the field is the other, which is how a person reads back what was just
    * said — the field stops following the words the moment it is touched. The
    * field's own programmatic focus, taking a command row for instance, is not
-   * a pointer and ends nothing.
+   * a pointer and ends nothing. A57: a batch dictation has put nothing in the
+   * field yet, so reaching for it hands it to the job store instead, as
+   * leaving the session does: its words land after whatever is typed.
    */
   const takeFieldBack = () => {
     if (!voiceBusy) return;
+    voice.takeover();
     dictation.current = null;
-    voice.cancel();
   };
 
   /** A43: Cancel ends what the field was doing with the edit, then puts it back. */
@@ -613,10 +683,10 @@ export function Composer({
         </div>
       ) : null}
 
-      {voice.state === 'error' && voice.error ? (
+      {dictationNotice ? (
         <div className="composer-errors voice-error" role="alert">
-          <p>{voice.error}</p>
-          <button type="button" className="link-btn" onClick={voice.dismissError}>
+          <p>{dictationNotice.message}</p>
+          <button type="button" className="link-btn" onClick={dismissDictationNotice}>
             {strings.common.dismiss}
           </button>
         </div>
@@ -636,14 +706,16 @@ export function Composer({
         </div>
       ) : null}
 
-      {voiceBusy || polishPhase === 'polishing' ? (
+      {voiceBusy || jobPhase === 'finishing' || jobPhase === 'polishing' ? (
         <p className="voice-status hint">
           {voiceBusy
             ? voice.state === 'starting'
               ? strings.voice.connecting
               : voice.state === 'finishing'
                 ? strings.voice.finishing
-                : strings.voice.transcribing
+                : voice.mode === 'batch'
+                  ? strings.voice.recording
+                  : strings.voice.transcribing
             : jobPhase === 'finishing'
               ? strings.voice.finishing
               : strings.voice.polishing}
@@ -745,11 +817,13 @@ export function Composer({
               </>
             ) : null}
             {sttEnabled ? (
+              // One dictation per session: a new one waits for the words of the
+              // last to land.
               <button
                 type="button"
                 className="icon-btn"
                 aria-label={strings.composer.micStart}
-                disabled={disabled}
+                disabled={disabled || jobPhase === 'finishing'}
                 onClick={startVoice}
               >
                 <Mic size={16} />

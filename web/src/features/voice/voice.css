@@ -1,0 +1,118 @@
+/*
+ * The listening row (`docs/DESIGN.md` § "The composer", A57). Listening takes
+ * the composer's control row over: the waveform fills its free width, the
+ * elapsed timer sits right after it, and Done holds Send's slot at Send's size.
+ * It takes the full width of the box so it stays legible beside the field on a
+ * phone, and the field keeps its own row.
+ */
+.voice-controls {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: var(--sp-2) 0 2px;
+}
+
+/* The waveform's box. The bars draw in its text colour, so a theme reaches them. */
+.voice-meter {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 34px;
+  color: var(--ink);
+}
+
+.voice-wave {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/*
+ * The timer, and the word that takes its place once Done is tapped. The word
+ * ends where the timer ends and reaches left over the waveform's end, which the
+ * canvas fades out beneath it, so nothing in the row moves.
+ */
+.voice-clock {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  font-size: var(--fs-13);
+  color: var(--ink-secondary);
+}
+
+.voice-timer,
+.voice-busy {
+  transition: opacity 150ms var(--ease);
+}
+
+/* Room for 59:59 from the start, so nothing moves when the minutes reach two digits. */
+.voice-timer {
+  min-width: 5ch;
+}
+
+.voice-busy {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  opacity: 0;
+}
+
+.voice-controls[data-phase='resting'] .voice-timer {
+  opacity: 0;
+}
+
+.voice-controls[data-phase='resting'] .voice-busy {
+  opacity: 1;
+}
+
+/*
+ * Done's slot keeps Done's width while the row lasts. The spinner Done becomes
+ * sits at its trailing end, where Send will be, and the waveform beside the
+ * slot never changes size.
+ */
+.voice-slot {
+  display: grid;
+  flex: none;
+  align-items: center;
+  justify-items: end;
+}
+
+.voice-slot > * {
+  grid-area: 1 / 1;
+}
+
+/* Done's own measure: the small button, at Send's least width. */
+.voice-slot-sizer {
+  visibility: hidden;
+  min-width: 34px;
+}
+
+/* Listening starts: the waveform and the timer settle in. */
+.voice-meter,
+.voice-clock {
+  animation: voice-enter 180ms var(--ease) backwards;
+}
+
+@keyframes voice-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-meter,
+  .voice-clock {
+    animation: none;
+  }
+
+  .voice-timer,
+  .voice-busy {
+    transition: none;
+  }
+}

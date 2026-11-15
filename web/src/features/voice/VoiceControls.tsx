@@ -1,5 +1,5 @@
 /**
- * What the composer's control row holds while dictation runs: how loud it is,
+ * What the composer's control row holds while dictation runs: the waveform,
  * how long it has been listening, and the one way out.
  *
  * Done stands where Send stands, at Send's size, because it is the one primary
@@ -10,16 +10,22 @@
  *
  * The click on Done is answered in that same slot: the capsule gives way to the
  * spinner until the backend's final transcript lands, and nothing in the row can
- * be clicked in between (`docs/DESIGN.md` § "The composer").
+ * be clicked in between (`docs/DESIGN.md` § "The composer"). Meanwhile the
+ * waveform rests and the timer gives way to "Transcribing…" (A57). Once the
+ * words are in, the ordinary row takes its place in the same frame as the
+ * status line changes, so the composer moves once.
  */
+import { useCallback, useRef } from 'react';
 import { clock } from '../../lib/format';
 import { strings } from '../../strings';
 import type { PrimarySlot } from './primarySlot';
 import type { VoiceController } from './useVoice';
+import { Waveform } from './Waveform';
 import { WorkingPill } from './WorkingPill';
+import './voice.css';
 
-/** Fixed per-bar weights: a level of 1 lights the middle bars tallest. */
-const BAR_WEIGHTS = [0.35, 0.55, 0.8, 1, 0.7, 0.95, 0.6, 0.85, 0.5, 0.7, 0.4];
+/** The timer reads m:ss, and an hour of listening reads 59:59. */
+const LONGEST_MS = 3_599_000;
 
 interface Props {
   voice: VoiceController;
@@ -29,29 +35,53 @@ interface Props {
 }
 
 export function VoiceControls({ voice, slot, onDone }: Props) {
-  const elapsed = clock(voice.elapsedMs);
+  const resting = voice.state === 'finishing';
+  const elapsed = clock(Math.min(voice.elapsedMs, LONGEST_MS));
+  const timer = useRef<HTMLSpanElement>(null);
+  const label = useRef<HTMLSpanElement>(null);
+  // The label ends where the timer ends and reaches left over the waveform.
+  const cover = useCallback(
+    () => Math.max(0, (label.current?.offsetWidth ?? 0) - (timer.current?.offsetWidth ?? 0)),
+    [],
+  );
+
   return (
-    <div className="voice-controls">
-      <span className="waveform" aria-hidden>
-        {BAR_WEIGHTS.map((weight, index) => (
-          <span key={index} style={{ height: `${Math.round(4 + weight * voice.level * 20)}px` }} />
-        ))}
-      </span>
-      <span className="mono voice-timer" aria-label={strings.voice.listeningFor(elapsed)}>
-        {elapsed}
-      </span>
-      {slot === 'done' ? (
-        <button
-          type="button"
-          className="btn small primary send-btn"
-          disabled={voice.state !== 'listening'}
-          onClick={onDone}
+    <div className="voice-controls" data-phase={resting ? 'resting' : 'listening'}>
+      <div className="voice-meter">
+        <Waveform levels={voice.levels} resting={resting} cover={cover} />
+      </div>
+      <span className="voice-clock">
+        <span
+          ref={timer}
+          className="mono voice-timer"
+          aria-label={strings.voice.listeningFor(elapsed)}
+          aria-hidden={resting || undefined}
         >
+          {elapsed}
+        </span>
+        <span ref={label} className="voice-busy" aria-hidden={!resting || undefined}>
+          {strings.voice.rowTranscribing}
+        </span>
+      </span>
+      <span className="voice-slot">
+        {/* Done's width, for as long as the row lasts: nothing beside the slot
+            moves when Done becomes the spinner. */}
+        <span className="btn small voice-slot-sizer" aria-hidden>
           {strings.voice.done}
-        </button>
-      ) : (
-        <WorkingPill label={strings.voice.finishing} />
-      )}
+        </span>
+        {slot === 'done' ? (
+          <button
+            type="button"
+            className="btn small primary send-btn"
+            disabled={voice.state !== 'listening'}
+            onClick={onDone}
+          >
+            {strings.voice.done}
+          </button>
+        ) : (
+          <WorkingPill label={strings.voice.finishing} />
+        )}
+      </span>
     </div>
   );
 }

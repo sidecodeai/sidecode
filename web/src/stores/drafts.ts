@@ -43,6 +43,18 @@ export interface Draft {
 /** Stable identity, so a session nobody has typed into does not redraw. */
 export const EMPTY_DRAFT: Draft = { text: '', attachments: [], editing: null };
 
+/**
+ * A57 — whether dictated words arriving now belong to the draft set aside
+ * rather than to the field. They belong to the draft the mic was pressed on:
+ * the field holds it unless it is editing a queued message the dictation did
+ * not start in (`editTs`, null outside any edit), or that edit is on its way
+ * back into the line.
+ */
+export function landsAside(draft: Draft | undefined, editTs: number | null): boolean {
+  const edit = draft?.editing;
+  return edit != null && (edit.ts !== editTs || edit.sending);
+}
+
 interface DraftsState {
   drafts: Record<string, Draft>;
   setText: (key: string, text: string) => void;
@@ -66,6 +78,8 @@ interface DraftsState {
   setEditSending: (key: string, sending: boolean) => void;
   /** A43: the words are back in the line, so the field takes back what it held. */
   endEdit: (key: string) => void;
+  /** A57: rewrite the draft set aside while a queued message is edited. */
+  setAside: (key: string, text: string) => void;
   clear: (key: string) => void;
   reset: () => void;
 }
@@ -152,6 +166,18 @@ export const useDrafts = create<DraftsState>((set, get) => ({
               text: draft.editing.aside.text,
               attachments: draft.editing.aside.attachments,
               editing: null,
+            }
+          : draft,
+      ),
+    ),
+
+  setAside: (key, text) =>
+    set((state) =>
+      write(state, key, (draft) =>
+        draft.editing && draft.editing.aside.text !== text
+          ? {
+              ...draft,
+              editing: { ...draft.editing, aside: { ...draft.editing.aside, text } },
             }
           : draft,
       ),

@@ -415,6 +415,7 @@ export function ChatPage() {
           queue={chat?.queue ?? []}
           question={question}
           sttEnabled={stt.enabled}
+          sttStreaming={stt.streaming}
           polishEnabled={polish.enabled}
           polishContext={buildPolishContext}
           commands={hasCommands ? commands : EMPTY_COMMANDS}

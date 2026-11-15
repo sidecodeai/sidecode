@@ -2,15 +2,26 @@
  * Dictation into the composer's own field.
  *
  * The mic button starts listening; listening ends only when the user taps Done,
- * types into the field, or the microphone fails. There is no time limit here:
+ * reaches for the field, or the microphone fails. There is no time limit here:
  * one gateway socket carries at most 120 s of audio, so a long dictation is cut
  * into segments whose transcripts are joined in order, and the replacement
  * socket is taking audio before the outgoing one is told to stop, so the seam
  * drops nothing. Nothing is ever sent by the act of stopping the recording.
+ *
+ * Every dictation is a run of its own. The composer follows one run at a time;
+ * a run it lets go of — the session is left, or a batch dictation's field is
+ * reached for — goes on, and reports to the job store instead.
+ *
+ * A57: a live run shows its words as the gateway recognises them. A batch run
+ * asks for none while the person speaks, holds each segment's final text, and
+ * hands the whole transcript over once, at its end; no way of ending it early
+ * drops what was said.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { strings } from '../../strings';
-import type { TranscriptSink } from '../../stores/dictationJobs';
+import type { DictationNotice, TranscriptSink } from '../../stores/dictationJobs';
+import type { DictationMode } from './dictationMode';
+import { LevelFeed } from './levelFeed';
 import { MicRecorder, type RecorderError } from './recorder';
 import { TranscriptSegments } from './segments';
 import { SttSocket, type SttEvent, type SttSocketFactory } from './sttSocket';
@@ -23,7 +34,8 @@ export interface VoiceRecorder {
 
 export interface RecorderHandlers {
   onFrame: (frame: ArrayBuffer) => void;
-  onLevel: (level: number) => void;
+  /** A block's peak, which a cut waits on, and its energy, which the waveform draws. */
+  onLevel: (peak: number, energy: number, samples: number) => void;
   onError: (error: RecorderError) => void;
 }
 
@@ -39,19 +51,53 @@ const SILENCE_LEVEL = 0.12;
 const FINAL_TIMEOUT_MS = 30_000;
 const POLL_MS = 200;
 
+/** Where a run's words go: the composer's field, or the job it was handed to. */
+type Report = (
+  text: string,
+  isFinal: boolean,
+  interrupted?: boolean,
+  notice?: DictationNotice,
+) => void;
+
+/** One dictation, from the mic button to its last word. */
+interface Run {
+  readonly mode: DictationMode;
+  readonly segments: TranscriptSegments;
+  recorder: VoiceRecorder | null;
+  sockets: SttSocket[];
+  /** The socket taking audio right now. The others are transcribing. */
+  route: SttSocket | null;
+  /** The last block's peak, which a cut waits on. */
+  level: number;
+  /** Done: no segment opens any more, and the last word is awaited. */
+  finishing: boolean;
+  finalTimer: number | null;
+  /** The run has said its last word, or was dropped: nothing it started acts any more. */
+  over: boolean;
+  /**
+   * A batch segment lost its words, and this is what the run ends saying once
+   * the others have spoken.
+   */
+  lost: DictationNotice | null;
+  /** Where the run reports once it is handed over; until then, the composer. */
+  sink: TranscriptSink | null;
+}
+
 interface Options {
   enabled: boolean;
   /**
    * The transcript so far. `isFinal` marks the last call of a dictation, after
    * which the text belongs to the field and this controller is idle again.
    * `interrupted` marks a last call that is not the recogniser's final word: the
-   * gateway failed or never answered, and the text is what had been heard.
+   * gateway failed or never answered, and the text is what had been heard. A
+   * batch run makes the last call alone.
    */
   onTranscript: (text: string, isFinal: boolean, interrupted?: boolean) => void;
   /**
-   * The composer is going away while a dictation is listening or finishing.
-   * Returns where the rest of it reports, which keeps the run going instead of
-   * ending it; null ends it as it always did. A listening run is then told Done.
+   * The composer lets go of a dictation that is listening or finishing: it is
+   * going away, or (A57) a batch dictation's field was reached for. Returns where
+   * the rest of it reports, which keeps the run going instead of ending it; null
+   * ends it as it always did. A listening run is then told Done.
    */
   onDetach?: () => TranscriptSink | null;
   /** Injected for tests. */
@@ -61,19 +107,31 @@ interface Options {
 
 export interface VoiceController {
   state: VoiceState;
-  level: number;
+  /** A57: how the run shows its words; the last run's once it is over. */
+  mode: DictationMode;
+  /** The microphone's levels, for the waveform. Nothing renders on them. */
+  levels: LevelFeed;
+  /** How long it has listened, in whole seconds; it stops when Done is tapped. */
   elapsedMs: number;
   error: string | null;
-  start: () => void;
+  start: (mode: DictationMode) => void;
   /** Stop listening and keep the transcript. Sending stays a separate click. */
   done: () => void;
-  /** Drop the run without publishing: a keystroke takes the field back. */
-  cancel: () => void;
+  /**
+   * The person reached for the field. A live run ends here, publishing
+   * nothing: its words are in the field already. A batch run has none there
+   * yet, so it goes on to `onDetach`, Done first if it was listening, and the
+   * composer is free at once (A57); with nobody to take it, it is Done here.
+   */
+  takeover: () => void;
   dismissError: () => void;
 }
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => window.setTimeout(resolve, ms));
+
+/** What the timer shows: whole seconds, so the composer redraws once a second. */
+const wholeSeconds = (ms: number): number => Math.max(0, Math.floor(ms / 1000) * 1000);
 
 export function useVoice({
   enabled,
@@ -83,21 +141,14 @@ export function useVoice({
   recorderFactory,
 }: Options): VoiceController {
   const [state, setState] = useState<VoiceState>('idle');
-  const [level, setLevel] = useState(0);
+  const [mode, setMode] = useState<DictationMode>('live');
+  const [levels] = useState(() => new LevelFeed());
   const [elapsedMs, setElapsedMs] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
-  const recorder = useRef<VoiceRecorder | null>(null);
-  const sockets = useRef<SttSocket[]>([]);
-  const segments = useRef(new TranscriptSegments());
-  /** The socket taking audio right now. The others are transcribing. */
-  const route = useRef<SttSocket | null>(null);
-  const levelRef = useRef(0);
+  /** The run the composer follows. One it lets go of goes on without it. */
+  const current = useRef<Run | null>(null);
   const startedAt = useRef(0);
-  const finishing = useRef(false);
-  const finalTimer = useRef<number | null>(null);
-  /** Bumped by every start and every end, so a stale loop or reply is ignored. */
-  const runId = useRef(0);
   const onTranscriptRef = useRef(onTranscript);
   const onDetachRef = useRef(onDetach);
   const stateRef = useRef<VoiceState>('idle');
@@ -112,91 +163,164 @@ export function useVoice({
     setState(next);
   }, []);
 
-  const clearFinalTimer = useCallback(() => {
-    if (finalTimer.current !== null) window.clearTimeout(finalTimer.current);
-    finalTimer.current = null;
+  /** Drop a run's microphone and every socket. Nothing is published from here. */
+  const end = useCallback((run: Run) => {
+    run.over = true;
+    if (run.finalTimer !== null) window.clearTimeout(run.finalTimer);
+    run.finalTimer = null;
+    const recorder = run.recorder;
+    run.recorder = null;
+    void recorder?.stop();
+    run.route = null;
+    const closing = run.sockets;
+    run.sockets = [];
+    for (const socket of closing) socket.cancel();
   }, []);
 
-  /** Drop the microphone and every socket. Nothing is published from here. */
-  const teardown = useCallback(() => {
-    runId.current += 1;
-    finishing.current = false;
-    clearFinalTimer();
-    const rec = recorder.current;
-    recorder.current = null;
-    void rec?.stop();
-    route.current = null;
-    const closing = sockets.current;
-    sockets.current = [];
-    for (const socket of closing) socket.cancel();
-    levelRef.current = 0;
-  }, [clearFinalTimer]);
-
-  const reset = useCallback(() => {
-    teardown();
-    segments.current = new TranscriptSegments();
-    setLevel(0);
+  /** The composer lets go of its run: the row goes, and the clock with it. */
+  const release = useCallback((run: Run) => {
+    if (current.current !== run) return;
+    current.current = null;
     setElapsedMs(0);
-  }, [teardown]);
+  }, []);
 
-  const cancel = useCallback(() => {
-    reset();
-    setError(null);
-    move('idle');
-  }, [reset, move]);
+  const report = useCallback(
+    (run: Run, isFinal: boolean, interrupted = false, notice?: DictationNotice) => {
+      const to: Report = run.sink ?? onTranscriptRef.current;
+      to(run.segments.joined, isFinal, interrupted, notice);
+    },
+    [],
+  );
 
+  /**
+   * A failed run keeps whatever was recognised: a live run's words are in the
+   * field already, and a batch run's held ones land now. The composer says why
+   * of the run it follows; a batch run it handed on carries the notice to its
+   * job, which says it wherever the session is opened (A57).
+   */
   const fail = useCallback(
-    (message: string) => {
-      // A failed dictation keeps whatever was recognised: those words are
-      // already in the field, and losing them helps no one.
-      onTranscriptRef.current(segments.current.joined, true, true);
-      reset();
+    (run: Run, message: string) => {
+      if (run.over) return;
+      report(run, true, true, run.mode === 'batch' ? { message } : undefined);
+      end(run);
+      if (current.current !== run) return;
+      release(run);
       setError(message);
       move('error');
     },
-    [reset, move],
+    [report, end, release, move],
+  );
+
+  /** The run's last word: what it heard goes where it reports, and it is over. */
+  const finish = useCallback(
+    (run: Run, interrupted = false) => {
+      if (run.over) return;
+      if (run.lost) {
+        fail(run, run.lost.message);
+        return;
+      }
+      report(run, true, interrupted);
+      end(run);
+      if (current.current !== run) return;
+      release(run);
+      move('idle');
+    },
+    [fail, report, end, release, move],
   );
 
   const publish = useCallback(
-    (isFinal: boolean, interrupted = false) => {
-      onTranscriptRef.current(segments.current.joined, isFinal, interrupted);
-      if (isFinal) {
-        reset();
-        move('idle');
-      }
+    (run: Run, isFinal: boolean, interrupted = false) => {
+      if (isFinal) finish(run, interrupted);
+      // A57: a batch run holds what it has heard until its last word.
+      else if (run.mode === 'live') report(run, false);
     },
-    [reset, move],
+    [finish, report],
+  );
+
+  /** Stop a run's microphone and await its last word, for as long as the gateway is given. */
+  const stop = useCallback(
+    (run: Run) => {
+      if (run.finishing) return;
+      run.finishing = true;
+      const recorder = run.recorder;
+      run.recorder = null;
+      // The recorder flushes its tail frame as it stops, so the live socket is
+      // told to transcribe only once that last audio has reached it.
+      void (recorder?.stop() ?? Promise.resolve()).then(() => {
+        if (run.over) return;
+        const live = run.route;
+        run.route = null;
+        if (live) live.stop();
+        else publish(run, true);
+      });
+      // A gateway that never answers must not leave the words waiting. A live
+      // run's are in the field already; a batch run's held ones land, and the
+      // composer says the rest was lost.
+      run.finalTimer = window.setTimeout(() => {
+        if (run.mode === 'live') publish(run, true, true);
+        else fail(run, run.lost?.message ?? strings.voice.failed);
+      }, FINAL_TIMEOUT_MS);
+    },
+    [publish, fail],
+  );
+
+  /**
+   * A batch segment lost its words, to a failure or to a close without its
+   * final. What the other segments heard is still worth having: listening stops
+   * as Done would, they are awaited, and the run then ends with what they held
+   * and the notice of the first loss.
+   */
+  const lose = useCallback(
+    (run: Run, notice: DictationNotice) => {
+      run.lost ??= notice;
+      if (!run.finishing && current.current === run && stateRef.current === 'listening') {
+        setElapsedMs(wholeSeconds(Date.now() - startedAt.current));
+        move('finishing');
+      }
+      stop(run);
+      if (run.segments.settled) fail(run, run.lost.message);
+    },
+    [move, stop, fail],
   );
 
   const receive = useCallback(
-    (event: SttEvent, index: number, run: number) => {
-      if (run !== runId.current || !segments.current.has(index)) return;
-      const settle = () => publish(finishing.current && segments.current.settled);
+    (run: Run, index: number, event: SttEvent) => {
+      if (run.over || !run.segments.has(index)) return;
+      const settle = () => publish(run, run.finishing && run.segments.settled);
       switch (event.type) {
         case 'partial':
-          if (segments.current.update(index, event.text)) settle();
+          // A57: a batch run shows nothing before Done, whatever arrives.
+          if (run.mode === 'batch') return;
+          if (run.segments.update(index, event.text)) settle();
           return;
         case 'final':
-          segments.current.update(index, event.text);
-          segments.current.end(index);
+          run.segments.update(index, event.text);
+          run.segments.end(index);
           settle();
           return;
-        case 'failed':
-          segments.current.end(index);
-          // A segment that already handed the microphone on keeps what it
+        case 'failed': {
+          run.segments.end(index);
+          const message = event.message || strings.voice.failed;
+          // A batch segment's words are only ever in its final, so a failure
+          // costs that segment alone: the others are still awaited.
+          if (run.mode === 'batch') lose(run, { message });
+          // A live segment that already handed the microphone on keeps what it
           // transcribed; only the live one can end the dictation.
-          if (index === segments.current.active) fail(event.message || strings.voice.failed);
+          else if (index === run.segments.active) fail(run, message);
           else settle();
           return;
+        }
         case 'closed':
           // A socket closes after its final as a matter of course; only an
-          // unannounced close still has a segment to settle.
-          if (!segments.current.isOpen(index)) return;
-          segments.current.end(index);
-          settle();
+          // unannounced close still has a segment to settle. A batch segment
+          // closed so has lost its words.
+          if (!run.segments.isOpen(index)) return;
+          run.segments.end(index);
+          if (run.mode === 'batch') lose(run, { message: strings.voice.failed });
+          else settle();
       }
     },
-    [publish, fail],
+    [publish, fail, lose],
   );
 
   /**
@@ -204,32 +328,33 @@ export function useVoice({
    * replaces transcribe what it already holds.
    */
   const openSegment = useCallback(
-    async (run: number): Promise<boolean> => {
-      const index = segments.current.begin();
+    async (run: Run): Promise<boolean> => {
+      const index = run.segments.begin();
       const socket = new SttSocket({
         ...(factory ? { factory } : {}),
-        onEvent: (event) => receive(event, index, run),
+        partials: run.mode === 'live',
+        onEvent: (event) => receive(run, index, event),
       });
-      sockets.current.push(socket);
+      run.sockets.push(socket);
       try {
         await socket.start();
       } catch {
-        segments.current.end(index);
+        run.segments.end(index);
         // A dictation that ended while this socket was still connecting is not
-        // a failure: the teardown is what rejected the connect.
-        if (run !== runId.current) return false;
-        fail(strings.voice.failed);
+        // a failure: its end is what rejected the connect.
+        if (run.over) return false;
+        fail(run, strings.voice.failed);
         return false;
       }
       // Connecting is the one await here, so the dictation can have ended while
       // it ran. A socket nobody is going to speak into is closed, not armed.
-      if (run !== runId.current || finishing.current) {
-        segments.current.end(index);
+      if (run.over || run.finishing) {
+        run.segments.end(index);
         socket.cancel();
         return false;
       }
-      const previous = route.current;
-      route.current = socket;
+      const previous = run.route;
+      run.route = socket;
       previous?.stop();
       return true;
     },
@@ -237,89 +362,119 @@ export function useVoice({
   );
 
   /** Hold a cut until the speaker pauses, and take it anyway if they do not. */
-  const waitForSilence = useCallback(async (run: number) => {
+  const waitForSilence = useCallback(async (run: Run) => {
     const forced = Date.now() + (SEGMENT_LIMIT_MS - SEGMENT_MS);
-    while (
-      run === runId.current &&
-      !finishing.current &&
-      levelRef.current > SILENCE_LEVEL &&
-      Date.now() < forced
-    ) {
+    while (!run.over && !run.finishing && run.level > SILENCE_LEVEL && Date.now() < forced) {
       await sleep(POLL_MS);
     }
   }, []);
 
   /** Roll over to a new socket for as long as the user keeps talking. */
   const segmentLoop = useCallback(
-    async (run: number) => {
-      while (run === runId.current && !finishing.current) {
+    async (run: Run) => {
+      while (!run.over && !run.finishing) {
         await sleep(SEGMENT_MS);
-        if (run !== runId.current || finishing.current) return;
+        if (run.over || run.finishing) return;
         await waitForSilence(run);
-        if (run !== runId.current || finishing.current) return;
+        if (run.over || run.finishing) return;
         if (!(await openSegment(run))) return;
       }
     },
     [waitForSilence, openSegment],
   );
 
-  const start = useCallback(() => {
-    if (!enabled || (stateRef.current !== 'idle' && stateRef.current !== 'error')) return;
-    teardown();
-    segments.current = new TranscriptSegments();
-    setError(null);
-    setLevel(0);
-    setElapsedMs(0);
-    startedAt.current = Date.now();
-    move('starting');
-    const run = runId.current;
-
-    const handlers: RecorderHandlers = {
-      onFrame: (frame) => route.current?.append(frame),
-      onLevel: (value) => {
-        levelRef.current = value;
-        setLevel(value);
-      },
-      onError: (err) => fail(recorderErrorText(err)),
-    };
-    const rec = recorderFactory ? recorderFactory(handlers) : new MicRecorder(handlers);
-    recorder.current = rec;
-
-    void (async () => {
-      const started = await rec.start();
-      if (run !== runId.current) return;
-      if (!started) return;
-      if (!(await openSegment(run))) return;
-      if (run !== runId.current) return;
+  const start = useCallback(
+    (next: DictationMode) => {
+      if (!enabled || current.current) return;
+      const run: Run = {
+        mode: next,
+        segments: new TranscriptSegments(),
+        recorder: null,
+        sockets: [],
+        route: null,
+        level: 0,
+        finishing: false,
+        finalTimer: null,
+        over: false,
+        lost: null,
+        sink: null,
+      };
+      current.current = run;
+      setMode(next);
+      setError(null);
+      setElapsedMs(0);
       startedAt.current = Date.now();
-      move('listening');
-      void segmentLoop(run);
-    })();
-  }, [enabled, teardown, move, fail, recorderFactory, openSegment, segmentLoop]);
+      move('starting');
+
+      const handlers: RecorderHandlers = {
+        onFrame: (frame) => run.route?.append(frame),
+        onLevel: (peak, energy, samples) => {
+          run.level = peak;
+          levels.emit(energy, samples);
+        },
+        onError: (err) => fail(run, recorderErrorText(err)),
+      };
+      const recorder = recorderFactory ? recorderFactory(handlers) : new MicRecorder(handlers);
+      run.recorder = recorder;
+
+      void (async () => {
+        const started = await recorder.start();
+        if (!started || run.over) return;
+        if (!(await openSegment(run))) return;
+        if (run.over || current.current !== run) return;
+        startedAt.current = Date.now();
+        move('listening');
+        void segmentLoop(run);
+      })();
+    },
+    [enabled, move, fail, recorderFactory, openSegment, segmentLoop, levels],
+  );
 
   const done = useCallback(() => {
-    if (stateRef.current !== 'listening') return;
-    finishing.current = true;
+    const run = current.current;
+    if (!run || stateRef.current !== 'listening') return;
+    setElapsedMs(wholeSeconds(Date.now() - startedAt.current));
     move('finishing');
-    setLevel(0);
-    const run = runId.current;
-    const rec = recorder.current;
-    recorder.current = null;
-    // The recorder flushes its tail frame as it stops, so the live socket is
-    // told to transcribe only once that last audio has reached it.
-    void (rec?.stop() ?? Promise.resolve()).then(() => {
-      if (run !== runId.current) return;
-      const live = route.current;
-      route.current = null;
-      if (live) live.stop();
-      else publish(true);
-    });
-    // A gateway that never answers must not leave the composer waiting: keep
-    // what was recognised instead.
-    finalTimer.current = window.setTimeout(() => {
-      if (run === runId.current) publish(true, true);
-    }, FINAL_TIMEOUT_MS);
-  }, [move, publish]);
+    stop(run);
+  }, [move, stop]);
+
+  /**
+   * Let the composer's run go on without it: from now on it reports to the sink
+   * `onDetach` returns, a listening run is told Done, and the composer is free.
+   * False, with nothing changed, when the run is not under way or nobody takes it.
+   */
+  const handOver = useCallback(
+    (run: Run): boolean => {
+      if (stateRef.current !== 'listening' && stateRef.current !== 'finishing') return false;
+      const sink = onDetachRef.current?.() ?? null;
+      if (!sink) return false;
+      sink.bindCancel(() => end(run));
+      run.sink = sink;
+      stop(run);
+      release(run);
+      move('idle');
+      return true;
+    },
+    [end, stop, release, move],
+  );
+
+  /** Drop the composer's run without publishing: its words are in the field already. */
+  const cancel = useCallback(
+    (run: Run) => {
+      end(run);
+      release(run);
+      setError(null);
+      move('idle');
+    },
+    [end, release, move],
+  );
+
+  const takeover = useCallback(() => {
+    const run = current.current;
+    if (!run) return;
+    if (run.mode === 'live' || stateRef.current === 'starting') cancel(run);
+    else if (!handOver(run)) done();
+  }, [cancel, handOver, done]);
 
   const dismissError = useCallback(() => {
     setError(null);
@@ -329,7 +484,7 @@ export function useVoice({
   useEffect(() => {
     if (state !== 'listening') return;
     const handle = window.setInterval(
-      () => setElapsedMs(Date.now() - startedAt.current),
+      () => setElapsedMs(wholeSeconds(Date.now() - startedAt.current)),
       POLL_MS,
     );
     return () => window.clearInterval(handle);
@@ -339,36 +494,39 @@ export function useVoice({
    * The composer can be taken away mid-dictation: the device goes offline, or
    * the terminal takes the session back. The field greys out, and a run left
    * going would keep the microphone open and keep streaming audio to the
-   * gateway for as long as the tab lived. It ends here instead, keeping the
-   * words already recognised, which are in the field.
+   * gateway for as long as the tab lived. It ends here instead, the way a hand
+   * on the field ends it: a live run keeps the words already in the field, and
+   * a batch run goes on to the job store, so the ones it holds still land.
    */
   useEffect(() => {
-    if (enabled) return;
-    if (stateRef.current === 'idle' || stateRef.current === 'error') return;
-    cancel();
-  }, [enabled, cancel]);
+    if (enabled || !current.current) return;
+    takeover();
+  }, [enabled, takeover]);
 
   /**
    * Leaving the session is not the end of a dictation that has begun: it is
    * Done, and the words keep coming to whoever took them over. One that is only
-   * connecting, or has failed, ends here.
+   * connecting, or that nobody takes, ends here.
    */
   useEffect(
     () => () => {
-      const live = stateRef.current === 'listening' || stateRef.current === 'finishing';
-      const sink = live ? (onDetachRef.current?.() ?? null) : null;
-      if (!sink) {
-        teardown();
-        return;
-      }
-      sink.bindCancel(teardown);
-      onTranscriptRef.current = sink;
-      done();
+      const run = current.current;
+      if (run && !handOver(run)) end(run);
     },
-    [teardown, done],
+    [handOver, end],
   );
 
-  return { state, level, elapsedMs, error, start, done, cancel, dismissError };
+  return {
+    state,
+    mode,
+    levels,
+    elapsedMs,
+    error,
+    start,
+    done,
+    takeover,
+    dismissError,
+  };
 }
 
 function recorderErrorText(error: RecorderError): string {

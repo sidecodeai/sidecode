@@ -533,6 +533,8 @@ export const en = {
 
   voice: {
     transcribing: 'Transcribing live · edit before sending',
+    /** A57: a gateway that transcribes the recording afterwards, while it records. */
+    recording: 'Recording · transcribed when you tap Done',
     connecting: 'Connecting…',
     done: 'Done',
     /** What Done gave way to is waiting for: the backend's last word. */
@@ -546,7 +548,10 @@ export const en = {
     polished: 'Polished',
     undo: 'Undo',
     polishFailed: 'Polishing failed, your words are unchanged',
-    /** The session row's trailing label while a dictation runs on after the person left. */
+    /**
+     * The session row's trailing label while a dictation runs on after the
+     * person left; also what the listening row's timer gives way to after Done.
+     */
     rowTranscribing: 'Transcribing…',
     rowPolishing: 'Polishing…',
     rowReady: 'Draft ready',

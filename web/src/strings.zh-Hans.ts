@@ -441,6 +441,7 @@ export const zhHans: StringTable = {
 
   voice: {
     transcribing: '实时转写 · 发送前可编辑',
+    recording: '录音中 · 点完成后转写',
     connecting: '连接中…',
     done: '完成',
     finishing: '正在整理转写结果',

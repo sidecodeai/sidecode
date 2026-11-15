@@ -27,7 +27,7 @@ cd web && npm ci
 | Command | What it does |
 | --- | --- |
 | `npm run dev` | Vite on 5173, proxying `/api` and `/ws` to `http://127.0.0.1:8787` |
-| `npm run dev:mock` | The same server plus the bundled mock gateway. Sign in as `admin` / `dev`, or as the member `alice` / `devdevdev` |
+| `npm run dev:mock` | The same server plus the bundled mock gateway. Sign in as `admin` / `dev`, or as the member `alice` / `devdevdev`. `RC_MOCK_STT=batch` answers as a gateway whose speech backend transcribes the recording afterwards (`stt.streaming: false`, A57), so batch dictation can be watched |
 | `npm run mock` | Only the mock gateway, on 8787 |
 | `npm run build` | Typecheck, then build to `web/dist` |
 | `npm test` | Vitest |
@@ -105,7 +105,7 @@ scripted devices are the admin's: a member's `hello`, device list and session li
 a subscribe naming one of the admin's sessions answers `not_found`, and a pushed frame reaches only
 the account that owns the device it is about. Pairing walks
 `waiting → enrolled → online → agents` over about six seconds, and the speech socket returns
-scripted partials and a final transcript. One of the two devices runs the build `/api/config`
+scripted partials — none on a socket opened with `partials=0` (A57) — and a final transcript. One of the two devices runs the build `/api/config`
 reports and the other the one before it, so the list shows a row with nothing to do beside a row
 offering Update; `device.update` is accepted, flips that device to `updating`, and brings it back on
 the new build six seconds later, which is what its `hello` would report (A22). Both halves of
@@ -201,23 +201,113 @@ SVG and re-render all three together.
 
 ## Voice
 
-Tapping the mic opens `WS /ws/stt` with no query — the gateway's provider detects the language (A44,
-below) — captures the microphone through an AudioWorklet with a ScriptProcessor fallback,
-downsamples to 16 kHz mono PCM16LE, and sends roughly 120 ms binary frames. Partial transcripts
-stream into the composer's own field. The control row then holds a waveform, an elapsed timer and
-exactly one thing in Send's slot, at Send's size: the button **Done**, disabled until the socket is
-listening. Done sends `stt.stop` and leaves the transcript in the field — nothing is ever sent by
-the act of stopping the recording — and the click is answered in that same slot at once. The capsule
-gives way to Send's pill holding a spinner (`WorkingPill`, the class `.working-pill`), which is not
-a button and not a disabled one either, so nothing in the row takes a click while `stt.final` is on
-its way; the status line reads "Finishing the transcript" until it lands, and the elapsed clock
-stops at the click, its interval running only while the state is `listening`. There is no Cancel — a
-dictation you do not want is Done and then edited or cleared like any draft — and no time limit; a
-long dictation is cut into segments whose transcripts are joined in order. Reaching for the field
-takes it back and stops listening, keeping the words recognised so far: a keystroke does it, and so
-does a pointer down on the field itself, which is how a person stops the dictation to read what was
-said. The field's own programmatic focus — taking a command row, say — is not a pointer and ends
-nothing. The mic is hidden entirely when the gateway reports `stt.enabled: false`.
+Tapping the mic opens `WS /ws/stt` — the gateway's provider detects the language (A44, below) —
+captures the microphone through an AudioWorklet with a ScriptProcessor fallback in 2048-frame
+blocks (about 43 ms at 48 kHz, so the waveform hears a level in every 80 ms window), downsamples to
+16 kHz mono PCM16LE, and sends roughly 120 ms binary frames. How the words reach the field depends
+on what the gateway's speech backend can do (A57, `src/features/voice/dictationMode.ts`), decided
+when the mic is tapped and kept for the whole dictation (`useVoice().start(mode)`):
+
+- **Live**, when `hello` reports `stt.streaming: true` or, from an older gateway, no `streaming` at
+  all: partial transcripts stream into the composer's own field, as they always have.
+- **Batch**, when it reports `stt.streaming: false`: every socket is opened with `partials=0`,
+  nothing is written into the field while listening (a partial that arrived anyway would be
+  ignored), and the status line reads "Recording · transcribed when you tap Done" (录音中 ·
+  点完成后转写) where live mode says "Transcribing live · edit before sending". Each segment's final
+  transcript is held, and once the last one arrives the held texts and it, joined with a space as
+  segments always are, are appended in one step to whatever the field holds then — words typed
+  meanwhile stay first, as for a job that lands in the background — before polish runs as usual.
+
+The control row then holds the listening row (`VoiceControls`) and exactly one thing in Send's slot,
+at Send's size: the button **Done**, disabled until the socket is listening. Done sends `stt.stop`
+and leaves the transcript in the field — nothing is ever sent by the act of stopping the recording —
+and the click is answered in that same slot at once. The capsule gives way to Send's pill holding a
+spinner (`WorkingPill`, the class `.working-pill`), which is not a button and not a disabled one
+either, so nothing in the row takes a click while `stt.final` is on its way; the status line reads
+"Finishing the transcript" until it lands, and the elapsed clock stops at the click. There is no
+Cancel — a dictation you do not want is Done and then edited or cleared like any draft — and no time
+limit; a long dictation is cut into segments whose transcripts are joined in order. Reaching for the
+field takes it back and stops listening: a keystroke does it, and so does a pointer down on the
+field itself, which is how a person stops the dictation to read what was said. A live dictation
+ends there with the words recognised so far already in the field. A batch one has written nothing
+yet, so reaching for the field — listening, or after Done while the words are on their way — hands
+it to the job store instead, exactly as leaving the session does (`useVoice().takeover()`): the
+open segment is stopped and its final awaited, and the composer is free at once. Send's slot holds
+the spinner, with "Finishing the transcript" above the field, only until the person types; then
+Send is theirs again while the status line keeps saying the words are coming, and the transcript
+is appended after whatever was typed when it lands, then polished under the job store's rules. A
+composer that is disabled mid-dictation (the device goes offline, the terminal takes the session)
+hands a batch dictation on the same way. The field's own programmatic focus — taking a command
+row, say — is not a pointer and ends nothing. The mic is hidden entirely when the gateway reports
+`stt.enabled: false`.
+
+A batch dictation's words exist only in each segment's final, so losing a segment never goes
+unsaid. A failure, or a socket that closes without its final, costs that segment alone: listening
+stops as Done would, the segments still out — the one taking audio included — are awaited, and
+the run then ends with what they held. A final that never comes within 30 s ends it the same way.
+The held text lands first, then the notice: the gateway's message, or "Transcription failed.". The
+notice has one source wherever the run is: the controller's error for the run the composer
+follows, and, for a run handed to the job store, the job, which ends `interrupted` carrying it
+(`DictationJob.notice`), so whichever composer opens the session shows the same banner until it is
+dismissed, which forgets the job, or the field is edited. A live dictation's failures read as
+before.
+
+Words that land never interrupt an input method. While the field is composing, between
+`compositionstart` and `compositionend`, a batch dictation's words — in the open composer or from
+the job store — wait, and land once the composition ends, committed or cancelled, in the next task
+so the input that ends it is in the field first (`useImeGuard().whenComposed`, which the composer
+also hands the store as its field's gate through `open(key, gate)`); polish follows as usual.
+
+Words also land in the draft they were dictated for. Every dictation remembers the queued message
+the field was editing when the mic was pressed (`editTs`, null outside an edit). If the field is
+editing a different one when the words arrive, or that edit is on its way back into the line, they
+go to the draft set aside (`landsAside`, `useDrafts().setAside`), unpolished, and come back with
+it. A dictation begun inside an edit lands in that edit while it is open, and in the draft it gave
+back to once it has ended.
+
+**The listening row** (A57, both modes) is a scrolling waveform that fills the row's free width, the
+elapsed timer right after it — `m:ss` in whole seconds, monospaced so it never jitters and as wide
+as `59:59` from the start, so nothing moves at ten minutes, stopping at 59:59 — and Done's slot.
+The waveform (`Waveform.tsx`) is a canvas hidden from assistive technology:
+
+- `LevelSampler` (`waveformSampler.ts`, pure) closes an 80 ms window on a fixed grid. A bar's
+  level is the RMS of all the audio its window held: the recorder reports each worklet block's
+  energy — the sum of its squared samples — and length beside its peak, which a cut still waits
+  on, and the window takes `√(Σ energy / Σ samples)`, mapped as
+  `clamp((20·log10(rms) + 50) / 40, 0, 1)` — −50 dBFS is a dot, −10 dBFS full height. A block's
+  peak would sit at the top under Chrome's gain control and draw a fence of full bars. A release
+  lets a falling level keep 55 % of the bar before it. The row starts full of resting dots, as if
+  silence had been recorded, so it never shows an empty stretch. A tick that fires late takes the
+  slot that is due and a catch-up tick adds nothing, so the bars never run ahead of the clock;
+  slots a throttled background tab skipped are filled with the bar before them decaying to dots,
+  so no bar repeats the one before it. The levels reach it through `LevelFeed`, outside React
+  state: the composer renders once a second for the timer, never for a level.
+- `paintBars` (`waveformFrame.ts`, pure) places 3 px bars with fully rounded ends on a 6 px pitch,
+  gliding left at 75 px/s with sub-pixel offsets; a new bar is born inside the 6 px trailing fade
+  and grows from a 3 px dot over 120 ms, eased out, to a height of `min + (max − min)·level^1.5`,
+  so ordinary speech spreads over the range and only loud syllables reach the top; bars stay within
+  60 % of the 34 px row, centred, and fade out over the leading 24 px. Silence is a gliding row of
+  dots.
+- `WaveformCanvas` (`waveformCanvas.ts`) draws one `requestAnimationFrame` at a time at the
+  device's pixel ratio, in the canvas's own CSS colour (`.voice-meter`'s `--ink`, read back every
+  half second, so a theme reaches the bars). It starts only once a `ResizeObserver` reports a size,
+  stops while the page is hidden and for good when the row unmounts.
+
+The waveform and the timer fade in from 0.98 scale over 180 ms, appearing with the status line in
+one render. At Done the glide decelerates to a stop over 200 ms and no bar arrives; the bars dim to
+0.35 while a highlight, `0.35 + 0.65·exp(−((x − sweepX) / 36)²)`, travels from 72 px before the
+leading edge to 72 px past the trailing one at a constant speed and starts over at once, one pass
+taking `max(1.4 s, (width + 144) / 480)`, so it is in view for most of every pass; and the timer
+cross-fades in 150 ms to "Transcribing…" (转写中…, the session row's `rowTranscribing`), which ends
+where the timer ends and covers the waveform's tail, so nothing in the row moves. Against the
+label and its clearance every bar is whole or not drawn at all: a bar reaching past that edge is
+cut, so no faint sliver is left there. Done's slot keeps Done's width for as long as the row lasts
+(a hidden sizer), so the spinner sits where Send will be and the waveform never changes size. Once
+the words are in, the ordinary row takes the slot back in the same render as the listening row
+goes and the status line changes, so the composer moves once. Under Reduce Motion
+(`useReducedMotion`, read by the waveform) the bars step one slot per window with no glide and no
+growth, rest dimmed without a sweep, and the timer gives way to the label without a fade. The
+styles are `src/features/voice/voice.css`.
 
 **While dictation runs, the field follows the words** (`docs/DESIGN.md` § "The composer"). The
 field grows with its content to 220 px and scrolls inside after that, and a dictated write brings
@@ -226,6 +316,8 @@ write — every partial, and the final one that lands as the run ends — now se
 `Composer.tsx`, and the effect that measures the field reads the flag once and puts the last line
 in view by setting `scrollTop`, never animating it. Typing sets nothing, because a caret keeps
 itself visible, and neither does a polished answer or an Undo: those are the person's draft again.
+A batch dictation (A57) writes once, at its end, and that write follows its tail the same way;
+while it listens there is nothing to follow.
 
 ## Background dictation
 
@@ -249,7 +341,20 @@ not to the composer, which `ChatPage` remounts per session (`key={key}`). The ru
   abort it. This fixes the stale-closure bug where an unmounted composer's `textRef` was compared.
 - The composer reads its job: "Finishing the transcript" / "Polishing…" in the status line and the
   spinner in Send's slot while one runs, and the Polished · Undo or failure note once it is ready.
-  A new dictation is not offered while a job of that session is finishing or polishing.
+  A new dictation is not offered while a job of that session is finishing: the mic is disabled
+  until its words have landed, since a session has one job. Starting one drops a polish still out.
+- Each dictation is a run of its own inside `useVoice`, with its own sockets, segments and timer;
+  the composer follows one run, and a run it hands on keeps going and reports to its sink. That is
+  how the job store can take a run over while the composer stays on screen.
+- A57: a batch dictation is handed over at a switch, and also when its field is reached for or its
+  composer is disabled. It has written nothing into the draft, so `applied` equals `base` and there
+  are no live words to take out; the sink gets the held segment texts and the last final joined,
+  in one write, through the open field's gate and to the set-aside draft when the words belong
+  there (§ "Voice"). `Handoff.mode` becomes the job's `mode`: typing while a batch job is finishing
+  (`drop`, called by every edit) never drops it but sets `typedOver`, which gives Send's slot back,
+  and the transcript is appended after the typed words. A live job keeps the slot as before. A
+  final that never comes, or a failed socket, ends the job interrupted with the held segment texts
+  kept, or with nothing written when none were held, and with the notice the composer shows.
 - `DictationRowLabel` draws the session row's trailing label in `SidebarItem` and `SessionRow`
   (`voice.rowTranscribing`, `rowPolishing`, `rowReady`, `rowInterrupted`; English and zh-Hans).
   Opening the session clears a finished job's label.
@@ -324,7 +429,8 @@ provider detects the language of every transcription, so there is nothing to cho
   `src/features/chat/Composer.tsx`). The language menu that followed the permission mode is gone,
   with the `sttLanguages` prop chain from `ChatPage` down to it. The web keeps the words; the phone
   draws the same row as icons.
-- `SttSocket` opens `WS /ws/stt` with no query at all, and `useVoice` takes no language. The polish
+- `SttSocket` opens `WS /ws/stt` with no language, and `useVoice` takes none; the one query a socket
+  can carry is a batch dictation's `partials=0` (A57). The polish
   request always says `language: "auto"`.
 - Settings → Voice starts with **Transcribe**: the word "Gateway" at the trailing edge, drawn as
   state (`pill quiet`) rather than as a control, over the sentence "Your gateway transcribes and
@@ -335,9 +441,13 @@ provider detects the language of every transcription, so there is nothing to cho
   never reads `stt_language` from `hello` or `preferences.updated` and never writes it up, not even
   once for an account that has not set it. It is the language an iPhone's own recogniser listens
   for, and the iPhone owns it; `Preferences.stt_language` stays in the wire types. The connection
-  store keeps `stt.enabled` alone, since `stt.languages` is always `["auto"]`.
-- The mock reports `stt.languages: ["auto"]` in `/api/config` and `hello`, and its `/ws/stt` reads
-  no query, so a `language` an older app sends is ignored as the gateway ignores it. It still keeps
+  store keeps `stt.enabled`, and since A57 `stt.streaming`, but not `stt.languages`, which is always
+  `["auto"]`. `/api/config` carries the same `stt` and is typed to match; the composer reads `hello`,
+  which is also where `stt.enabled` comes from.
+- The mock reports `stt.languages: ["auto"]` and, A57, `stt.streaming` — true, or false with
+  `RC_MOCK_STT=batch` — in `/api/config` and `hello`, and its `/ws/stt` reads no `language`, so one
+  an older app sends is ignored as the gateway ignores it; it reads `partials=0` and then sends no
+  partials. It still keeps
   an `stt_language` a `PATCH` carries, as the gateway does.
 
 A browser that stored a dictation language before A44 keeps the old key in its settings entry in

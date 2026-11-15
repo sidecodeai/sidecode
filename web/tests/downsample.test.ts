@@ -4,6 +4,7 @@ import {
   PcmChunker,
   TARGET_RATE,
   downsampleTo16k,
+  energyOf,
   floatToPcm16,
   peakLevel,
 } from '../src/features/voice/downsample';
@@ -45,10 +46,18 @@ describe('voice downsampler', () => {
     expect(() => downsampleTo16k(new Float32Array(10), 8_000)).toThrow(RangeError);
   });
 
-  it('reports the peak level for the waveform', () => {
+  it('reports the peak level a cut waits on for a pause', () => {
     expect(peakLevel(new Float32Array([0.1, -0.6, 0.3]))).toBeCloseTo(0.6, 6);
     expect(peakLevel(new Float32Array([]))).toBe(0);
     expect(peakLevel(new Float32Array([9]))).toBe(1);
+  });
+
+  it('reports the energy the waveform takes the RMS of', () => {
+    expect(energyOf(new Float32Array([0.5, -0.5, 0.5, -0.5]))).toBeCloseTo(1, 6);
+    expect(energyOf(new Float32Array([]))).toBe(0);
+    // A full-scale sine's RMS is 1/√2, about −3 dBFS.
+    const sine = Float32Array.from({ length: 480 }, (_, i) => Math.sin((2 * Math.PI * i) / 48));
+    expect(Math.sqrt(energyOf(sine) / sine.length)).toBeCloseTo(Math.SQRT1_2, 3);
   });
 });
 

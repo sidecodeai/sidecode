@@ -20,6 +20,7 @@ import { keyOf, useSessions } from '../src/stores/sessions';
 import { strings } from '../src/strings';
 import { codexAgent, devices as deviceFixtures } from '../mock/fixtures';
 import type * as ReactModule from 'react';
+import type * as LevelFeedModule from '../src/features/voice/levelFeed';
 import type { Session } from '../src/protocol/types';
 
 const { rpcMock } = vi.hoisted(() => ({ rpcMock: vi.fn() }));
@@ -37,21 +38,30 @@ const voice = vi.hoisted(() => ({
 
 vi.mock('../src/features/voice/useVoice', async () => {
   const { useEffect, useState } = await vi.importActual<typeof ReactModule>('react');
+  const { LevelFeed } = await vi.importActual<typeof LevelFeedModule>(
+    '../src/features/voice/levelFeed',
+  );
   return {
     useVoice: (options: { onTranscript: (text: string, isFinal: boolean) => void }) => {
       const [state, setState] = useState('idle');
+      const [levels] = useState(() => new LevelFeed());
       voice.say = (text) => options.onTranscript(text, false);
       // The real controller's only teardown: the microphone and every socket
       // close when the hook unmounts.
       useEffect(() => () => void (voice.tornDown += 1), []);
       return {
         state,
-        level: 0.4,
+        mode: 'live',
+        levels,
         elapsedMs: 3_000,
         error: null,
         start: () => setState('listening'),
         done: () => setState('finishing'),
-        cancel: () => setState('idle'),
+        // A live run's words are in the field already: taking it back ends it.
+        takeover: () => {
+          setState('idle');
+          return false;
+        },
         dismissError: () => setState('idle'),
       };
     },

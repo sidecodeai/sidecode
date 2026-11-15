@@ -1427,43 +1427,11 @@
 }
 
 /*
- * Listening replaces the composer's control row: the waveform, the elapsed
- * timer and the only two ways out. It takes the full width of the box so it
- * stays legible beside the field on a phone, and the field keeps its own row.
+ * Listening puts the listening row (`features/voice/voice.css`) under the
+ * field, on a line of its own.
  */
 .composer.listening {
   flex-wrap: wrap;
-}
-
-.voice-controls {
-  flex: 1 1 100%;
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  padding: var(--sp-2) 0 2px;
-}
-
-.waveform {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  height: 24px;
-  flex: none;
-}
-
-.waveform span {
-  width: 2px;
-  border-radius: 1px;
-  background: var(--ink);
-  transition: height 90ms linear;
-}
-
-.voice-timer {
-  font-size: var(--fs-13);
-  color: var(--ink-secondary);
-  flex: none;
-  /* Everything after the timer is pushed to the trailing edge. */
-  margin-right: auto;
 }
 
 /* --- responsive ------------------------------------------------------- */

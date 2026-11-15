@@ -33,7 +33,7 @@ export function downsampleTo16k(input: Float32Array, inputRate: number): Float32
   return out;
 }
 
-/** Peak level of a block, used to drive the waveform bars. */
+/** Peak level of a block: what a segment cut reads to wait for a pause in the speech. */
 export function peakLevel(input: Float32Array): number {
   let peak = 0;
   for (let i = 0; i < input.length; i += 1) {
@@ -41,6 +41,19 @@ export function peakLevel(input: Float32Array): number {
     if (v > peak) peak = v;
   }
   return Math.min(1, peak);
+}
+
+/**
+ * A block's energy, the sum of its squared samples: the RMS of any run of
+ * blocks is `√(Σ energy / Σ samples)`, which is what the waveform draws.
+ */
+export function energyOf(input: Float32Array): number {
+  let sum = 0;
+  for (let i = 0; i < input.length; i += 1) {
+    const v = input[i] ?? 0;
+    sum += v * v;
+  }
+  return sum;
 }
 
 /**

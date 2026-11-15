@@ -37,8 +37,12 @@ export interface HelloFrame {
   user: User;
   devices: Device[];
   sessions: Session[];
-  /** A44: `languages` is always `["auto"]`; the gateway's provider detects the language. */
-  stt: { enabled: boolean; languages: string[] };
+  /**
+   * A44: `languages` is always `["auto"]`; the gateway's provider detects the
+   * language. A57: `streaming` says whether its words arrive while the audio
+   * does; a gateway too old to say leaves it out, which is live.
+   */
+  stt: { enabled: boolean; languages: string[]; streaming?: boolean };
   /** A29: absent from a gateway too old to polish dictation, which is "off". */
   polish?: PolishInfo;
   /** A35: absent from a gateway too old to hold the account's preferences. */

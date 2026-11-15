@@ -26,10 +26,12 @@ interface ConnectionState {
   protocol: number | null;
   username: string | null;
   /**
-   * Whether this gateway transcribes. Its language list is nothing to choose
-   * from since A44 — the provider detects the language — so it is not kept.
+   * Whether this gateway transcribes, and (A57) whether its words arrive while
+   * the audio does — absent from a gateway too old to say. Its language list is
+   * nothing to choose from since A44 — the provider detects the language — so
+   * it is not kept.
    */
-  stt: { enabled: boolean };
+  stt: { enabled: boolean; streaming?: boolean };
   /** A29: whether this gateway can polish a dictation. Off until `hello` says so. */
   polish: PolishInfo;
   /** server_time minus the local clock at the last hello, in milliseconds. */
@@ -106,7 +108,7 @@ function handleFrame(frame: PushFrame, set: Setter): void {
         gatewayVersion: frame.gateway_version,
         protocol: frame.protocol,
         username: frame.user.username,
-        stt: { enabled: frame.stt.enabled },
+        stt: { enabled: frame.stt.enabled, streaming: frame.stt.streaming },
         polish: frame.polish ?? { enabled: false },
         clockSkewMs:
           typeof frame.server_time === 'number' ? frame.server_time - Date.now() : 0,

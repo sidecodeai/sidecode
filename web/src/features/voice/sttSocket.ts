@@ -1,6 +1,8 @@
 /**
  * One utterance over `WS /ws/stt`: PCM16LE, 16 kHz mono frames out, partial
- * transcripts back, one final transcript after `stop()`.
+ * transcripts back, one final transcript after `stop()`. A batch dictation
+ * (A57) asks for no partials with `partials=0`: the gateway then transcribes
+ * the utterance once, on `stt.stop`.
  *
  * A socket carries a single utterance because the gateway caps one at 120 s and
  * 4 MiB. Dictation longer than that is a chain of these, joined by
@@ -43,6 +45,8 @@ const OPEN = 1;
 interface Options {
   onEvent: (event: SttEvent) => void;
   factory?: SttSocketFactory;
+  /** A57: false asks the gateway for no `stt.partial` at all; left out, partials stream. */
+  partials?: boolean;
 }
 
 export class SttSocket {
@@ -60,7 +64,8 @@ export class SttSocket {
   start(): Promise<void> {
     const factory = this.options.factory ?? ((url: string) => new WebSocket(url) as SttSocketLike);
     // A44: no language is asked for. The gateway's provider detects it.
-    const socket = factory(socketUrl('/ws/stt'));
+    const query = this.options.partials === false ? '?partials=0' : '';
+    const socket = factory(socketUrl(`/ws/stt${query}`));
     socket.binaryType = 'arraybuffer';
     this.socket = socket;
     socket.onmessage = (event) => this.receive(event.data);

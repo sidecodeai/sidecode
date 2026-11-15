@@ -215,9 +215,10 @@ The checks every change has to pass, and a smoke flow for a release, are in
   wins. Nothing is killed and nothing is resumed.
 - **A terminal on a device** — open a shell on any online machine from the apps, inside the same two
   WebSocket connections.
-- **Voice** — dictation through the gateway's speech-to-text proxy, streamed as 16 kHz PCM16 with
-  live partial transcripts, and optional polish of the dictated text through an OpenAI-compatible
-  model of yours. The result is always an editable draft; sending stays a separate action.
+- **Voice** — dictation through the gateway's speech-to-text proxy, streamed as 16 kHz PCM16, with
+  live partial transcripts from a backend that streams and the whole transcript at Done from one
+  that does not, and optional polish of the dictated text through an OpenAI-compatible model of
+  yours. The result is always an editable draft; sending stays a separate action.
 - **Voice assistant (experimental)** — a call in the web app and in the apps that tells you what
   your sessions are doing and what is waiting for you, and drafts a message to one of them. A
   message is sent only after the assistant has read it back and you have said yes, or pressed

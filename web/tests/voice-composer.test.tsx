@@ -10,17 +10,23 @@ import userEvent from '@testing-library/user-event';
 import { claudeAgent } from '../mock/fixtures';
 import { strings } from '../src/strings';
 import type * as ReactModule from 'react';
+import type * as LevelFeedModule from '../src/features/voice/levelFeed';
 import type { Session } from '../src/protocol/types';
 
 const voice = vi.hoisted(() => ({
   publish: null as null | ((text: string, isFinal: boolean) => void),
+  elapsedMs: 12_000,
 }));
 
 vi.mock('../src/features/voice/useVoice', async () => {
   const { useState } = await vi.importActual<typeof ReactModule>('react');
+  const { LevelFeed } = await vi.importActual<typeof LevelFeedModule>(
+    '../src/features/voice/levelFeed',
+  );
   return {
     useVoice: (options: { onTranscript: (text: string, isFinal: boolean) => void }) => {
       const [state, setState] = useState('idle');
+      const [levels] = useState(() => new LevelFeed());
       // Like the controller: Done starts the wait for the backend's last word,
       // and that word, when it comes, is what ends the run.
       voice.publish = (text, isFinal) => {
@@ -29,12 +35,17 @@ vi.mock('../src/features/voice/useVoice', async () => {
       };
       return {
         state,
-        level: 0.4,
-        elapsedMs: 12_000,
+        mode: 'live',
+        levels,
+        elapsedMs: voice.elapsedMs,
         error: null,
         start: () => setState('listening'),
         done: () => setState('finishing'),
-        cancel: () => setState('idle'),
+        // A live run's words are in the field already: taking it back ends it.
+        takeover: () => {
+          setState('idle');
+          return false;
+        },
         dismissError: () => setState('idle'),
       };
     },
@@ -118,6 +129,7 @@ const controlRowButtons = (): string[] =>
 
 beforeEach(() => {
   voice.publish = null;
+  voice.elapsedMs = 12_000;
 });
 
 describe('dictation in the composer', () => {
@@ -308,6 +320,76 @@ describe('dictation in the composer', () => {
       />,
     );
     expect(screen.queryByRole('button', { name: strings.composer.micStart })).toBeNull();
+  });
+});
+
+/**
+ * A57 — the listening row: a waveform that fills the row, the elapsed timer
+ * right after it and Done in Send's slot. At Done the waveform rests and the
+ * timer gives way to "Transcribing…" beside the spinner; once the words are in
+ * the ordinary row takes its place in one step, with the status line.
+ */
+describe('the listening row', () => {
+  const row = () => document.querySelector<HTMLElement>('.voice-controls');
+
+  it('draws the waveform as decoration, with the timer after it', async () => {
+    const user = userEvent.setup();
+    setup();
+    await user.click(screen.getByRole('button', { name: strings.composer.micStart }));
+
+    expect(row()).toHaveAttribute('data-phase', 'listening');
+    expect(row()?.querySelector('canvas')).toHaveAttribute('aria-hidden', 'true');
+    const timer = screen.getByLabelText(strings.voice.listeningFor('0:12'));
+    expect(timer).not.toHaveAttribute('aria-hidden');
+    // "Transcribing…" waits, unseen, for Done.
+    expect(screen.getByText(strings.voice.rowTranscribing)).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('reads m:ss and stops at 59:59', async () => {
+    voice.elapsedMs = 2 * 3_600_000;
+    const user = userEvent.setup();
+    setup();
+    await user.click(screen.getByRole('button', { name: strings.composer.micStart }));
+
+    expect(screen.getByLabelText(strings.voice.listeningFor('59:59'))).toHaveTextContent('59:59');
+  });
+
+  it('rests at Done, the timer giving way to Transcribing… beside the spinner', async () => {
+    const user = userEvent.setup();
+    setup();
+    await user.click(screen.getByRole('button', { name: strings.composer.micStart }));
+    await user.click(screen.getByRole('button', { name: strings.voice.done }));
+
+    expect(row()).toHaveAttribute('data-phase', 'resting');
+    expect(screen.getByText(strings.voice.rowTranscribing)).not.toHaveAttribute('aria-hidden');
+    expect(screen.getByText('0:12')).toHaveAttribute('aria-hidden', 'true');
+    expect(row()?.querySelector('.working-pill')).not.toBeNull();
+  });
+
+  it('gives way to the ordinary row in one step once the words are in', async () => {
+    const user = userEvent.setup();
+    setup();
+    await user.click(screen.getByRole('button', { name: strings.composer.micStart }));
+    await user.click(screen.getByRole('button', { name: strings.voice.done }));
+    expect(screen.getByText(strings.voice.finishing)).toBeInTheDocument();
+
+    say('run the auth suite', true);
+
+    // The row, the status line and the slot change in the same render.
+    expect(row()).toBeNull();
+    expect(document.querySelector('.voice-status')).toBeNull();
+    expect(screen.getByRole('button', { name: strings.composer.send })).toBeInTheDocument();
+  });
+
+  it('appears in one step with its status line', async () => {
+    const user = userEvent.setup();
+    setup();
+
+    await user.click(screen.getByRole('button', { name: strings.composer.micStart }));
+
+    expect(row()).not.toBeNull();
+    expect(document.querySelector('.voice-status')).toHaveTextContent(strings.voice.transcribing);
+    expect(document.querySelector('.composer-buttons')).toBeNull();
   });
 });
 

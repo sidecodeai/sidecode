@@ -1,15 +1,16 @@
 /**
  * Microphone capture. Prefers an AudioWorklet and falls back to a
  * ScriptProcessor where worklets are unavailable (older Safari, insecure
- * contexts). Emits 16 kHz PCM16LE frames plus an input level for the waveform.
+ * contexts). Emits 16 kHz PCM16LE frames plus each block's level: its peak,
+ * which a segment cut waits on, and its energy, which the waveform draws.
  */
-import { PcmChunker, peakLevel } from './downsample';
+import { PcmChunker, energyOf, peakLevel } from './downsample';
 
 export type RecorderError = 'denied' | 'unsupported' | 'failed';
 
 interface Handlers {
   onFrame: (frame: ArrayBuffer) => void;
-  onLevel: (level: number) => void;
+  onLevel: (peak: number, energy: number, samples: number) => void;
   onError: (error: RecorderError) => void;
 }
 
@@ -93,7 +94,8 @@ export class MicRecorder {
   private attachScriptProcessor(): void {
     const context = this.context;
     if (!context || !this.source) return;
-    const node = context.createScriptProcessor(4096, 1, 1);
+    // About 43 ms at 48 kHz: the waveform wants a level in every 80 ms window.
+    const node = context.createScriptProcessor(2048, 1, 1);
     node.onaudioprocess = (event) => this.consume(event.inputBuffer.getChannelData(0));
     this.source.connect(node);
     // A ScriptProcessor only runs while connected to the graph; a muted gain
@@ -107,7 +109,7 @@ export class MicRecorder {
 
   private consume(block: Float32Array): void {
     if (!this.chunker) return;
-    this.handlers.onLevel(peakLevel(block));
+    this.handlers.onLevel(peakLevel(block), energyOf(block), block.length);
     for (const frame of this.chunker.push(block)) this.handlers.onFrame(frame);
   }
 }

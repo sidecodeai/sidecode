@@ -10,6 +10,7 @@ import { act, render, renderHook, screen } from '@testing-library/react';
 import { claudeAgent } from '../mock/fixtures';
 import { Composer } from '../src/features/chat/Composer';
 import { DictationRowLabel } from '../src/features/voice/DictationRowLabel';
+import type { DictationMode } from '../src/features/voice/dictationMode';
 import type { SttSocketLike } from '../src/features/voice/sttSocket';
 import { useVoice, type RecorderHandlers, type VoiceRecorder } from '../src/features/voice/useVoice';
 import { strings } from '../src/strings';
@@ -55,7 +56,11 @@ class FakeSocket implements SttSocketLike {
 }
 
 /** A voice hook whose composer hands over to the job store when it unmounts. */
-function composerThatLeaves(options: { handsOver: boolean; plan: PolishPlan | null }) {
+function composerThatLeaves(options: {
+  handsOver: boolean;
+  plan: PolishPlan | null;
+  mode?: DictationMode;
+}) {
   const sockets: FakeSocket[] = [];
   const own: { text: string; isFinal: boolean }[] = [];
   const factory = (): SttSocketLike => {
@@ -84,7 +89,15 @@ function composerThatLeaves(options: { handsOver: boolean; plan: PolishPlan | nu
       },
       onDetach: () =>
         options.handsOver
-          ? useDictationJobs.getState().handoff(KEY, { base, applied, plan: options.plan })
+          ? useDictationJobs
+              .getState()
+              .handoff(KEY, {
+                base,
+                applied,
+                plan: options.plan,
+                mode: options.mode ?? 'live',
+                editTs: null,
+              })
           : null,
     }),
   );
@@ -144,7 +157,7 @@ afterEach(() => {
 describe('a dictation handed over when the composer goes away', () => {
   it('treats a dictation still listening as Done and lets its sockets finish', async () => {
     const { result, sockets, unmount, own } = composerThatLeaves({ handsOver: true, plan });
-    act(() => result.current.start());
+    act(() => result.current.start('live'));
     await settle();
     act(() => sockets[0]!.deliver({ type: 'stt.partial', text: 'run the suite' }));
     expect(draft()).toBe('after lunch run the suite');
@@ -169,7 +182,7 @@ describe('a dictation handed over when the composer goes away', () => {
 
   it('keeps a dictation that was already finishing', async () => {
     const { result, sockets, unmount } = composerThatLeaves({ handsOver: true, plan });
-    act(() => result.current.start());
+    act(() => result.current.start('live'));
     await settle();
     act(() => result.current.done());
     await settle();
@@ -183,7 +196,7 @@ describe('a dictation handed over when the composer goes away', () => {
 
   it('ends the run as before when nobody takes it over', async () => {
     const { result, sockets, unmount } = composerThatLeaves({ handsOver: false, plan: null });
-    act(() => result.current.start());
+    act(() => result.current.start('live'));
     await settle();
 
     unmount();
@@ -193,7 +206,7 @@ describe('a dictation handed over when the composer goes away', () => {
 
   it('writes the plain transcript before polish, then polishes into the draft', async () => {
     const { result, sockets, unmount } = composerThatLeaves({ handsOver: true, plan });
-    act(() => result.current.start());
+    act(() => result.current.start('live'));
     await settle();
     unmount();
     act(() => sockets[0]!.deliver({ type: 'stt.final', text: 'um run the the suite' }));
@@ -212,7 +225,7 @@ describe('a dictation handed over when the composer goes away', () => {
 
   it('appends the transcript without polish when polish is off', async () => {
     const { result, sockets, unmount } = composerThatLeaves({ handsOver: true, plan: null });
-    act(() => result.current.start());
+    act(() => result.current.start('live'));
     await settle();
     unmount();
     act(() => sockets[0]!.deliver({ type: 'stt.final', text: 'plain words' }));
@@ -225,7 +238,7 @@ describe('a dictation handed over when the composer goes away', () => {
 
   it('lets text typed meanwhile win: the result is appended, never overwrites', async () => {
     const { result, sockets, unmount } = composerThatLeaves({ handsOver: true, plan });
-    act(() => result.current.start());
+    act(() => result.current.start('live'));
     await settle();
     unmount();
     act(() => useDrafts.getState().setText(KEY, 'after lunch, and also'));
@@ -242,7 +255,7 @@ describe('a dictation handed over when the composer goes away', () => {
 
   it('keeps the transcript and the failure note when polish fails', async () => {
     const { result, sockets, unmount } = composerThatLeaves({ handsOver: true, plan });
-    act(() => result.current.start());
+    act(() => result.current.start('live'));
     await settle();
     unmount();
     act(() => sockets[0]!.deliver({ type: 'stt.final', text: 'keep me' }));
@@ -259,7 +272,7 @@ describe('a dictation handed over when the composer goes away', () => {
 
   it('ends interrupted, partial words kept, when the gateway never answers', async () => {
     const { result, sockets, unmount } = composerThatLeaves({ handsOver: true, plan });
-    act(() => result.current.start());
+    act(() => result.current.start('live'));
     await settle();
     act(() => sockets[0]!.deliver({ type: 'stt.partial', text: 'half a sentence' }));
     unmount();
@@ -272,8 +285,9 @@ describe('a dictation handed over when the composer goes away', () => {
 
   it('runs several jobs in parallel, one per session', async () => {
     const store = useDictationJobs.getState();
-    const sinkA = store.handoff('dev-1/a', { base: '', applied: '', plan });
-    const sinkB = store.handoff('dev-1/b', { base: '', applied: '', plan });
+    const fresh = { base: '', applied: '', plan, mode: 'live', editTs: null } as const;
+    const sinkA = store.handoff('dev-1/a', fresh);
+    const sinkB = store.handoff('dev-1/b', fresh);
     act(() => sinkA('first', true));
     act(() => sinkB('second', true));
     expect(polishCalls.map((call) => call.body.text)).toEqual(['first', 'second']);
@@ -285,10 +299,150 @@ describe('a dictation handed over when the composer goes away', () => {
   });
 });
 
+/**
+ * A57 — a batch dictation has written nothing into the draft when it is handed
+ * over, so there are no live words to take out; the segments it held and the
+ * last one's final land together, in one write, under the same rules.
+ */
+describe('a batch dictation handed over', () => {
+  /** Every value the session's draft takes from here on. */
+  const draftWrites = () => {
+    const writes: string[] = [];
+    const stop = useDrafts.subscribe((state) => writes.push(state.drafts[KEY]?.text ?? ''));
+    return { writes, stop };
+  };
+
+  it('has no live words to take out, and lands every segment in one step', async () => {
+    const { result, sockets, unmount, own } = composerThatLeaves({ handsOver: true, plan: null, mode: 'batch' });
+    act(() => result.current.start('batch'));
+    await settle();
+    await settle(30_000);
+    act(() => sockets[0]!.deliver({ type: 'stt.final', text: 'first half' }));
+    await settle();
+    expect(own).toEqual([]);
+
+    unmount();
+    await settle();
+    expect(draft()).toBe('after lunch');
+    expect(sockets[1]!.toldToTranscribe).toBe(true);
+    expect(sockets[1]!.toldToDrop).toBe(false);
+    expect(job()?.phase).toBe('finishing');
+
+    const { writes, stop } = draftWrites();
+    act(() => sockets[1]!.deliver({ type: 'stt.final', text: 'second half' }));
+    await settle();
+    stop();
+
+    expect(writes).toEqual(['after lunch first half second half']);
+    expect(job()).toMatchObject({ phase: 'ready', unseen: true });
+  });
+
+  it('appends after words typed meanwhile, then polishes', async () => {
+    const { result, sockets, unmount } = composerThatLeaves({ handsOver: true, plan, mode: 'batch' });
+    act(() => result.current.start('batch'));
+    await settle();
+    unmount();
+    act(() => useDrafts.getState().setText(KEY, 'after lunch, and also'));
+
+    act(() => sockets[0]!.deliver({ type: 'stt.final', text: 'um the transcript' }));
+    await settle();
+
+    expect(draft()).toBe('after lunch, and also um the transcript');
+    expect(polishCalls[0]?.body.text).toBe('um the transcript');
+  });
+
+  it('ends interrupted with the held words when the gateway never answers', async () => {
+    const { result, sockets, unmount } = composerThatLeaves({ handsOver: true, plan, mode: 'batch' });
+    act(() => result.current.start('batch'));
+    await settle();
+    await settle(30_000);
+    act(() => sockets[0]!.deliver({ type: 'stt.final', text: 'held words' }));
+    unmount();
+
+    await settle(30_000);
+
+    expect(draft()).toBe('after lunch held words');
+    expect(job()).toMatchObject({ phase: 'interrupted', unseen: true });
+    expect(polishCalls).toHaveLength(0);
+  });
+
+  it('writes nothing when it held nothing and the gateway never answers', async () => {
+    const { result, unmount } = composerThatLeaves({ handsOver: true, plan, mode: 'batch' });
+    act(() => result.current.start('batch'));
+    await settle();
+    unmount();
+    const { writes, stop } = draftWrites();
+
+    await settle(30_000);
+    stop();
+
+    expect(writes).toEqual([]);
+    expect(draft()).toBe('after lunch');
+    expect(job()).toMatchObject({ phase: 'interrupted', unseen: true });
+  });
+});
+
+/**
+ * A57 — typing while a transcript is on its way. A batch dictation's words are
+ * all still to come, so the person's typing never waits for them: Send's slot
+ * is theirs again, and the words are appended after what they typed. A live
+ * dictation's words are in the field already, and its job keeps the slot as
+ * it always has.
+ */
+describe('typing while a transcript is on its way', () => {
+  const handOver = (mode: DictationMode) =>
+    useDictationJobs
+      .getState()
+      .handoff(KEY, {
+        base: 'after lunch',
+        applied: 'after lunch',
+        plan: null,
+        mode,
+        editTs: null,
+      });
+
+  it("gives a batch job's slot back to the person, and still appends the transcript", () => {
+    useDrafts.getState().setText(KEY, 'after lunch');
+    const sink = handOver('batch');
+    expect(job()).toMatchObject({ phase: 'finishing', typedOver: false });
+
+    act(() => useDrafts.getState().setText(KEY, 'after lunch, typed'));
+    act(() => useDictationJobs.getState().drop(KEY));
+    expect(job()).toMatchObject({ phase: 'finishing', typedOver: true });
+
+    act(() => sink('the transcript', true));
+    expect(draft()).toBe('after lunch, typed the transcript');
+    expect(job()).toMatchObject({ phase: 'ready', typedOver: false });
+  });
+
+  it('appends the held words, interrupted, when a typed-over transcript never comes', () => {
+    useDrafts.getState().setText(KEY, 'after lunch');
+    const sink = handOver('batch');
+    act(() => useDrafts.getState().setText(KEY, 'after lunch, typed'));
+    act(() => useDictationJobs.getState().drop(KEY));
+
+    act(() => sink('held words', true, true));
+
+    expect(draft()).toBe('after lunch, typed held words');
+    expect(job()?.phase).toBe('interrupted');
+  });
+
+  it('keeps a live job holding the slot, as it always has', () => {
+    useDrafts.getState().setText(KEY, 'after lunch');
+    const sink = handOver('live');
+
+    act(() => useDictationJobs.getState().drop(KEY));
+    expect(job()).toMatchObject({ phase: 'finishing', typedOver: false });
+
+    act(() => sink('the transcript', true));
+    expect(job()?.phase).toBe('ready');
+  });
+});
+
 describe('sign-out while a handed-over dictation is finishing', () => {
   it('closes its sockets and lets a late transcript write nothing', async () => {
     const { result, sockets, unmount } = composerThatLeaves({ handsOver: true, plan });
-    act(() => result.current.start());
+    act(() => result.current.start('live'));
     await settle();
     unmount();
 
@@ -304,7 +458,9 @@ describe('sign-out while a handed-over dictation is finishing', () => {
   });
 
   it('ignores a sink the store handed out before it was emptied', () => {
-    const sink = useDictationJobs.getState().handoff(KEY, { base: '', applied: '', plan });
+    const sink = useDictationJobs
+      .getState()
+      .handoff(KEY, { base: '', applied: '', plan, mode: 'live', editTs: null });
     useDictationJobs.getState().reset();
     act(() => sink('late', true));
     expect(draft()).toBe('');
@@ -332,7 +488,7 @@ describe('a polish answer that arrives after its composer is gone', () => {
         onTakeover={vi.fn()}
       />,
     );
-    act(() => useDictationJobs.getState().polish(KEY, span, plan));
+    act(() => useDictationJobs.getState().polish(KEY, span, plan, 'live'));
     view.unmount();
 
     act(() => useDrafts.getState().setText(KEY, 'hello um world, newer words'));
@@ -343,7 +499,7 @@ describe('a polish answer that arrives after its composer is gone', () => {
 
   it('still replaces the dictated span when nothing was typed', async () => {
     useDrafts.getState().setText(KEY, 'hello um world');
-    act(() => useDictationJobs.getState().polish(KEY, span, plan));
+    act(() => useDictationJobs.getState().polish(KEY, span, plan, 'live'));
     await act(async () => polishCalls[0]!.answer('World.'));
     expect(draft()).toBe('hello World.');
     expect(job()?.note).toEqual({ span, text: 'World.' });
@@ -351,7 +507,7 @@ describe('a polish answer that arrives after its composer is gone', () => {
 
   it('is aborted when the field moves on, and its answer is ignored', async () => {
     useDrafts.getState().setText(KEY, 'hello um world');
-    act(() => useDictationJobs.getState().polish(KEY, span, plan));
+    act(() => useDictationJobs.getState().polish(KEY, span, plan, 'live'));
     act(() => useDictationJobs.getState().drop(KEY));
 
     expect(polishCalls[0]!.signal?.aborted).toBe(true);
@@ -360,7 +516,7 @@ describe('a polish answer that arrives after its composer is gone', () => {
   });
 
   it('is aborted by sign-out', async () => {
-    act(() => useDictationJobs.getState().polish(KEY, span, plan));
+    act(() => useDictationJobs.getState().polish(KEY, span, plan, 'live'));
     act(() => useDictationJobs.getState().reset());
     expect(polishCalls[0]!.signal?.aborted).toBe(true);
     expect(job()).toBeUndefined();
@@ -375,7 +531,9 @@ describe('the session row label', () => {
 
   it('names the running state, then the unseen result, and clears on open', () => {
     expect(label()).toBe('');
-    const sink = useDictationJobs.getState().handoff(KEY, { base: '', applied: '', plan: null });
+    const sink = useDictationJobs
+      .getState()
+      .handoff(KEY, { base: '', applied: '', plan: null, mode: 'live', editTs: null });
 
     const finishing = render(<DictationRowLabel sessionKey={KEY} />);
     expect(finishing.container.textContent).toBe('Transcribing…');
@@ -392,7 +550,9 @@ describe('the session row label', () => {
   });
 
   it('says Dictation interrupted until the session is opened', () => {
-    const sink = useDictationJobs.getState().handoff(KEY, { base: '', applied: '', plan });
+    const sink = useDictationJobs
+      .getState()
+      .handoff(KEY, { base: '', applied: '', plan, mode: 'live', editTs: null });
     act(() => sink('half', true, true));
     expect(label()).toBe('Dictation interrupted');
   });
@@ -402,7 +562,7 @@ describe('reopening the session', () => {
   it('shows the running job in the status line and the finished note under the field', async () => {
     useDrafts.getState().setText(KEY, 'hello um world');
     act(() =>
-      useDictationJobs.getState().polish(KEY, { base: 'hello', dictated: 'um world' }, plan),
+      useDictationJobs.getState().polish(KEY, { base: 'hello', dictated: 'um world' }, plan, 'live'),
     );
     render(
       <Composer

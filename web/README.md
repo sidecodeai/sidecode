@@ -35,7 +35,8 @@ running session plays a scripted turn: streamed thinking, streamed Markdown, too
 live output box, a failing shell run, two diffs, an approval, and a question. Answering the
 approval and the question drives the turn to completion. `POST /api/devices/pairing` starts a
 pairing that walks `waiting → enrolled → online → agents` over about six seconds, and the STT
-socket returns scripted partials and a final transcript.
+socket returns scripted partials and a final transcript. `RC_MOCK_STT=batch` makes it a gateway
+whose speech backend transcribes afterwards (`stt.streaming: false`), which sends no partials.
 
 The mock and the tests share `mock/fixtures.ts`, so a fixture change shows up in both.
 
@@ -118,11 +119,14 @@ Every user-visible string lives in `src/strings.ts` so the app can be localised 
 
 ## Voice
 
-Holding <kbd>⌥</kbd>+<kbd>Space</kbd> (or tapping the mic) opens `WS /ws/stt`, captures the
-microphone through an AudioWorklet (with a ScriptProcessor fallback), downsamples to 16 kHz
-mono PCM16LE with a box filter, and sends ~120 ms binary frames. Partial transcripts stream back
-into an editable field; "Stop & send" sends `stt.stop`, waits for `stt.final`, then submits. The
-mic is hidden when the gateway reports `stt.enabled: false`.
+Tapping the mic opens `WS /ws/stt`, captures the microphone through an AudioWorklet (with a
+ScriptProcessor fallback), downsamples to 16 kHz mono PCM16LE with a box filter, and sends ~120 ms
+binary frames. While listening, the control row shows a scrolling waveform, the elapsed time and
+Done; Done sends `stt.stop` and leaves the transcript in the composer's field to edit and send. A
+gateway that streams its words puts partial transcripts in the field as they come; one that
+reports `stt.streaming: false` (A57) is asked for none (`partials=0`), and the whole transcript
+lands after Done. The mic is hidden when the gateway reports `stt.enabled: false`. `docs/WEB.md`
+§ "Voice" has the detail.
 
 ## Reading while an agent works
 

@@ -82,6 +82,14 @@ const PASSWORD = process.env.RC_PASSWORD ?? 'dev';
 const GATEWAY_VERSION = '0.1.0-mock';
 const COOKIE = 'rc_session';
 
+/**
+ * What `/api/config` and `hello` say about speech. A44: the provider detects
+ * the language, so there is nothing to list. A57: `RC_MOCK_STT=batch` answers
+ * as a gateway whose backend transcribes a recording afterwards; otherwise the
+ * words stream, as with the realtime backend.
+ */
+const STT = { enabled: true, languages: ['auto'], streaming: process.env.RC_MOCK_STT !== 'batch' };
+
 /* ----------------------------------------------------------------- state */
 
 const state = {
@@ -690,8 +698,7 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<vo
   if (path === '/api/config') {
     json(res, 200, {
       public_origin: `http://127.0.0.1:5173`,
-      // A44: the provider detects the language, so there is nothing to list.
-      stt: { enabled: true, languages: ['auto'] },
+      stt: STT,
       polish: { enabled: true },
       push: { web_enabled: true, apns_enabled: false },
       version: GATEWAY_VERSION,
@@ -966,7 +973,8 @@ server.on('upgrade', (req, socket, head) => {
     return;
   }
   if (url.pathname === '/ws/stt') {
-    sttWss.handleUpgrade(req, socket, head, (ws) => onSttSocket(ws));
+    const partials = url.searchParams.get('partials') !== '0';
+    sttWss.handleUpgrade(req, socket, head, (ws) => onSttSocket(ws, partials));
     return;
   }
   socket.destroy();
@@ -988,7 +996,7 @@ function onAppSocket(socket: WebSocket, account: Account): void {
     user: userView(account),
     devices: devicesOf(account.username),
     sessions: sessionsOf(account.username),
-    stt: { enabled: true, languages: ['auto'] },
+    stt: STT,
     polish: { enabled: true },
     // A35: absent here would be a gateway too old for the switch, which is what
     // the app draws disabled; this one holds them.
@@ -1954,14 +1962,15 @@ const PARTIALS = [
 ];
 
 /**
- * A44: the provider detects the language, so the socket reads no query at all;
- * a `language` an older app still sends is ignored, as the gateway ignores it.
+ * A44: the provider detects the language, so the socket reads no `language`;
+ * one an older app still sends is ignored, as the gateway ignores it. A57:
+ * `partials=0` asks for no partials, and the final alone answers `stt.stop`.
  */
-function onSttSocket(socket: WebSocket): void {
+function onSttSocket(socket: WebSocket, partials: boolean): void {
   let index = 0;
   let receivedAudio = false;
   const timer = setInterval(() => {
-    if (!receivedAudio) return;
+    if (!receivedAudio || !partials) return;
     const text = PARTIALS[Math.min(index, PARTIALS.length - 1)];
     index += 1;
     send(socket, { type: 'stt.partial', text });
