@@ -16,6 +16,8 @@ import { claudeAgent } from '../mock/fixtures';
 import { Composer } from '../src/features/chat/Composer';
 import type { Session } from '../src/protocol/types';
 import { useDictationJobs } from '../src/stores/dictationJobs';
+import { useDrafts } from '../src/stores/drafts';
+import { sessionKey } from '../src/stores/sessions';
 import { useSettings } from '../src/stores/settings';
 import { strings } from '../src/strings';
 
@@ -114,8 +116,10 @@ afterEach(() => {
   Reflect.deleteProperty(navigator, 'mediaDevices');
 });
 
+const KEY = sessionKey(session.device_id, session.session_id);
+
 function setup(sttStreaming: boolean | undefined, polishEnabled = false) {
-  render(
+  const view = render(
     <Composer
       session={session}
       agent={claudeAgent}
@@ -136,6 +140,7 @@ function setup(sttStreaming: boolean | undefined, polishEnabled = false) {
   return {
     user: userEvent.setup(),
     field: () => screen.getByLabelText(strings.composer.placeholder) as HTMLTextAreaElement,
+    unmount: view.unmount,
   };
 }
 
@@ -293,7 +298,7 @@ describe('polish after a batch dictation', () => {
 });
 
 /**
- * A57: Chinese and Japanese are typed through an input method, which
+ * Chinese and Japanese are typed through an input method, which
  * holds marked text while it composes. Words that arrive then wait for the
  * composition to end, committed or cancelled, and land after it.
  */
@@ -327,6 +332,57 @@ describe('words that arrive while an input method composes', () => {
 
     fireEvent.compositionEnd(field());
     await waitFor(() => expect(field()).toHaveValue('the words'));
+  });
+});
+
+describe('words held for a composition when the composer goes', () => {
+  it('still land in the draft, after it has gone', async () => {
+    const { user, field, unmount } = setup(false);
+    const socket = await listening(user);
+    await user.click(field());
+    await waitFor(() => expect(socket.said('stt.stop')).toBe(true));
+    fireEvent.compositionStart(field());
+    act(() => socket.deliver({ type: 'stt.final', text: 'the words' }));
+
+    await act(async () => {
+      unmount();
+      await Promise.resolve();
+    });
+
+    expect(useDrafts.getState().drafts[KEY]?.text).toBe('the words');
+  });
+
+  it('write and polish nothing once the account has signed out', async () => {
+    useSettings.setState({ polishEnabled: true, polishModel: 'gpt-4.1-mini' });
+    const asked: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        asked.push(String(input));
+        return new Promise<Response>(() => undefined);
+      }),
+    );
+    const { user, field, unmount } = setup(false, true);
+    await user.click(field());
+    await user.keyboard('old account text');
+    const socket = await listening(user);
+    await user.click(screen.getByRole('button', { name: strings.voice.done }));
+    await waitFor(() => expect(socket.said('stt.stop')).toBe(true));
+    fireEvent.compositionStart(field());
+    act(() => socket.deliver({ type: 'stt.final', text: 'secret words' }));
+
+    act(() => {
+      useDictationJobs.getState().reset();
+      useDrafts.getState().reset();
+    });
+    await act(async () => {
+      unmount();
+      await Promise.resolve();
+    });
+
+    expect(useDrafts.getState().drafts).toEqual({});
+    expect(useDictationJobs.getState().jobs).toEqual({});
+    expect(asked).toEqual([]);
   });
 });
 

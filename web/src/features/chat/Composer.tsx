@@ -28,7 +28,12 @@ import type {
   SharedSettingKey,
 } from '../../protocol/types';
 import { draftOf as answerDraftOf, useAnswers } from '../../stores/answers';
-import { jobOf, useDictationJobs, type PolishPlan } from '../../stores/dictationJobs';
+import {
+  jobOf,
+  jobsEpoch,
+  useDictationJobs,
+  type PolishPlan,
+} from '../../stores/dictationJobs';
 import { draftOf, landsAside, useDrafts } from '../../stores/drafts';
 import { useImeGuard } from './useImeGuard';
 import { sessionKey } from '../../stores/sessions';
@@ -202,10 +207,15 @@ export function Composer({
   const polishReady = polishEnabled && polishChosen && polishModel.length > 0;
 
   const dropPolish = useCallback(() => jobs.getState().drop(key), [jobs, key]);
+  /**
+   * A send, an answer or a new dictation is done with the job, its notice
+   * included, which an edit alone leaves standing.
+   */
+  const forgetJob = useCallback(() => jobs.getState().forget(key), [jobs, key]);
 
   // This composer is the session's open one while it is mounted: a result that
   // lands now is seen, and one that landed before is seen from here on. Its
-  // field holds a landing back while an input method composes (A57).
+  // field holds a landing back while an input method composes.
   useEffect(() => {
     jobs.getState().open(key, ime.whenComposed);
     return () => jobs.getState().leave(key);
@@ -298,7 +308,7 @@ export function Composer({
     // A29: the "Polished · Undo" note is about a draft that has just left, so
     // it leaves with it. No request can still be out: the slot holds a spinner
     // while one is, and this runs from the slot.
-    dropPolish();
+    forgetJob();
     const requestId = question.request_id;
     const value = text;
     setDraft('');
@@ -309,7 +319,7 @@ export function Composer({
       .catch(() => {
         if (textRef.current.length === 0) setDraft(value);
       });
-  }, [question, answer, text, onAnswer, clearAnswer, setDraft, dropPolish]);
+  }, [question, answer, text, onAnswer, clearAnswer, setDraft, forgetJob]);
 
   /**
    * A12: the field is cleared and the message is put in the timeline in this
@@ -323,7 +333,7 @@ export function Composer({
       // A29: the "Polished · Undo" note belongs to the draft and leaves with
       // it. A request still out is not a case here: neither Send nor the ⋯
       // menu, the two ways into this, is drawn while one is.
-      dropPolish();
+      forgetJob();
       if (textTooLong(value)) {
         setErrors([strings.composer.textTooLong]);
         return;
@@ -375,7 +385,7 @@ export function Composer({
       commands,
       onRunCommand,
       running,
-      dropPolish,
+      forgetJob,
       editing,
       putBack,
     ],
@@ -467,7 +477,10 @@ export function Composer({
    */
   function landBatch(transcript: string, editTs: number | null) {
     dictation.current = null;
+    const born = jobsEpoch();
     ime.whenComposed(() => {
+      // Words held for a composition through a sign-out belong to nobody.
+      if (born !== jobsEpoch()) return;
       const draft = useDrafts.getState().drafts[key];
       if (landsAside(draft, editTs)) {
         const aside = draft?.editing?.aside.text ?? '';
@@ -511,17 +524,17 @@ export function Composer({
   /**
    * What went wrong with a dictation, in one place: the run on screen says it
    * through the controller, and a batch run handed to the job store through
-   * its job, whichever composer opens the session (A57). Dismissing the job's
-   * forgets the job.
+   * its job, whichever composer opens the session. The job's
+   * stays through edits, and dismissing it forgets the job.
    */
   const jobNotice = jobPhase === 'interrupted' ? (job?.notice ?? null) : null;
   const dictationNotice =
     voice.state === 'error' && voice.error ? { message: voice.error } : jobNotice;
-  const dismissDictationNotice = voice.state === 'error' ? voice.dismissError : dropPolish;
+  const dismissDictationNotice = voice.state === 'error' ? voice.dismissError : forgetJob;
   const slot = returning && voiceSlot === 'send' ? 'working' : voiceSlot;
 
   const startVoice = () => {
-    dropPolish();
+    forgetJob();
     const mode = dictationMode(sttStreaming);
     dictation.current = {
       base: textRef.current,

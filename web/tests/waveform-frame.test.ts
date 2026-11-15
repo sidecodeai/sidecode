@@ -4,8 +4,8 @@
  * at 75 px/s, bars growing in over 120 ms to a height that follows level^1.5,
  * faded at both edges; after Done a glide that decelerates to a stop, a
  * highlight that sweeps the rested bars at a constant speed, and a clean cut
- * where the label begins; and, under Reduce Motion, bars that step one slot
- * per window.
+ * where the label begins, made within 80 ms; and, under Reduce Motion, bars
+ * that step one slot per window.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -157,22 +157,43 @@ describe('resting after Done', () => {
     expect(sweepAlpha(900, 120)).toBeCloseTo(REST_ALPHA, 10);
   });
 
-  it('sweeps from −72 to the width + 72 at a constant speed, and starts over at once', () => {
-    // A narrow row takes 1.4 s a pass; a wide one goes no faster than 480 px/s.
+  it("sweeps from −36 to the bars' end + 36 at a constant speed, and starts over at once", () => {
+    // Short bars take 1.4 s a pass; long ones go no faster than 480 px/s.
     expect(sweepPeriod(WIDTH)).toBe(SWEEP_MS);
-    expect(sweepPeriod(1100)).toBeCloseTo(((1100 + 144) / SWEEP_SPEED) * 1000, 10);
+    expect(sweepPeriod(1100)).toBeCloseTo(((1100 + 72) / SWEEP_SPEED) * 1000, 10);
 
     const period = sweepPeriod(WIDTH);
-    expect(sweepX(0, WIDTH)).toBe(-2 * SWEEP_WIDTH);
+    expect(sweepX(0, WIDTH)).toBe(-SWEEP_WIDTH);
     // Linear: a quarter of the time is a quarter of the way, with no easing.
-    expect(sweepX(period / 4, WIDTH)).toBeCloseTo(-72 + (WIDTH + 144) / 4, 10);
+    expect(sweepX(period / 4, WIDTH)).toBeCloseTo(-36 + (WIDTH + 72) / 4, 10);
     expect(sweepX(period / 2, WIDTH)).toBeCloseTo(WIDTH / 2, 10);
-    expect(sweepX(period - 1, WIDTH)).toBeCloseTo(WIDTH + 72 - (WIDTH + 144) / period, 10);
-    expect(sweepX(period, WIDTH)).toBe(-2 * SWEEP_WIDTH);
+    expect(sweepX(period - 1, WIDTH)).toBeCloseTo(WIDTH + 36 - (WIDTH + 72) / period, 10);
+    expect(sweepX(period, WIDTH)).toBe(-SWEEP_WIDTH);
 
-    const wide = 1100;
-    const step = sweepX(1000, wide) - sweepX(500, wide);
+    const long = 1100;
+    const step = sweepX(1000, long) - sweepX(500, long);
     expect(step).toBeCloseTo(SWEEP_SPEED / 2, 10);
+  });
+
+  it('sweeps only the bars the label leaves, never the span under it', () => {
+    const bars = row(80, 1000);
+    const cover = 120;
+    const barsEnd = WIDTH - cover;
+    const period = sweepPeriod(barsEnd);
+    const brightest = (now: number) => {
+      const drawn = frame(bars, { now, restAt: 1000, cover });
+      return drawn.reduce((best, bar) => (bar.alpha > best.alpha ? bar : best));
+    };
+
+    // Half a pass in, the highlight is half-way along the drawn bars.
+    expect(brightest(1000 + REST_MS + period / 2).x).toBeCloseTo(barsEnd / 2, -1);
+    // Late in the pass it lights the last bars before the label, and it turns
+    // back 36 px past them rather than crossing the span under the label.
+    const atLastBar = ((barsEnd - PITCH + SWEEP_WIDTH) / (barsEnd + 2 * SWEEP_WIDTH)) * period;
+    const late = brightest(1000 + REST_MS + atLastBar);
+    expect(late.alpha).toBeGreaterThan(0.9);
+    expect(late.x).toBeGreaterThan(barsEnd - 3 * PITCH);
+    expect(sweepX(period - 1, barsEnd)).toBeLessThan(barsEnd + SWEEP_WIDTH);
   });
 
   it('starts the sweep once the glide has stopped, from beyond the leading edge', () => {
@@ -194,9 +215,10 @@ describe('resting after Done', () => {
     expect(Math.max(...middle.map((bar) => bar.alpha))).toBeGreaterThan(0.95);
   });
 
-  it('gives the trailing edge to the label as the timer fades out', () => {
+  it('gives the trailing edge to the label within 80 ms, before the label is in', () => {
     const bars = row(40, 1000);
     const cover = 60;
+    expect(COVER_MS).toBe(80);
     const drawn = frame(bars, { now: 1000 + COVER_MS, restAt: 1000, cover });
 
     expect(Math.max(...drawn.map((bar) => bar.x + BAR_WIDTH / 2))).toBeLessThanOrEqual(
@@ -207,6 +229,19 @@ describe('resting after Done', () => {
     expect(Math.max(...frame(bars, { now: 1000 }).map((bar) => bar.x))).toBeGreaterThan(
       WIDTH - cover,
     );
+  });
+
+  it('never lets a covered bar slide back out while the glide slows', () => {
+    const bars = row(60, 1000);
+    const cover = 47;
+    const drawnAt = (now: number) => frame(bars, { now, restAt: 1000, cover });
+    const covered = drawnAt(1000 + COVER_MS);
+
+    for (let now = 1000 + COVER_MS; now <= 1000 + REST_MS + 100; now += 10) {
+      const drawn = drawnAt(now);
+      expect(drawn).toHaveLength(covered.length);
+      for (const bar of drawn) expect(bar.x + BAR_WIDTH / 2).toBeLessThanOrEqual(WIDTH - cover);
+    }
   });
 
   it('leaves no faint sliver of a bar where the label begins', () => {

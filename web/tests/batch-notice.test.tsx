@@ -4,13 +4,15 @@
  * never a silent landing, since the person saw no words while they spoke. The
  * notice has one source wherever the run is: the controller for the run on
  * screen, its job for a run handed to the job store, so a session left and
- * opened again still says it. Dismissing it forgets the job. The real
- * controller and job store run here over a fake gateway, on fake time.
+ * opened again still says it. Typing does not clear it; dismissing it
+ * forgets the job. The real controller and job store run here over a fake
+ * gateway, on fake time.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { claudeAgent } from '../mock/fixtures';
 import { Composer } from '../src/features/chat/Composer';
+import { DictationRowLabel } from '../src/features/voice/DictationRowLabel';
 import type { Session } from '../src/protocol/types';
 import { useDictationJobs } from '../src/stores/dictationJobs';
 import { useDrafts } from '../src/stores/drafts';
@@ -204,6 +206,51 @@ describe('a batch final that never comes', () => {
     await run(10);
 
     expect(draft()).toBe('typed before held words');
+    expect(notices()).toHaveLength(1);
+    expect(notices()[0]).toHaveTextContent(strings.voice.failed);
+  });
+
+  it('stays through typing over the words, until it is dismissed', async () => {
+    await holding();
+    const field = screen.getByLabelText(strings.composer.placeholder);
+    fireEvent.pointerDown(field);
+    await run(10);
+    fireEvent.change(field, { target: { value: 'typed before and more' } });
+
+    await run(30_000);
+    expect(draft()).toBe('typed before and more held words');
+    expect(notices()).toHaveLength(1);
+
+    fireEvent.change(field, { target: { value: 'typed before and more held words!' } });
+    await run(10);
+    expect(notices()).toHaveLength(1);
+    expect(notices()[0]).toHaveTextContent(strings.voice.failed);
+
+    fireEvent.click(within(notices()[0]!).getByRole('button', { name: strings.common.dismiss }));
+    expect(notices()).toHaveLength(0);
+    expect(job()).toBeUndefined();
+  });
+
+  it('is still said after a switch when an input method held the words back', async () => {
+    const first = await holding();
+    const field = screen.getByLabelText(strings.composer.placeholder);
+    fireEvent.pointerDown(field);
+    await run(10);
+    fireEvent.compositionStart(field);
+    await run(30_000);
+
+    // Switched away mid-composition: the words land as the field goes, and the
+    // session's row says so, unseen.
+    first.unmount();
+    await run(10);
+    expect(draft()).toBe('typed before held words');
+    expect(job()).toMatchObject({ phase: 'interrupted', unseen: true });
+    const label = render(<DictationRowLabel sessionKey={KEY} />);
+    expect(label.container).toHaveTextContent(strings.voice.rowInterrupted);
+    label.unmount();
+
+    render(composer());
+    await run(10);
     expect(notices()).toHaveLength(1);
     expect(notices()[0]).toHaveTextContent(strings.voice.failed);
   });

@@ -73,7 +73,7 @@ export interface TranscriptSink {
 
 /**
  * The open composer's field, as a landing sees it: it runs the landing now, or
- * once an input method's composition there has ended (A57).
+ * once an input method's composition there has ended.
  */
 export type LandingGate = (land: () => void) => void;
 
@@ -103,9 +103,15 @@ interface JobsState {
   polish: (key: string, span: PolishSpan, plan: PolishPlan, mode: DictationMode) => void;
   /**
    * The field moved on: end a polish run or forget a finished one. A transcript
-   * on its way is never dropped; a batch one gives Send's slot back (A57).
+   * on its way is never dropped, and a batch one gives Send's slot back; the
+   * notice of a dictation that lost words stays until it is forgotten (A57).
    */
   drop: (key: string) => void;
+  /**
+   * The person is done with what the job says — its notice dismissed, the
+   * draft sent, a new dictation begun: it goes, unless words are still coming.
+   */
+  forget: (key: string) => void;
   /**
    * The composer lets go of a dictation midway — it is going away, or (A57) a
    * batch dictation's field was reached for: take over from Done on.
@@ -122,6 +128,12 @@ const attached = new Set<string>();
 const gates = new Map<string, LandingGate>();
 /** Bumped by `reset`: a sink handed out before it belongs to an account that left. */
 let epoch = 0;
+
+/**
+ * Which account's turn it is: sign-out moves it on, so work begun before can
+ * tell that it no longer belongs to anyone.
+ */
+export const jobsEpoch = (): number => epoch;
 /** Closers of the handed-over runs still going, for `reset`. */
 const handedOver = new Set<() => void>();
 
@@ -238,6 +250,14 @@ export const useDictationJobs = create<JobsState>((set, get) => {
         if (job.mode === 'batch' && !job.typedOver) put(key, { ...job, typedOver: true });
         return;
       }
+      if (job.notice) return;
+      cancelRun(key);
+      remove(key);
+    },
+
+    forget: (key) => {
+      const job = get().jobs[key];
+      if (!job || job.phase === 'finishing') return;
       cancelRun(key);
       remove(key);
     },
@@ -269,8 +289,8 @@ export const useDictationJobs = create<JobsState>((set, get) => {
         const land = () => {
           if (born !== epoch) return;
           const draft = useDrafts.getState().drafts[key];
-          // A57: words for the draft set aside while a queued message is
-          // edited wait there, and nothing is asked of the model about them.
+          // Words for the draft set aside while a queued message is edited
+          // wait there, and nothing is asked of the model about them.
           const aside = landsAside(draft, editTs);
           const current = aside ? (draft?.editing?.aside.text ?? '') : textOf(key);
           const merged = mergeDraft(current, text);
@@ -283,7 +303,7 @@ export const useDictationJobs = create<JobsState>((set, get) => {
           else if (plan && !aside) polish(key, { base: current, dictated: text }, plan, mode);
           else settle(key, 'ready', mode);
         };
-        // A57: never into a composition the open field is in the middle of.
+        // Never into a composition the open field is in the middle of.
         const gate = gates.get(key);
         if (gate) gate(land);
         else land();

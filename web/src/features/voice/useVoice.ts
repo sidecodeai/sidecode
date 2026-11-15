@@ -196,7 +196,7 @@ export function useVoice({
    * A failed run keeps whatever was recognised: a live run's words are in the
    * field already, and a batch run's held ones land now. The composer says why
    * of the run it follows; a batch run it handed on carries the notice to its
-   * job, which says it wherever the session is opened (A57).
+   * job, which says it wherever the session is opened.
    */
   const fail = useCallback(
     (run: Run, message: string) => {
@@ -341,16 +341,23 @@ export function useVoice({
       } catch {
         run.segments.end(index);
         // A dictation that ended while this socket was still connecting is not
-        // a failure: its end is what rejected the connect.
+        // a failure: its end is what rejected the connect. One that is Done
+        // waits only for the segments it has, which may all have spoken; a
+        // batch one still listening keeps what its other segments heard.
         if (run.over) return false;
-        fail(run, strings.voice.failed);
+        if (run.finishing) {
+          if (run.segments.settled) publish(run, true);
+        } else if (run.mode === 'batch') lose(run, { message: strings.voice.failed });
+        else fail(run, strings.voice.failed);
         return false;
       }
       // Connecting is the one await here, so the dictation can have ended while
-      // it ran. A socket nobody is going to speak into is closed, not armed.
+      // it ran. A socket nobody is going to speak into is closed, not armed,
+      // and a Done that came meanwhile may now have heard all it waits for.
       if (run.over || run.finishing) {
         run.segments.end(index);
         socket.cancel();
+        if (!run.over && run.segments.settled) publish(run, true);
         return false;
       }
       const previous = run.route;
@@ -358,7 +365,7 @@ export function useVoice({
       previous?.stop();
       return true;
     },
-    [factory, receive, fail],
+    [factory, receive, publish, lose, fail],
   );
 
   /** Hold a cut until the speaker pauses, and take it anyway if they do not. */

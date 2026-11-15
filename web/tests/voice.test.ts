@@ -82,7 +82,13 @@ function jobSink() {
   return { heard, asked, take };
 }
 
-function harness(onDetach?: () => TranscriptSink | null) {
+/** Sockets, by the order they are opened, whose connect the test settles itself or refuses. */
+interface Connects {
+  held?: number[];
+  failing?: number[];
+}
+
+function harness(onDetach?: () => TranscriptSink | null, connects: Connects = {}) {
   const sockets: FakeSocket[] = [];
   const urls: string[] = [];
   const transcripts: { text: string; isFinal: boolean }[] = [];
@@ -93,9 +99,15 @@ function harness(onDetach?: () => TranscriptSink | null) {
   const factory = (url: string): SttSocketLike => {
     urls.push(url);
     const socket = new FakeSocket();
+    const index = sockets.length;
     sockets.push(socket);
-    // The gateway accepts after the caller has installed its handlers.
-    void Promise.resolve().then(() => socket.onopen?.({}));
+    // The gateway answers after the caller has installed its handlers.
+    if (!connects.held?.includes(index)) {
+      void Promise.resolve().then(() => {
+        if (connects.failing?.includes(index)) socket.onerror?.({});
+        else socket.onopen?.({});
+      });
+    }
     return socket;
   };
   const recorder: VoiceRecorder = { start: () => Promise.resolve(true), stop: () => Promise.resolve() };
@@ -524,6 +536,79 @@ describe('a batch dictation', () => {
     expect(endings).toEqual([{ text: 'first third', interrupted: true }]);
     expect(result.current.state).toBe('error');
     expect(result.current.error).toBe('backend busy');
+  });
+
+  it('keeps the listening segment when a cut one closes without its final', async () => {
+    const { result, sockets, endings } = harness();
+    act(() => result.current.start('batch'));
+    await settle();
+    await settle(30_000);
+
+    act(() => sockets[0]!.onclose?.({}));
+    await settle();
+    expect(sockets[1]!.toldToTranscribe).toBe(true);
+    expect(sockets[1]!.toldToDrop).toBe(false);
+
+    act(() => sockets[1]!.deliver({ type: 'stt.final', text: 'second' }));
+    await settle();
+    expect(endings).toEqual([{ text: 'second', interrupted: true }]);
+    expect(result.current.error).toBe(strings.voice.failed);
+  });
+
+  it('keeps what the listening segment heard when a cut cannot connect', async () => {
+    const { result, sockets, endings } = harness(undefined, { failing: [1] });
+    act(() => result.current.start('batch'));
+    await settle();
+    await settle(30_000);
+
+    expect(sockets[0]!.toldToTranscribe).toBe(true);
+    expect(sockets[0]!.toldToDrop).toBe(false);
+    expect(result.current.state).toBe('finishing');
+
+    act(() => sockets[0]!.deliver({ type: 'stt.final', text: 'first segment words' }));
+    await settle();
+    expect(endings).toEqual([{ text: 'first segment words', interrupted: true }]);
+    expect(result.current.error).toBe(strings.voice.failed);
+  });
+
+  it('still lands the segment told to stop when a cut connecting at Done fails', async () => {
+    const { result, sockets, endings } = harness(undefined, { held: [1] });
+    act(() => result.current.start('batch'));
+    await settle();
+    await settle(30_000);
+    expect(sockets).toHaveLength(2);
+    act(() => result.current.done());
+    await settle();
+    expect(sockets[0]!.toldToTranscribe).toBe(true);
+
+    act(() => sockets[1]!.onerror?.({}));
+    await settle();
+    expect(sockets[0]!.toldToDrop).toBe(false);
+
+    act(() => sockets[0]!.deliver({ type: 'stt.final', text: 'all of it' }));
+    await settle();
+    expect(endings).toEqual([{ text: 'all of it', interrupted: false }]);
+    expect(result.current.state).toBe('idle');
+  });
+
+  it('ends as soon as a cut connecting at Done comes, once the rest has spoken', async () => {
+    const { result, sockets, endings } = harness(undefined, { held: [1] });
+    act(() => result.current.start('batch'));
+    await settle();
+    await settle(30_000);
+    act(() => result.current.done());
+    await settle();
+    act(() => sockets[0]!.deliver({ type: 'stt.final', text: 'all of it' }));
+    await settle();
+    expect(endings).toEqual([]);
+
+    act(() => sockets[1]!.onopen?.({}));
+    await settle();
+
+    expect(endings).toEqual([{ text: 'all of it', interrupted: false }]);
+    expect(sockets[1]!.toldToDrop).toBe(true);
+    expect(result.current.state).toBe('idle');
+    expect(result.current.error).toBeNull();
   });
 
   it('never turns a stray partial into held words', async () => {

@@ -22,7 +22,7 @@ export const SEND_DELAY_MS = 60;
  * before compositionend — a plain Enter does not send at once but a moment
  * later, and a `compositionend` arriving in that moment cancels it.
  *
- * A57: it also keeps dictated words out of a composition. Writing the
+ * It also keeps dictated words out of a composition (A57). Writing the
  * field while the input method holds marked text would break what is being
  * composed, so a landing waits for the composition to end, committed or
  * cancelled, and lands in the next task, after the input that ends it.
@@ -65,7 +65,7 @@ export function useImeGuard() {
     }, 0);
   }, [cancelPending, release]);
 
-  /** A57: run `land` now, or once the composition the field holds has ended. */
+  /** Run `land` now, or once the composition the field holds has ended. */
   const whenComposed = useCallback((land: () => void) => {
     if (composing.current) held.current.push(land);
     else land();
@@ -93,11 +93,13 @@ export function useImeGuard() {
   );
 
   // A send still waiting when the composer goes away belongs to nobody; words
-  // still waiting belong to the draft, and land as the field goes.
+  // still waiting belong to the draft, and land as the field goes — once the
+  // rest of the composer has let go of the session, so a job that ends here
+  // is not taken for one seen on screen.
   useEffect(
     () => () => {
       cancelPending();
-      release(true);
+      queueMicrotask(() => release(true));
     },
     [cancelPending, release],
   );

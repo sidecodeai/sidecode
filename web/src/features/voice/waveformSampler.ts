@@ -62,7 +62,7 @@ export class LevelSampler {
    * One block of audio: its energy, the sum of its squared samples, and how
    * many it had. The window's level is the RMS of everything it held — the
    * loudest of its blocks' peaks sat at the top of the range under a
-   * browser's gain control (A57).
+   * browser's gain control.
    */
   push(energy: number, samples: number): void {
     this.energy += energy;

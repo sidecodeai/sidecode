@@ -2,9 +2,9 @@
  * The waveform's drawing loop (A57, `docs/DESIGN.md` § "The composer"): it
  * draws once the canvas is laid out, at the device's pixel ratio and in the
  * canvas's own CSS colour, from the first frame a row full of resting dots;
- * it stops while the page is hidden and when the row goes away;
- * Done stops the bars from arriving; and the canvas is decorative, hidden from
- * assistive technology.
+ * it stops while the page is hidden and when the row goes away; Done stops
+ * the bars from arriving; and the canvas is decorative, hidden from assistive
+ * technology.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render } from '@testing-library/react';

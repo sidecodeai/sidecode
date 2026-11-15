@@ -1,7 +1,7 @@
 /**
  * The dictation recorder where a browser has no AudioWorklet: a
  * ScriptProcessor in 2048-frame blocks, about 43 ms at 48 kHz, so the
- * waveform hears a level in every 80 ms window (A57).
+ * waveform hears a level in every 80 ms window.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MicRecorder } from '../src/features/voice/recorder';

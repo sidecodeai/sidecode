@@ -242,21 +242,28 @@ row, say — is not a pointer and ends nothing. The mic is hidden entirely when 
 `stt.enabled: false`.
 
 A batch dictation's words exist only in each segment's final, so losing a segment never goes
-unsaid. A failure, or a socket that closes without its final, costs that segment alone: listening
-stops as Done would, the segments still out — the one taking audio included — are awaited, and
-the run then ends with what they held. A final that never comes within 30 s ends it the same way.
+unsaid. A failure, a socket that closes without its final, or a cut whose new socket cannot
+connect costs that segment alone: listening stops as Done would, the segments still out — the one
+taking audio included — are awaited, and the run then ends with what they held. A final that never
+comes within 30 s ends it the same way. A cut still connecting when Done is tapped had no audio
+yet, so its socket is closed, failed or not, and the run ends as soon as the others have spoken.
 The held text lands first, then the notice: the gateway's message, or "Transcription failed.". The
 notice has one source wherever the run is: the controller's error for the run the composer
 follows, and, for a run handed to the job store, the job, which ends `interrupted` carrying it
-(`DictationJob.notice`), so whichever composer opens the session shows the same banner until it is
-dismissed, which forgets the job, or the field is edited. A live dictation's failures read as
-before.
+(`DictationJob.notice`), so whichever composer opens the session shows the same banner. Typing
+does not clear it — `drop`, which every edit calls, keeps a job that carries a notice — and it goes
+when it is dismissed, the draft is sent, or a new dictation begins (`forget`). A live dictation's
+failures read as before.
 
 Words that land never interrupt an input method. While the field is composing, between
 `compositionstart` and `compositionend`, a batch dictation's words — in the open composer or from
 the job store — wait, and land once the composition ends, committed or cancelled, in the next task
 so the input that ends it is in the field first (`useImeGuard().whenComposed`, which the composer
 also hands the store as its field's gate through `open(key, gate)`); polish follows as usual.
+Words still waiting when the composer goes land as it goes, in a microtask after the rest of the
+composer has let go of the session, so a job that ends then is unseen and its session's row says
+so. After a sign-out none land at all: the composer's own landing checks the job store's epoch
+(`jobsEpoch`), as the store's sinks do.
 
 Words also land in the draft they were dictated for. Every dictation remembers the queued message
 the field was editing when the mic was pressed (`editTs`, null outside an edit). If the field is
@@ -294,16 +301,18 @@ The waveform (`Waveform.tsx`) is a canvas hidden from assistive technology:
   stops while the page is hidden and for good when the row unmounts.
 
 The waveform and the timer fade in from 0.98 scale over 180 ms, appearing with the status line in
-one render. At Done the glide decelerates to a stop over 200 ms and no bar arrives; the bars dim to
-0.35 while a highlight, `0.35 + 0.65·exp(−((x − sweepX) / 36)²)`, travels from 72 px before the
-leading edge to 72 px past the trailing one at a constant speed and starts over at once, one pass
-taking `max(1.4 s, (width + 144) / 480)`, so it is in view for most of every pass; and the timer
+one render. At Done the glide decelerates to a stop over 200 ms and no bar arrives, and the timer
 cross-fades in 150 ms to "Transcribing…" (转写中…, the session row's `rowTranscribing`), which ends
-where the timer ends and covers the waveform's tail, so nothing in the row moves. Against the
-label and its clearance every bar is whole or not drawn at all: a bar reaching past that edge is
-cut, so no faint sliver is left there. Done's slot keeps Done's width for as long as the row lasts
-(a hidden sizer), so the spinner sits where Send will be and the waveform never changes size. Once
-the words are in, the ordinary row takes the slot back in the same render as the listening row
+where the timer ends and covers the waveform's tail, so nothing in the row moves. The bars under
+the label and its clearance are gone within 80 ms, ahead of the label; against that edge
+every bar is whole or not drawn at all, judged where it stands as the cover closes, so none slides
+back out while the glide slows and no faint sliver is left there. The bars that remain dim
+to 0.35 while a highlight, `0.35 + 0.65·exp(−((x − sweepX) / 36)²)`, travels over them, from 36 px
+before the first to 36 px past the last — the label's leading edge less its clearance — at a
+constant speed, and starts over at once, one pass taking `max(1.4 s, (barsEnd + 72) / 480)`, so
+it lights bars for nearly all of every pass. Done's slot keeps Done's width for as long as the row
+lasts (a hidden sizer), so the spinner sits where Send will be and the waveform never changes size.
+Once the words are in, the ordinary row takes the slot back in the same render as the listening row
 goes and the status line changes, so the composer moves once. Under Reduce Motion
 (`useReducedMotion`, read by the waveform) the bars step one slot per window with no glide and no
 growth, rest dimmed without a sweep, and the timer gives way to the label without a fade. The
@@ -349,12 +358,13 @@ not to the composer, which `ChatPage` remounts per session (`key={key}`). The ru
 - A57: a batch dictation is handed over at a switch, and also when its field is reached for or its
   composer is disabled. It has written nothing into the draft, so `applied` equals `base` and there
   are no live words to take out; the sink gets the held segment texts and the last final joined,
-  in one write, through the open field's gate and to the set-aside draft when the words belong
-  there (§ "Voice"). `Handoff.mode` becomes the job's `mode`: typing while a batch job is finishing
-  (`drop`, called by every edit) never drops it but sets `typedOver`, which gives Send's slot back,
-  and the transcript is appended after the typed words. A live job keeps the slot as before. A
-  final that never comes, or a failed socket, ends the job interrupted with the held segment texts
-  kept, or with nothing written when none were held, and with the notice the composer shows.
+  in one write, through the open field's gate, and to the draft set aside when the field is
+  editing a queued message the dictation did not start in. `Handoff.mode` becomes the job's
+  `mode`: typing while a batch job is finishing (`drop`, called by every edit) never drops it but
+  sets `typedOver`, which gives Send's slot back, and the transcript is appended after the typed
+  words. A live job keeps the slot as before. A final that never comes, or a failed socket, ends
+  the job interrupted with the held segment texts kept, or with nothing written when none were
+  held, and with the notice the composer shows.
 - `DictationRowLabel` draws the session row's trailing label in `SidebarItem` and `SessionRow`
   (`voice.rowTranscribing`, `rowPolishing`, `rowReady`, `rowInterrupted`; English and zh-Hans).
   Opening the session clears a finished job's label.
