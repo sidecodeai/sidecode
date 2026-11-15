@@ -57,6 +57,15 @@ class SttConfig:
     def enabled(self) -> bool:
         return self.provider in STT_BACKENDS
 
+    @property
+    def streaming(self) -> bool:
+        """A57: whether the backend returns words while the audio is still arriving.
+
+        Only ``realtime`` does; every other backend transcribes the recording afterwards, and
+        ``none`` transcribes nothing.
+        """
+        return self.provider == "realtime"
+
 
 @dataclass(frozen=True)
 class PolishConfig:

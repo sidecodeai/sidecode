@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://remote-control.dev/schema/v1/stt_frames.json",
   "title": "SideCode STT streaming frames (protocol v1)",
-  "description": "Text frames on WS /ws/stt?language=<code>. Audio travels as binary frames of PCM16LE, 16 kHz, mono (100-200 ms per frame recommended), which this schema does not cover. Limits: 120 s of audio per utterance, 4 MiB total.",
+  "description": "Text frames on WS /ws/stt, optionally with partials=0 (A57); a language parameter is ignored (A44). Audio travels as binary frames of PCM16LE, 16 kHz, mono (100-200 ms per frame recommended), which this schema does not cover. Limits: 120 s of audio per utterance, 4 MiB total.",
   "$ref": "#/$defs/SttFrame",
   "$defs": {
     "SttFrame": {
@@ -27,7 +27,7 @@
       "required": ["type"]
     },
     "SttPartial": {
-      "description": "Gateway -> client, about every 2 s while audio is arriving.",
+      "description": "Gateway -> client: about every 2 s while audio is arriving from a backend that transcribes whole recordings; with realtime, as the vendor sends words, up to stt.final. Never sent on a socket opened with partials=0 (A57).",
       "type": "object",
       "properties": {
         "type": { "const": "stt.partial" },

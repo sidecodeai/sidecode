@@ -39,7 +39,7 @@ def test_app_hello_carries_devices_and_sessions(client: TestClient, auth: dict[s
     assert hello["user"] == {"username": "admin", "role": "admin"}
     assert len(hello["devices"]) == 1
     assert hello["sessions"] == []
-    assert hello["stt"] == {"enabled": True, "languages": ["auto"]}
+    assert hello["stt"] == {"enabled": True, "languages": ["auto"], "streaming": False}
     assert hello["server_time"] > 0
 
 

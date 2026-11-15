@@ -65,9 +65,12 @@ class GatewayState:
     stt_sockets: Counter[str] = field(default_factory=Counter)
 
     def stt_view(self) -> dict[str, Any]:
+        """The `stt` object of `GET /api/config` and of the app `hello`, one for both."""
+        stt = self.config.stt
         # A44: the provider detects the language of every transcription, so there is nothing to
-        # offer; the list stays on the wire, always `auto`, for the apps that read it.
-        return {"enabled": self.config.stt.enabled, "languages": ["auto"]}
+        # offer; the list stays on the wire, always `auto`, for the apps that read it. A57: an app
+        # reads `streaming` to choose between live partials and a transcript shown when it is done.
+        return {"enabled": stt.enabled, "languages": ["auto"], "streaming": stt.streaming}
 
     def polish_view(self) -> dict[str, Any]:
         return {"enabled": self.config.polish.enabled}

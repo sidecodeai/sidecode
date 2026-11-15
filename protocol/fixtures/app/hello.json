@@ -313,7 +313,8 @@
     "enabled": true,
     "languages": [
       "auto"
-    ]
+    ],
+    "streaming": false
   },
   "polish": {
     "enabled": true

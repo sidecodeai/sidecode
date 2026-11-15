@@ -565,28 +565,32 @@ Voice is a stream, not an upload. The app opens `WS /ws/stt`, captures the micro
 downsamples to 16 kHz mono PCM16LE, and sends roughly 100–200 ms binary frames. The gateway buffers
 them, wraps the audio as WAV, and asks the configured backend for a partial transcript about every
 two seconds, sending back `stt.partial`. On `stt.stop` it transcribes everything and returns
-`stt.final` with the detected language, then closes the socket. Limits are 120 s and 4 MiB per
-utterance. Nobody chooses the language (A44): every provider is asked to detect it, a `language`
-an older app sends is ignored, and `stt.languages` is always `["auto"]`. The one recogniser that
-must be told a language is a phone's own, so `stt_language` is that phone's setting, Chinese
-until the person picks another.
+`stt.final` with the detected language, then closes the socket. A socket opened with `partials=0`
+(A57) gets no `stt.partial`, and such a backend is asked only on `stt.stop`. Limits are 120 s and
+4 MiB per utterance. Nobody chooses the language (A44): every provider is asked to detect it, a
+`language` an older app sends is ignored, and `stt.languages` is always `["auto"]`. The one
+recogniser that must be told a language is a phone's own, so `stt_language` is that phone's
+setting, Chinese until the person picks another.
 
 The backend is anything that implements `POST {STT_BASE_URL}/audio/transcriptions`: OpenAI itself,
 or a local Whisper server on the compose network so audio never leaves the VPS; Xiaomi MiMo is
 reached through a chat completion carrying the audio. All of those answer a whole utterance, so
 their "partials" are the whole buffer transcribed again — two seconds behind, and costlier the
-longer the dictation runs. The `realtime` provider (`rc_gateway/stt_realtime.py`) is the
-one that streams: it holds a WebSocket to the vendor for the life of the utterance over the OpenAI
-Realtime transcription protocol in the dialect Alibaba Model Studio documents for
-`qwen3-asr-flash-realtime` (`session.update` with `input_audio_format: pcm` at 16 kHz and server
-VAD; `input_audio_buffer.append` per frame; incremental
+longer the dictation runs. Since A57 the gateway says which kind it has: `stt.streaming` in `hello`
+and `/api/config` is `true` for `realtime` alone, and with any other backend an app asks for
+`partials=0`, shows a voice bar while the person speaks and inserts the whole transcript when they
+finish, so each segment is transcribed, and paid for, once. The `realtime` provider
+(`rc_gateway/stt_realtime.py`) is the one that streams: it holds a WebSocket to the vendor for the
+life of the utterance over the OpenAI Realtime transcription protocol in the dialect Alibaba Model
+Studio documents for `qwen3-asr-flash-realtime` (`session.update` with `input_audio_format: pcm` at
+16 kHz and server VAD; `input_audio_buffer.append` per frame; incremental
 `conversation.item.input_audio_transcription.text` events with a tentative `stash`; `….completed`
 per sentence; `session.finish`/`session.finished` to end), forwards each frame as it lands and
-sends `stt.partial` on every vendor event. The app protocol did not change: the same `stt.partial`
-and `stt.final` frames, only sooner. A phone app can skip the gateway entirely and use its platform's
-on-device recogniser instead, which is a different privacy story and is labelled as such in its
-settings. Either way the transcript lands in the composer as an editable draft;
-sending is always a separate, explicit action.
+sends `stt.partial` on every vendor event, or drops them on a `partials=0` socket. Adding realtime
+did not change the app protocol: the same `stt.partial` and `stt.final` frames, only sooner. A
+phone app can skip the gateway entirely and use its platform's on-device recogniser instead, which
+is a different privacy story and is labelled as such in its settings. Either way the transcript
+lands in the composer as an editable draft; sending is always a separate, explicit action.
 
 There is also a non-streaming `POST /api/stt/transcribe` for a recorded file. Both return `503`
 when `STT_PROVIDER` is `none`.

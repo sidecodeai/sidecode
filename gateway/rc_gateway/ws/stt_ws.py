@@ -7,6 +7,12 @@ the final transcript on ``stt.stop``. With the ``realtime`` backend (``stt_realt
 is forwarded the moment it arrives and every incremental word the vendor sends comes back as
 ``stt.partial``; ``stt.stop`` asks for the last sentence. Audio is never written to disk.
 
+``partials=0`` in the query (A57) asks for the final alone: the socket sends no ``stt.partial``. A
+request/response backend is then asked once, on ``stt.stop``, so the segment is transcribed, and
+paid for, once; the ``realtime`` backend still streams the audio to the vendor and drops its words
+until the final, which reads them from the session. No parameter, or any other value, keeps the
+partials every app before A57 relies on.
+
 The provider detects the language (A44). A ``language`` query parameter an older app sends is
 ignored, and ``stt.final`` carries the language the provider reported, or ``auto``.
 
@@ -70,7 +76,7 @@ async def stt_socket(ws: WebSocket) -> None:
         return
 
     state.stt_sockets[credential.username] += 1
-    session = _Stream(ws, state.transcriber)
+    session = _Stream(ws, state.transcriber, sends_partials=_wants_partials(ws))
     watchdog = asyncio.create_task(_watch_revocation(session, state, credential))
     try:
         await session.run()
@@ -82,6 +88,11 @@ async def stt_socket(ws: WebSocket) -> None:
         watchdog.cancel()
         _release_socket(state, credential.username)
         await session.close()
+
+
+def _wants_partials(ws: WebSocket) -> bool:
+    """A57: ``partials=0`` turns them off for the socket; anything else leaves them on."""
+    return ws.query_params.get("partials") != "0"
 
 
 def _release_socket(state: GatewayState, username: str) -> None:
@@ -107,9 +118,11 @@ async def _watch_revocation(session: _Stream, state: GatewayState, credential: C
 
 
 class _Stream:
-    def __init__(self, ws: WebSocket, transcriber: Transcriber) -> None:
+    def __init__(self, ws: WebSocket, transcriber: Transcriber, *, sends_partials: bool) -> None:
         self.ws = ws
         self.transcriber = transcriber
+        # A57: fixed for the socket's life, which is one segment (the socket closes on its final).
+        self.sends_partials = sends_partials
         self.utterance = Utterance()
         # The realtime backend streams; the others answer whole utterances (see the module doc).
         self.realtime = transcriber if isinstance(transcriber, RealtimeTranscriber) else None
@@ -139,7 +152,7 @@ class _Stream:
                 if self.realtime is not None:
                     if not await self._live_append(payload):
                         return
-                else:
+                elif self.sends_partials:
                     await self._maybe_partial()
                 continue
             text = message.get("text")
@@ -183,7 +196,9 @@ class _Stream:
         return True
 
     async def _live_partial(self, text: str) -> None:
-        if not self._closed and text:
+        # Without partials (A57) the vendor's words stop here: the final is read from the live
+        # session's own text, never from what was forwarded.
+        if self.sends_partials and not self._closed and text:
             await _send(self.ws, {"type": "stt.partial", "text": text})
 
     async def _live_error(self, error: SttError) -> None:

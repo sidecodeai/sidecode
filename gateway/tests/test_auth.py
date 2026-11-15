@@ -140,7 +140,7 @@ def test_config_reports_capabilities(client: TestClient, auth: dict[str, str]) -
     body = client.get("/api/config", headers=auth).json()
     assert body["public_origin"] == ORIGIN
     # A44: the provider detects the language, so there is only ever `auto` to report.
-    assert body["stt"] == {"enabled": True, "languages": ["auto"]}
+    assert body["stt"] == {"enabled": True, "languages": ["auto"], "streaming": False}
     assert body["push"]["web_enabled"] is True
     assert body["push"]["apns_enabled"] is False
 

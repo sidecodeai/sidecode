@@ -138,7 +138,7 @@ def test_stt_disabled_returns_unsupported(tmp_path: Path) -> None:
         ).json()["token"]
         headers = {"Authorization": f"Bearer {token}"}
         reported = offline.get("/api/config", headers=headers).json()["stt"]
-        assert reported == {"enabled": False, "languages": ["auto"]}
+        assert reported == {"enabled": False, "languages": ["auto"], "streaming": False}
         response = offline.post(
             "/api/stt/transcribe",
             files={"audio": ("note.wav", b"RIFF", "audio/wav")},

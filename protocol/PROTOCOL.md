@@ -317,7 +317,8 @@ gateway itself, as soon as it can (A36), or by an app retrying after a failure (
     "enabled": true,
     "languages": [
       "auto"
-    ]
+    ],
+    "streaming": false
   },
   "polish": {
     "enabled": true
@@ -434,6 +435,14 @@ The gateway's provider detects the language of what it transcribes; nobody choos
 `language` field an older client sends is ignored. `language` in the response is the language the
 provider reported, or `auto` when it reports none. `stt.languages` in `hello` and
 `GET /api/config` is therefore always `["auto"]`, and stays in both for the apps that read it.
+
+`stt.streaming` in `hello` and `GET /api/config` (A57) says whether the gateway's backend returns
+words while the audio is still arriving: `true` only for `STT_PROVIDER=realtime`, and `false` for
+every backend that transcribes the recorded audio afterwards. The gateway always sends it, also
+when `enabled` is `false`. An app dictating through the gateway sends `partials=0` on `/ws/stt`
+(3.8) exactly when `streaming` is `false`, and then shows the transcript whole when the dictation
+ends; with `true`, or with no field at all, which is what a gateway older than A57 sends, it keeps
+the live partial text and sends no `partials`. Recognition on the phone itself never involves this.
 
 `fixtures/http/stt.transcribe.response.json`
 
@@ -620,9 +629,19 @@ provider reported, or `auto`.
 
 The client sends **binary** frames of PCM16LE, 16 kHz, mono, 100–200 ms per frame. It sends
 `stt.stop` to finish and transcribe everything received, or `stt.cancel` to discard the utterance.
-The gateway sends `stt.partial` about every 2 s while audio is arriving, then `stt.final` after
-`stt.stop`, or `stt.error` on failure. The gateway closes the socket after `stt.final` or
-`stt.error`.
+The gateway sends `stt.partial` about every 2 s while audio is arriving from a backend that
+transcribes whole recordings, and with `realtime` as the vendor sends words, up to `stt.final`
+(the vendor's last sentence, asked for on `stt.stop`, can bring one more). It sends `stt.final`
+after `stt.stop`, or `stt.error` on failure. The gateway closes the socket after `stt.final` or
+`stt.error`, so a socket carries one utterance.
+
+With `partials=0` in the query (A57) the gateway sends no `stt.partial` on that socket. A backend
+that transcribes whole recordings is then asked once, for everything received, when `stt.stop`
+arrives, and never every 2 s, so the utterance is transcribed, and paid for, once; `realtime`
+still receives the audio as it arrives, and the gateway drops the partial words the vendor sends
+back. `stt.final` is the same either way, and so is every other frame, close code and error.
+Without the parameter, or with any other value, the socket behaves as it always has. An app sends
+`partials=0` exactly when `stt.streaming` is `false` (3.5).
 
 `fixtures/stt/stt.stop.json`
 
@@ -2176,7 +2195,7 @@ device is answered `not_found`, exactly as one naming nothing would be.
 
 | Type | Payload | When |
 | --- | --- | --- |
-| `hello` | `protocol`, `gateway_version`, `user`, `devices`, `sessions`, `stt`, `polish`, `apps`, `preferences`, `server_time` | First frame. `polish` (A29) may be absent on a gateway older than it, which means disabled; `apps` (A31) likewise, which means no minimum; `preferences` (A35) likewise, which means the switches it holds are not offered |
+| `hello` | `protocol`, `gateway_version`, `user`, `devices`, `sessions`, `stt`, `polish`, `apps`, `preferences`, `server_time` | First frame. `polish` (A29) may be absent on a gateway older than it, which means disabled; `apps` (A31) likewise, which means no minimum; `preferences` (A35) likewise, which means the switches it holds are not offered; `stt.streaming` (A57) likewise, which means live partials (3.5) |
 | `device.updated` | `device` | A device connects, disconnects, is renamed or re-detects agents |
 | `device.removed` | `device_id` | A device is deleted |
 | `session.updated` | `session` | Any change to a session summary |
@@ -2301,7 +2320,8 @@ informational and for routing.
     "enabled": true,
     "languages": [
       "auto"
-    ]
+    ],
+    "streaming": false
   },
   "polish": {
     "enabled": true
@@ -3987,6 +4007,11 @@ one app connection that asked. The gateway relays bytes and never reads them.
 - [ ] Names a device with the `name` it enrolled with and changes it only on
       `PATCH /api/devices/{device_id}`, for the owning account alone; accepts `name` in `hello`
       without applying it, so a rename survives reconnects and restarts (A50).
+- [ ] Reports `stt.streaming` in `hello` and `GET /api/config`, `true` for the `realtime` provider
+      alone and present also when speech to text is off; on `/ws/stt?partials=0` sends no
+      `stt.partial`, transcribes a whole-recording backend's utterance once, on `stt.stop`, and
+      drops the `realtime` vendor's partial words; treats no parameter, or any other value, as
+      before (A57).
 
 ### 9.2 Device
 
@@ -4269,6 +4294,10 @@ one app connection that asked. The gateway relays bytes and never reads them.
 - [ ] Offers no dictation language where the gateway transcribes, which detects it (A44); where
       the phone's own recogniser transcribes, offers that recogniser's languages without an
       automatic choice, Chinese when `stt_language` is unset or `auto`.
+- [ ] Dictating through the gateway while `stt.streaming` is `false`, opens `/ws/stt?partials=0`
+      and inserts the transcript whole when the dictation ends; with `true`, or with no field,
+      keeps the live partial text and sends no `partials`; leaves the phone's own recogniser as it
+      is (A57).
 - [ ] Offers the "Resume after the limit resets" switch in Settings bound to the account's
       `preferences` — disabled with a note when `hello` carries none — shows a session's pending
       `resume` above its transcript with the time, a way to change it and a way to cancel it, draws
@@ -5065,3 +5094,19 @@ what comes back by block id (6.4). Nothing the gateway fetches is written to its
 one line for each subscribe that needed the device, each catch-up and each orphaned request, with
 ids, sequence numbers, counts, milliseconds and the outcome. See 2.3, 2.5, 6.2, 6.3, 6.4, 7, 7.1 and
 9.
+
+**2026-11-15 A57 — batch dictation.** Every speech backend but `realtime` answers a whole
+recording, and the gateway faked live text by transcribing everything received again every 2 s:
+the words trailed the speaker, and each partial paid the provider again for audio an earlier one
+had already transcribed. `hello` and `GET /api/config` now carry `stt.streaming`, a boolean: `true`
+when the backend returns words while the audio is still arriving, which only
+`STT_PROVIDER=realtime` does, and `false` otherwise. The gateway always sends it, also when
+`enabled` is `false`. `WS /ws/stt` takes `partials=0`: the socket then sends no `stt.partial`; a
+backend that transcribes whole recordings is asked once, for the whole utterance, on `stt.stop`,
+and `realtime` still streams the audio to the vendor and drops the partial words it sends back.
+`stt.final` is unchanged, and so is every other frame, close code and error; without the
+parameter, or with any other value, the socket behaves as before. An app sends `partials=0`
+exactly when it received `streaming: false` and dictates through the gateway, and then shows the
+transcript whole when the dictation ends; an app that receives no `streaming` is talking to an
+older gateway and keeps the live partial text, as does recognition on the phone itself. See 3.2,
+3.5, 3.8, 6.1 and 9.

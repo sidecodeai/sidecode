@@ -361,11 +361,15 @@ orphaned along with the VAPID key.
 
 ## Speech to text
 
-Voice input is off until `STT_PROVIDER` names a backend. Four ways to provide one; only the last
-streams words as they are said — the other three answer whole utterances, and the gateway fakes
-partials by re-sending everything every two seconds. Whichever it is, the provider always detects
-the language itself: there is no language setting, the apps offer no choice for dictation the
-gateway transcribes, and a language an older app still sends is ignored (A44).
+Voice input is off until `STT_PROVIDER` names a backend. Four ways to provide one; only the live
+one (`realtime`) streams words as they are said — the other three answer whole utterances.
+`stt.streaming` in `hello` and `/api/config` tells the apps which (A57): with a whole-utterance
+backend an app asks for no partials (`/ws/stt?partials=0`), shows a voice bar while the person
+speaks and the whole transcript when they finish, and the gateway has each segment transcribed,
+and paid for, once; an app that predates A57 still gets partials faked by re-sending everything
+every two seconds. Whichever it is, the provider always detects the language itself: there is no
+language setting, the apps offer no choice for dictation the gateway transcribes, and a language
+an older app still sends is ignored (A44).
 
 **A hosted OpenAI-compatible provider.** Any server implementing
 `POST {STT_BASE_URL}/audio/transcriptions`:
@@ -435,7 +439,7 @@ disk. This profile has not been exercised end to end.
 Transcription spends the operator's speech credit, so it is bounded the same way dictation polish
 is: an address gets thirty speech requests a minute, counting each upload to `/api/stt/transcribe`
 and each `/ws/stt` upgrade but never the partial transcripts inside a live stream, and one account
-holds at most four live streams at once. Both are constants in `rc_gateway/app.py` and
+holds at most eight live streams at once. Both are constants in `rc_gateway/app.py` and
 `rc_gateway/ws/stt_ws.py` rather than settings, because a person dictating cannot reach either. A
 stream that receives no audio for 90 s is closed, and signing out closes it at once rather than
 letting it keep transcribing on a revoked session's behalf.
@@ -572,7 +576,7 @@ to `HEAD`.
 | Voice button missing | `GET /api/config` shows `stt.enabled: false` | `STT_PROVIDER` is `none` |
 | Upload rejected with 413 | nginx returns it before the gateway logs anything | `client_max_body_size` is still at nginx's 1 MB default; set it to `80m` in the proxy host's Advanced tab |
 | Dictation fails mid-utterance | `stt backend unreachable` or `stt backend rejected the request` | Wrong `STT_BASE_URL`, missing `STT_API_KEY`, or an unknown `STT_MODEL` |
-| Dictation refused with `too_many_requests` | `stt upgrade rate limited` or `transcription rate limited` | Thirty speech requests a minute per address, or four live streams for one account. Check `TRUSTED_PROXIES` if everyone shares one bucket |
+| Dictation refused with `too_many_requests` | `stt upgrade rate limited` or `transcription rate limited` | Thirty speech requests a minute per address, or eight live streams for one account. Check `TRUSTED_PROXIES` if everyone shares one bucket |
 | A large attachment is refused with `too_large` | `large forward refused: no room in the in-flight budget` | Another maximal message is still being written to its device. One 64 MiB message at a time fits `mem_limit: 512m`; retry, or raise the limit and the budget together |
 | An app socket closes with 4009 | `app socket replaced: account at the connection cap` | That account has more than eight `/ws/app` sockets open. Usually a tab left open on every device; the oldest is closed and the app reconnects |
 | Subscribing to notifications returns 409 | `web push subscription refused: the endpoint belongs to another account` | The browser or phone was registered by a different account and never unsubscribed. Sign in as that account and unsubscribe, or wait for its login session to expire |

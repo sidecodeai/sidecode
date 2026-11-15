@@ -318,6 +318,10 @@
             "type": "string",
             "minLength": 1
           }
+        },
+        "streaming": {
+          "description": "A57: true when the backend returns words while the audio is still arriving (STT_PROVIDER=realtime), false when it transcribes the recording afterwards. Sent by every gateway since A57, also when enabled is false; absent from an older gateway, which means live partials.",
+          "type": "boolean"
         }
       },
       "required": [

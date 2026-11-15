@@ -6,7 +6,8 @@ recognises audio through a chat completion instead.
 
 The gateway never stores audio: a request's bytes live in memory for the length of one HTTP call.
 Streaming transcription accumulates raw PCM and re-transcribes the whole utterance every couple of
-seconds, which is what a whisper-style backend supports without a realtime protocol.
+seconds, which is what a whisper-style backend supports without a realtime protocol; an app that
+asks for the final alone (A57) has the utterance transcribed once, when it ends.
 
 No request names a language: the provider detects it (A44), so there is nothing to choose and
 nothing an app sends is forwarded.
