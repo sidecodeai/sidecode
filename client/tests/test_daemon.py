@@ -110,21 +110,20 @@ async def test_the_attachment_sockets_open_before_the_agents_are_adopted(
     task = asyncio.create_task(daemon.run())
     try:
 
-        async def started() -> None:
-            while daemon._refresh_task is None:
+        async def tried() -> None:
+            while not {"codex", "grok"} <= set(order):
                 await asyncio.sleep(0.01)
 
-        await asyncio.wait_for(started(), timeout=10)
+        await asyncio.wait_for(tried(), timeout=10)
     finally:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
         await server.stop()
 
-    # The two agents are tried side by side, and the scan tries Codex again every round, so only
-    # how it began says what came first.
+    # The agents start on their own once the sockets are open, and the scan tries Codex again
+    # every round, so only how it began says what came first.
     assert order[0] == "sockets"
-    assert {"codex", "grok"} <= set(order[1:])
 
 
 async def request(server: FakeGateway, frame: dict[str, Any]) -> dict[str, Any]:

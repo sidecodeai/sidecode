@@ -1240,23 +1240,27 @@ The channel socket and the pi socket open first. The bridges and terminal proxie
 outlived the previous daemon have been dialling back since it went, and what they register is in
 the hub by the time the first scan decides who holds what. The gateway link starts right after
 them and waits for none of the agents: on a loaded machine with thousands of `codex exec` runs
-to withdraw (A59), it once waited minutes for them. Reaching the shared Codex daemon (its model
-list and its handshake), joining the Grok leader and asking every agent's CLI what it offers run in
-the background (`Daemon._start_agents`), Codex and Grok side by side and detection after them,
-since it reports Codex by whether the daemon answered. The first `hello` lists what the last run
-detected, kept in the registry (`agents/announced.py`), and `agents.updated` follows once this run
-knows, if anything changed; a device that no run has detected for yet gives detection the same
-three seconds as the first scan rather than tell the gateway it has no agents. The requests that
-act through an agent (`session.create`, `send`, `stop`, `set`, `commands`, `command`, `takeover`,
-`archive` and `delete`) wait for the agents to have started, at most 45 seconds
-(`AGENT_START_WAIT`, inside the minute the gateway gives a device), rather than find no agent, or
-take Codex's fallback path for a thread the shared daemon may be serving; a history read, a queue
-edit, a terminal and everything else never wait. Until the Codex daemon and the Grok leader have
-each been tried once, the scan leaves their files alone, since a thread either serves is theirs to
-describe; Claude's terminals are scanned from the first pass. The hub restores the sessions from
-their rows alone: a session's block positions (A8) are read when it first writes a block, where
-reading them for every session as the device started read every event it had stored before the
-sockets could open.
+to withdraw (A59), it once waited minutes for them. Each agent then starts on its own in the
+background (`agents/startup.py`): Claude and pi are asked what they offer at once; Codex once the
+shared daemon has been tried (its model list and its handshake), since its answer says whether the
+daemon answered; Grok once its leader has been tried. The first `hello` lists what this run has
+found so far and, for the agents not yet started, what the last run detected, kept in the registry
+(`agents/announced.py`); `agents.updated` follows when an agent's answer changes the list. A
+device that no run has detected for yet gives detection the same three seconds as the first scan
+rather than tell the gateway it has no agents. A request that acts through an agent
+(`session.create`, `send`, `stop`, `set`, `commands`, `command`, `takeover`, `archive` and
+`delete`) waits for that agent alone, so a Claude reply never waits for the Codex daemon or the
+Grok leader. It waits at most 15 seconds (`AGENT_START_WAIT`, inside the 20 seconds the native
+apps give a request), rather than find no agent or take Codex's fallback path for a thread the
+shared daemon may be serving; past that it is answered `agent_unavailable` and never carried
+out, so an app that gave up on it never sees it happen later. A history read, a queue edit, a
+terminal and everything else never wait. Withdrawing the Codex sessions that are not the
+device's follows Codex's start, and nothing waits for it. Until the Codex daemon and the Grok
+leader have each been tried once, the scan leaves their files alone, since a thread either serves
+is theirs to describe; Claude's terminals are scanned from the first pass. The hub restores the
+sessions from their rows alone: a session's block positions (A8) are read when it first writes a
+block, where reading them for every session as the device started read every event it had stored
+before the sockets could open.
 
 An attached Claude session does not wait for the scan. A terminal attaches before its CLI has
 written anything, and the transcript appears with the first row, so every tail pass (every two

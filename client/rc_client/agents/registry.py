@@ -179,10 +179,13 @@ async def detect_all(context: DetectContext | None = None) -> list[AgentInfo]:
     out of the list: neither holds up or fails the rest (`detection.py`).
     """
     ready = context or DetectContext()
-    answers = await asyncio.gather(
-        *(detections.detect(agent, ready, partial(_ask, agent, ready)) for agent in AGENT_IDS)
-    )
+    answers = await asyncio.gather(*(detect_one(agent, ready) for agent in AGENT_IDS))
     return [info for info in answers if info is not None]
+
+
+async def detect_one(agent: str, context: DetectContext) -> AgentInfo | None:
+    """What one agent offers, as `detect_all` asks it; None when it has no answer."""
+    return await detections.detect(agent, context, partial(_ask, agent, context))
 
 
 def _ask(agent: str, context: DetectContext) -> Awaitable[AgentInfo]:

@@ -3,10 +3,11 @@
 The link used to come up only once the device had read every event it had stored, reached the
 shared Codex daemon, withdrawn the `codex exec` runs published before A59, listed Codex's
 threads, joined the Grok leader and asked every agent what it offers: minutes, on a loaded
-machine with thousands of such runs. Now the link waits for none of it. The agents start in the
-background and the requests that act through one wait for them; the withdrawals go a batch at a
-time; a rollout's first record is read once; and a session's block positions are read when it
-first writes a block.
+machine with thousands of such runs. Now the link waits for none of it. Each agent starts on its
+own in the background, and a request that acts through one waits for that one alone, at most
+`AGENT_START_WAIT`, and is refused and never run past it; the withdrawals go a batch at a time;
+a rollout's first record is read once; and a session's block positions are read when it first
+writes a block.
 """
 
 from __future__ import annotations
@@ -27,6 +28,8 @@ from rc_client.agents.codex import rollouts as codex_rollouts
 from rc_client.agents.codex.daemon.service import PRUNE_BATCH, CodexDaemonService
 from rc_client.agents.grok import sessions as grok_sessions
 from rc_client.agents.grok.service import GrokLeaderService
+from rc_client.agents.registry import DetectContext
+from rc_client.agents.startup import AgentStartup
 from rc_client.daemon import Daemon
 from rc_client.models import AgentInfo, Session
 from rc_client.registry import Registry
@@ -37,38 +40,57 @@ from tests.test_codex_exec_runs import published, write_rollout
 from tests.test_first_hello import device_config
 from tests.test_gateway_link import FakeGateway
 
-LAST_RUN = [AgentInfo(agent="claude", available=True, version="1.0").to_dict()]
-THIS_RUN = [AgentInfo(agent="claude", available=True, version="2.0")]
+LAST_RUN = [
+    AgentInfo(agent="claude", available=True, version="1.0").to_dict(),
+    AgentInfo(agent="codex", available=True, version="1.0").to_dict(),
+]
+THIS_RUN = {
+    "claude": AgentInfo(agent="claude", available=True, version="2.0"),
+    "codex": AgentInfo(agent="codex", available=True, version="2.0"),
+}
 
 
 @contextlib.asynccontextmanager
 async def starting_daemon(
-    monkeypatch: pytest.MonkeyPatch, agents_started: asyncio.Event
-) -> AsyncIterator[tuple[Daemon, FakeGateway]]:
-    """A daemon whose Codex daemon and Grok leader answer only once `agents_started` is set."""
+    monkeypatch: pytest.MonkeyPatch, codex_attached: asyncio.Event
+) -> AsyncIterator[tuple[Daemon, FakeGateway, list[str]]]:
+    """A restarted daemon whose shared Codex daemon and Grok leader answer only once
+    `codex_attached` is set, and the sessions `session.send` was carried out for."""
     registry = Registry(config_module.database_path())
     announced.save(registry, LAST_RUN)
+    for session_id, agent in (("s-claude", "claude"), ("s-codex", "codex")):
+        registry.upsert_session(
+            Session(session_id=session_id, device_id="dev-1", agent=agent, cwd="/repo")
+        )
     registry.close()
+    sent: list[str] = []
+
+    async def send(self: SessionHub, frame: dict[str, Any]) -> dict[str, Any]:
+        sent.append(str(frame["session_id"]))
+        return {"accepted": "sent"}
+
+    # Before the daemon is built: it takes its handlers as it is built.
+    monkeypatch.setattr(SessionHub, "send", send)
     server = FakeGateway()
     await server.start()
     daemon = Daemon(device_config())
     daemon.link.url = server.url
 
     async def reach(binary: str | None = None) -> bool:
-        await agents_started.wait()
+        await codex_attached.wait()
         return False
 
-    async def detect(context: Any = None) -> list[AgentInfo]:
-        return THIS_RUN
+    async def detect(agent: str, context: DetectContext) -> AgentInfo | None:
+        return THIS_RUN.get(agent)
 
     monkeypatch.setattr(daemon.codex, "start", reach)
     monkeypatch.setattr(daemon.grok, "ensure", reach)
-    monkeypatch.setattr(daemon_module, "detect_all", detect)
+    monkeypatch.setattr(daemon_module, "detect_one", detect)
     task = asyncio.create_task(daemon.run())
     try:
-        yield daemon, server
+        yield daemon, server, sent
     finally:
-        agents_started.set()
+        codex_attached.set()
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
@@ -86,47 +108,121 @@ async def reply_to(server: FakeGateway, identifier: str, timeout: float) -> dict
     return await asyncio.wait_for(poll(), timeout=timeout)
 
 
+def send_frame(identifier: str, session_id: str) -> dict[str, Any]:
+    return {"type": "session.send", "id": identifier, "session_id": session_id, "text": "hi"}
+
+
+def told(server: FakeGateway, agent: str) -> dict[str, Any] | None:
+    """What the gateway was last told about one agent, by the hello or an update."""
+    for frame in reversed(server.frames("hello")[:1] + server.frames("agents.updated")):
+        for item in frame["agents"]:
+            if item["agent"] == agent:
+                return dict(item)
+        return None
+    return None
+
+
 async def test_the_link_comes_up_while_the_agents_are_still_starting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    agents_started = asyncio.Event()
-    async with starting_daemon(monkeypatch, agents_started) as (daemon, server):
+    codex_attached = asyncio.Event()
+    async with starting_daemon(monkeypatch, codex_attached) as (daemon, server, _):
         hello = await server.wait_for("hello", timeout=5)
-        # What the last run detected, rather than a wait for this one's.
-        assert hello["agents"] == LAST_RUN
-        assert server.frames("agents.updated") == []
+        # Codex has not started: the hello says what the last run found rather than wait.
+        assert [item for item in hello["agents"] if item["agent"] == "codex"] == LAST_RUN[1:]
 
-        agents_started.set()
-        updated = await server.wait_for("agents.updated", timeout=5)
-        assert updated["agents"] == [info.to_dict() for info in THIS_RUN]
+        codex_attached.set()
+
+        async def codex_said() -> None:
+            while told(server, "codex") != THIS_RUN["codex"].to_dict():
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(codex_said(), timeout=5)
+        listed = [info.to_dict() for info in THIS_RUN.values()]
+        assert server.frames("agents.updated")[-1]["agents"] == listed
         # And it is what the next run's first hello will say.
-        assert announced.load(daemon.registry) == updated["agents"]
+        assert announced.load(daemon.registry) == listed
 
 
-async def test_a_request_that_acts_through_an_agent_waits_for_the_agents_and_a_read_does_not(
+async def test_a_claude_send_goes_through_while_codex_is_still_attaching(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    agents_started = asyncio.Event()
-    async with starting_daemon(monkeypatch, agents_started) as (_, server):
+    codex_attached = asyncio.Event()
+    async with starting_daemon(monkeypatch, codex_attached) as (_, server, sent):
         await server.wait_for("hello", timeout=5)
-        await server.send({"type": "session.history", "id": "read", "session_id": "gone"})
-        await server.send({"type": "session.commands", "id": "act", "session_id": "gone"})
-        await reply_to(server, "read", timeout=5)
-        await asyncio.sleep(0.3)
-        assert [reply["id"] for reply in server.frames("reply")] == ["read"]
-
-        agents_started.set()
-        await reply_to(server, "act", timeout=5)
+        await server.send(send_frame("claude-send", "s-claude"))
+        reply = await reply_to(server, "claude-send", timeout=2)
+        assert reply["ok"] is True
+        assert sent == ["s-claude"]
+        assert not codex_attached.is_set()
 
 
-async def test_the_wait_for_the_agents_runs_out(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(daemon_module, "AGENT_START_WAIT", 0.2)
-    agents_started = asyncio.Event()
-    async with starting_daemon(monkeypatch, agents_started) as (_, server):
+async def test_a_codex_send_past_the_wait_is_refused_and_never_carried_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(daemon_module, "AGENT_START_WAIT", 0.3)
+    codex_attached = asyncio.Event()
+    async with starting_daemon(monkeypatch, codex_attached) as (daemon, server, sent):
         await server.wait_for("hello", timeout=5)
-        await server.send({"type": "session.commands", "id": "act", "session_id": "gone"})
-        await reply_to(server, "act", timeout=5)
-        assert not agents_started.is_set()
+        await server.send(send_frame("codex-send", "s-codex"))
+        reply = await reply_to(server, "codex-send", timeout=5)
+        assert (reply["ok"], reply["error"]["code"]) == (False, "agent_unavailable")
+
+        codex_attached.set()
+
+        async def codex_started() -> None:
+            while not daemon._startup.started("codex"):
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(codex_started(), timeout=5)
+        await asyncio.sleep(0.2)
+        # The app gave up on it; nothing of it happens once Codex is there.
+        assert sent == []
+        await server.send(send_frame("codex-again", "s-codex"))
+        assert (await reply_to(server, "codex-again", timeout=5))["ok"] is True
+        assert sent == ["s-codex"]
+
+
+async def test_a_read_never_waits_for_an_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    codex_attached = asyncio.Event()
+    async with starting_daemon(monkeypatch, codex_attached) as (_, server, _):
+        await server.wait_for("hello", timeout=5)
+        await server.send({"type": "session.history", "id": "read", "session_id": "s-codex"})
+        assert (await reply_to(server, "read", timeout=2))["ok"] is True
+        assert not codex_attached.is_set()
+
+
+async def test_an_agent_whose_service_fails_is_still_asked_what_it_offers() -> None:
+    answers: dict[str, AgentInfo | None] = {}
+
+    async def fail() -> object:
+        raise OSError("no socket")
+
+    async def detect(agent: str) -> AgentInfo | None:
+        return THIS_RUN.get(agent)
+
+    async def changed() -> None:
+        return None
+
+    startup = AgentStartup(
+        detect=detect,
+        found=answers.__setitem__,
+        changed=changed,
+        before={"codex": fail},
+        after={},
+    )
+    assert await startup.wait("codex", 0) is True  # nothing is starting it yet
+    startup.start()
+    assert await startup.wait("codex", 5) is True
+    await startup.wait_all(5)
+    assert startup.done
+    assert answers == {
+        "claude": THIS_RUN["claude"],
+        "codex": THIS_RUN["codex"],
+        "grok": None,
+        "pi": None,
+    }
+    await startup.stop()
 
 
 async def test_thousands_of_exec_runs_are_withdrawn_a_batch_at_a_time(

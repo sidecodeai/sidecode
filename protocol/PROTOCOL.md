@@ -84,7 +84,7 @@ by the requester and echoed in the reply:
 | `forbidden` | Authenticated, but not allowed to touch this resource. |
 | `not_found` | No such device, session, block, request or pairing code. |
 | `device_offline` | The owning device has no live socket. Produced by the gateway. |
-| `agent_unavailable` | The device has the session but the agent binary is missing or will not start. |
+| `agent_unavailable` | The device has the session but the agent binary is missing or will not start; also right after a device restart, while its agents are still starting (nothing of the request was carried out). |
 | `conflict` | The action contradicts current state, for example sending to a session the terminal controls. |
 | `timeout` | No reply arrived in time. Produced by the gateway after 60 s. |
 | `internal` | Unexpected failure. |
@@ -5342,17 +5342,19 @@ and goes to the Archive when nothing holds it, as before, and a Codex thread or 
 device created before A58 is `remote` only while it is loaded or joined. The store says nothing
 reliable about which sessions were `remote` when the previous daemon stopped, so the restart that
 installs A58 restores none of them as `remote`, by decision; the next message holds such a session.
-See 4.4, 6.3 and 9.
+A restart or an update brings the device back online before its agents have started: a request that
+acts through an agent waits up to 15 s for that agent alone, and while it is still starting the
+request is answered `agent_unavailable` and never carried out. See 4.4, 6.3 and 9.
 
 **2026-11-16 A59 — a `codex exec` run is not a session.** A `codex exec` run is a script's or an
 automation's work, which nobody sits in and nobody continues, and 4.4 published every such thread as
 a terminal's because its `source` is `exec`. A thread whose `originator` is `codex_exec` or whose
 `source` is `exec` is now never published, whatever else it says, and its rollout is never mirrored
 or tailed; the rule of 4.4 accepts the `source` `cli` alone. The device withdraws the runs it
-published before with `session.removed`, A18's route, saying it again on the next link: when it
-connects to the shared daemon it reads each stored terminal session's own rollout `session_meta`
-from disk and asks `thread/read` only about a thread with no rollout there, and without the daemon
-it reads the rollouts once at start. Apps need nothing: a session they never receive is a row they
+published before with `session.removed`, A18's route, saying it again on the next link: once a run,
+in the background after it has tried the shared daemon, it reads each stored terminal session's own
+rollout `session_meta` from disk, a batch at a time, and asks `thread/read` only about a thread with
+no rollout there, and only when the daemon is connected. Apps need nothing: a session they never receive is a row they
 never draw. See 4.4 and 9.2.
 
 **2026-11-16 A60 — brief history pages.** Opening a long session waited on a history page full of

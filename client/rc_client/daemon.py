@@ -19,7 +19,8 @@ from .agents.grok.service import GrokLeaderService
 from .agents.pi import paths as pi_paths
 from .agents.pi.link import PiExtensionServer
 from .agents.pi.service import PiExtensionService
-from .agents.registry import DetectContext, detect_all
+from .agents.registry import AGENT_IDS, DetectContext, detect_all, detect_one
+from .agents.startup import AgentStartup
 from .build import as_digest, read_build
 from .channel import paths as channel_paths
 from .channel.mcp_config import write_mcp_config
@@ -48,11 +49,11 @@ AGENT_REFRESH_INTERVAL = 900.0
 # How long the first hello of a run waits for the first scan to say which terminals still hold
 # their sessions. The scan runs while the link connects, so this is the most it can cost.
 FIRST_SCAN_WAIT = 3.0
-# How long a request that acts through an agent waits for the agents this run starts in the
-# background, inside the minute the gateway gives a device to answer.
-AGENT_START_WAIT = 45.0
-# The requests that act through an agent. They wait for the agents to start rather than fail;
-# nothing else does, a history read least of all.
+# How long a request that acts through an agent waits for that agent to start after a restart,
+# inside the 20 s the native apps give a request. Past it the request is refused and never run.
+AGENT_START_WAIT = 15.0
+# The requests that act through an agent. Each waits for its own agent to start rather than fail;
+# nothing else waits, a history read least of all.
 AGENT_REQUESTS = frozenset(
     {
         "session.create",
@@ -105,8 +106,18 @@ class Daemon:
         self._said: list[dict[str, Any]] | None = None
         # What the last run detected, said by a hello that comes before this run's detection.
         self._last_detected: list[dict[str, Any]] = []
-        self._agents_ready = asyncio.Event()
-        self._agents_task: asyncio.Task[None] | None = None
+        # Every agent starts on its own once the link is up, and a request waits for its own alone.
+        self._startup = AgentStartup(
+            detect=self._detect_one,
+            found=self._found,
+            changed=self._agents_changed,
+            before={
+                "codex": lambda: self.codex.start(resolve_codex()),
+                "grok": lambda: self.grok.ensure(resolve_grok()),
+            },
+            # Withdrawing the Codex sessions that are not the device's comes last (A59).
+            after={"codex": lambda: self.codex.prune_foreign()},
+        )
         self._refresh_task: asyncio.Task[None] | None = None
         self._lag_task: asyncio.Task[None] | None = None
         self._update_task: asyncio.Task[None] | None = None
@@ -129,9 +140,9 @@ class Daemon:
         await self._prepare_attachment()
         # The link waits for none of the agents. Reaching the shared Codex daemon, joining the
         # Grok leader and asking every CLI what it offers took minutes on a loaded machine with a
-        # long history, and the device is reachable without them: the requests that need them
-        # wait for them instead (`AGENT_REQUESTS`).
-        self._agents_task = asyncio.create_task(self._start_agents(), name="agents")
+        # long history, and the device is reachable without them: a request that needs one waits
+        # for that one instead (`AGENT_REQUESTS`).
+        self._startup.start()
         log.info("device daemon starting", device=self.config.device_id)
         # Before the link, so the first scan runs while it connects and the first hello can say
         # which terminals still hold their sessions.
@@ -176,57 +187,44 @@ class Daemon:
         except OSError as exc:
             log.warning("pi attachment unavailable", error=str(exc))
 
-    async def _start_agents(self) -> None:
-        """Reach the shared Codex daemon and the Grok leader, then ask every agent what it offers.
+    async def _detect_one(self, agent: str) -> AgentInfo | None:
+        return await detect_one(agent, self._detect_context())
 
-        Detection follows the two because it reports Codex by whether the daemon answered. A
-        leader is started here when the person's configuration asks for one and no TUI has
-        started it yet (A28). Failing to reach either is not fatal: the agent then runs on
-        private children and its terminal sessions are mirrored. Withdrawing the Codex sessions
-        that are not the device's comes last, and nothing waits for it.
-        """
-        try:
-            outcomes = await asyncio.gather(
-                self.codex.start(resolve_codex()),
-                self.grok.ensure(resolve_grok()),
-                return_exceptions=True,
-            )
-            for agent, outcome in zip(("codex", "grok"), outcomes, strict=True):
-                if isinstance(outcome, BaseException):
-                    log.warning("an agent could not be reached", agent=agent, error=repr(outcome))
-            await self._detected(await detect_all(self._detect_context()))
-        except Exception:
-            log.exception("agent detection failed")
-        finally:
-            self._agents_ready.set()
-        try:
-            await self.codex.prune_foreign()
-        except Exception:
-            log.exception("withdrawing codex sessions that are not this device's failed")
+    def _found(self, agent: str, info: AgentInfo | None) -> None:
+        """One agent has started: the hub acts through what it said from now on."""
+        known = {each.agent: each for each in self.agents}
+        if info is None:
+            known.pop(agent, None)
+        else:
+            known[agent] = info
+        self.agents = [known[each] for each in AGENT_IDS if each in known]
 
     async def _detected(self, agents: list[AgentInfo]) -> None:
-        """Keep what detection found, for the next run's first hello too, and say it when new."""
+        """A detection of every agent: keep it, and say it when it is news."""
         self.agents = agents
-        listed = [info.to_dict() for info in agents]
-        announced.save(self.registry, listed)
-        log.info(
-            "agents detected", agents=",".join(info.agent for info in agents if info.available)
-        )
+        await self._agents_changed()
+
+    async def _agents_changed(self) -> None:
+        """Say the agents when they are news, and keep them once every one has started."""
+        listed = self._agent_list()
+        if self._startup.done:
+            announced.save(self.registry, listed)
+            log.info(
+                "agents detected",
+                agents=",".join(each.agent for each in self.agents if each.available),
+            )
         if self._said is not None and listed != self._said:
             self._said = listed
             await self._publish({"type": "agents.updated", "agents": listed})
 
     def _agent_list(self) -> list[dict[str, Any]]:
-        """The agents a hello lists: this run's, else what the last run detected."""
-        if self._agents_ready.is_set() or self._agents_task is None:
-            return [info.to_dict() for info in self.agents]
-        return self._last_detected
-
-    async def _agents_within(self, timeout: float) -> None:
-        """Wait up to `timeout` for the agents this run starts, if it is starting them."""
-        if self._agents_task is not None and not self._agents_ready.is_set():
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(self._agents_ready.wait(), timeout)
+        """The agents a hello lists: what this run has found, and the last run's for the rest."""
+        listed = {each.agent: each.to_dict() for each in self.agents}
+        for item in self._last_detected:
+            agent = item.get("agent")
+            if isinstance(agent, str) and agent not in listed and not self._startup.started(agent):
+                listed[agent] = item
+        return [listed[each] for each in AGENT_IDS if each in listed]
 
     async def _first_hello_wait(self) -> None:
         """Give the first scan, and a detection no earlier run has made, `FIRST_SCAN_WAIT`.
@@ -238,7 +236,7 @@ class Daemon:
         if self._last_detected:
             settled = await scan
         else:
-            settled, _ = await asyncio.gather(scan, self._agents_within(FIRST_SCAN_WAIT))
+            settled, _ = await asyncio.gather(scan, self._startup.wait_all(FIRST_SCAN_WAIT))
         if not settled:
             log.warning(
                 "first hello sent before the first terminal scan settled", waited=FIRST_SCAN_WAIT
@@ -266,7 +264,8 @@ class Daemon:
         # Before the channel socket goes: a bridge that closes from here on is this daemon's own
         # doing, and its CLI is still there.
         self.hub.begin_close()
-        for name in ("_agents_task", "_refresh_task", "_lag_task", "_update_task", "_sweep_task"):
+        await self._startup.stop()
+        for name in ("_refresh_task", "_lag_task", "_update_task", "_sweep_task"):
             task: asyncio.Task[None] | None = getattr(self, name)
             if task is not None:
                 task.cancel()
@@ -349,22 +348,36 @@ class Daemon:
 
     def _handlers(self) -> dict[str, Any]:
         handlers = self._requests()
-        for name in AGENT_REQUESTS:
-            handlers[name] = self._after_agents(handlers[name])
+        for kind in AGENT_REQUESTS:
+            handlers[kind] = self._after_agent(kind, handlers[kind])
         return handlers
 
-    def _after_agents(self, handler: Handler) -> Handler:
-        """The handler, once the agents this run starts have started, or the wait has run out.
+    def _after_agent(self, kind: str, handler: Handler) -> Handler:
+        """The handler, once the agent the request acts through has started.
 
-        Without them a request would find no agent to act through, or Codex's fallback path
-        for a thread the shared daemon may be serving.
+        Without it a request would find no agent to act through, or Codex's fallback path for a
+        thread the shared daemon may be serving. One that waits `AGENT_START_WAIT` in vain is
+        refused and never run, so an app that has given up on it never sees it carried out later.
         """
 
-        async def handle(params: dict[str, Any]) -> dict[str, Any]:
-            await self._agents_within(AGENT_START_WAIT)
-            return await handler(params)
+        async def handle(frame: dict[str, Any]) -> dict[str, Any]:
+            agent = self._acting_agent(kind, frame)
+            if agent is not None and not await self._startup.wait(agent, AGENT_START_WAIT):
+                raise RcError(
+                    "agent_unavailable",
+                    f"{agent} is still starting on this device; try again in a moment",
+                )
+            return await handler(frame)
 
         return handle
+
+    def _acting_agent(self, kind: str, frame: dict[str, Any]) -> str | None:
+        """The agent a request acts through: the one it names, or its session's."""
+        if kind == "session.create":
+            agent = frame.get("agent")
+            return agent if isinstance(agent, str) else None
+        entry = self.hub.entries.get(str(frame.get("session_id") or ""))
+        return entry.session.agent if entry is not None else None
 
     def _requests(self) -> dict[str, Any]:
         return {
