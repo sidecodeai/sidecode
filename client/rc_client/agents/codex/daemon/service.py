@@ -21,6 +21,7 @@ from ....errors import RcError
 from ....logging_setup import logger
 from ....models import Session
 from ....sessions import titles
+from .. import rollouts
 from ..account import RATE_LIMITS
 from ..models import ModelCatalog, catalog_cache
 from . import dialogs, terminals, threads
@@ -50,6 +51,13 @@ FOREIGN_THREADS = 256
 # answers `thread/archive` with `thread/archived`, which is what normally ends
 # the window; this is the bound for a daemon that never does.
 CLOSING_GRACE_S = 30.0
+# How long a listing of the daemon's threads, or a read of one, may take. A
+# machine with a long history can keep `thread/list` busy for a minute, and the
+# scan that used to wait for it held every terminal's state back with it.
+LIST_TIMEOUT = 10.0
+# How long `thread/list` is left alone after it failed, doubling to the last.
+LIST_BACKOFF_FIRST = 30.0
+LIST_BACKOFF_LAST = 600.0
 
 
 def thread_config() -> dict[str, Any] | None:
@@ -114,7 +122,9 @@ class CodexDaemonService:
         self._scan_terminals = scan_terminals or terminals.scan_terminals
         self._repair = repair or DaemonRepair()
         self._client: DaemonClient | None = None
-        self._known: set[str] = set()
+        # Every thread the index has described as ours, and when this run first
+        # learnt of it: a listing that began before then could not have named it.
+        self._known: dict[str, float] = {}
         # Threads the daemon says are loaded. A brand-new one is loaded before
         # its first turn is persisted, and `thread/resume` fails until then, so
         # "loaded" and "we have a runner" are two different facts.
@@ -144,7 +154,13 @@ class CodexDaemonService:
         self._closing: dict[str, float] = {}
         self._catalog = ModelCatalog()
         self._config = thread_config()
-        self._lock = asyncio.Lock()
+        # The reads of single threads under way, so a thread that several
+        # notifications name at once is read once (`_adopt_by_id`).
+        self._reading: dict[str, asyncio.Task[None]] = {}
+        # When `thread/list` may be asked again after failing, and how long it
+        # waited last.
+        self._history_at = 0.0
+        self._history_wait = 0.0
 
     # ------------------------------------------------------------- lifecycle
 
@@ -186,6 +202,10 @@ class CodexDaemonService:
     def knows(self, thread_id: str) -> bool:
         """Whether this thread is the daemon's, so the rollout mirror leaves it alone."""
         return thread_id in self._known
+
+    def _know(self, thread_id: str) -> None:
+        """Count a thread as the daemon's, noting when this run first did."""
+        self._known.setdefault(thread_id, time.monotonic())
 
     def child_parent(self, thread_id: str) -> str | None:
         """The session a subagent's thread works for, when it is one of ours."""
@@ -259,7 +279,13 @@ class CodexDaemonService:
     # -------------------------------------------------------------- indexing
 
     async def refresh(self) -> None:
-        """Reconcile the session list with the daemon's history and live threads."""
+        """Reconcile the session list with the daemon's history and live threads.
+
+        Nothing is held while the daemon answers: a listing that takes its
+        time keeps no notification, and no request an app sent, waiting behind
+        it. What a listing cannot see is what was learnt while it ran, so a
+        thread first known after it began is never called deleted by it.
+        """
         if not self.ready:
             return
         epochs = {
@@ -268,30 +294,26 @@ class CodexDaemonService:
             if isinstance(entry.runner, CodexDaemonSession)
         }
         child_updates: list[tuple[str, str, bool]] = []
-        async with self._lock:
-            # Most recently used first. Codex orders by creation unless told
-            # otherwise, which pushes a thread started long ago off the page
-            # however recently it was used. Every release from 0.153 takes the key.
-            history = await self._safe_request(
-                "thread/list",
-                {"limit": HISTORY_LIMIT, "sortKey": "updated_at", "sortDirection": "desc"},
-            )
-            loaded = await self._safe_request("thread/loaded/list", {})
-            live = {
-                str(item) for item in (loaded.get("data") or []) if isinstance(item, str) and item
-            }
+        listed_at = time.monotonic()
+        history = await self._history()
+        loaded = await self._safe_request("thread/loaded/list", {}, timeout=LIST_TIMEOUT)
+        live = {str(item) for item in (loaded.get("data") or []) if isinstance(item, str) and item}
+        if _listed(loaded):
+            # A listing that failed says nothing about what is loaded.
             self._loaded = live
-            page = threads.summaries(history.get("data"))
-            for summary in page:
-                self._known.add(summary.thread_id)
-                await self._adopt(summary, loaded=summary.thread_id in live)
-            for thread_id in live - self._known:
-                await self._adopt_by_id(thread_id, child_updates=child_updates)
-            if _listed(loaded):
-                # Without the list of loaded threads nothing can be called gone: a
-                # thread being driven may have no rollout to list yet.
-                await self._forget_deleted(page, live, complete=_whole_history(history))
-            await self.refresh_terminals()
+        page = threads.summaries(history.get("data"))
+        for summary in page:
+            self._know(summary.thread_id)
+            await self._adopt(summary, loaded=summary.thread_id in self._loaded)
+        for thread_id in live - set(self._known):
+            await self._adopt_by_id(thread_id, child_updates=child_updates)
+        if _listed(loaded):
+            # Without the list of loaded threads nothing can be called gone: a
+            # thread being driven may have no rollout to list yet.
+            await self._forget_deleted(
+                page, live, complete=_whole_history(history), listed_at=listed_at
+            )
+        await self.refresh_terminals()
         # Finishing a turn can drain its queue and start another daemon request.
         # Neither the index lock nor the session's notification lock may hold it.
         for summary in page:
@@ -363,8 +385,45 @@ class CodexDaemonService:
                     claims -= 1
                 await self.publish_control(entry)
 
+    async def _history(self) -> dict[str, Any]:
+        """One page of the daemon's history, unless asking has been failing.
+
+        Most recently used first. Codex orders by creation unless told
+        otherwise, which pushes a thread started long ago off the page however
+        recently it was used. Every release from 0.153 takes the key. A listing
+        that times out or fails is not asked for again until a wait has passed,
+        doubling each time it fails again; an empty answer is no listing at all.
+        """
+        if time.monotonic() < self._history_at:
+            return {}
+        try:
+            return await self._listing()
+        except RcError as exc:
+            wait = self._history_wait * 2 or LIST_BACKOFF_FIRST
+            self._history_wait = min(LIST_BACKOFF_LAST, wait)
+            self._history_at = time.monotonic() + self._history_wait
+            log.warning(
+                "codex thread/list failed; asking again later",
+                error=exc.message[:200],
+                wait_s=self._history_wait,
+            )
+            return {}
+
+    async def _listing(self) -> dict[str, Any]:
+        answer = await self.client.request(
+            "thread/list",
+            {"limit": HISTORY_LIMIT, "sortKey": "updated_at", "sortDirection": "desc"},
+            timeout=LIST_TIMEOUT,
+        )
+        self._history_wait = self._history_at = 0.0
+        return answer
+
     async def _forget_deleted(
-        self, page: list[threads.ThreadSummary], live: set[str], complete: bool
+        self,
+        page: list[threads.ThreadSummary],
+        live: set[str],
+        complete: bool,
+        listed_at: float,
     ) -> None:
         """Drop sessions for threads deleted in Codex, as the mirror does for transcripts.
 
@@ -378,16 +437,19 @@ class CodexDaemonService:
         the session record's own `updated_at` moves to now whenever the device
         publishes the session, so it says nothing about when Codex last saw the
         thread used. An empty page proves nothing, complete or not: it is what a
-        daemon that listed nothing looks like, and silence is not evidence.
+        daemon that listed nothing looks like, and silence is not evidence. Nor
+        is a thread first known after the listing began, which it could not name.
         """
         if not page:
             return
         seen = {summary.thread_id for summary in page}
         cutoff = None if complete else min(summary.updated_at for summary in page)
-        for thread_id in sorted(self._known - seen - live):
+        for thread_id in sorted(set(self._known) - seen - live):
+            if self._known.get(thread_id, listed_at) >= listed_at:
+                continue
             entry = self.hub.entries.get(thread_id)
             if entry is None:
-                self._known.discard(thread_id)
+                self._known.pop(thread_id, None)
                 continue
             keeps_running = entry.runner is not None and not isinstance(
                 entry.runner, CodexDaemonSession
@@ -395,42 +457,54 @@ class CodexDaemonService:
             last_used = self._used.get(thread_id, entry.session.updated_at)
             if keeps_running or (cutoff is not None and last_used <= cutoff):
                 continue
-            self._known.discard(thread_id)
-            self._loaded.discard(thread_id)
-            self._used.pop(thread_id, None)
-            self._indexed.pop(thread_id, None)
+            self._forget(thread_id)
             log.info("forgetting a codex thread deleted in the agent")
             await self.hub.delete({"session_id": thread_id})
 
     async def prune_foreign(self) -> None:
-        """Drop sessions published for threads another application owns (A18).
+        """Drop sessions published for threads that are not the device's to show (A18, A59).
 
         Everything adopted from now on is filtered as it arrives, so this runs
         once, on the connection the device starts with, and only over sessions
-        the device is not driving. A thread the daemon cannot describe is left
-        alone: silence is not evidence that it is somebody else's.
+        the device is not driving. A thread's own rollout answers first, from
+        disk; the daemon is asked only about the ones without one. A thread
+        nothing can describe is left alone: silence is not evidence that it is
+        somebody else's.
         """
         if not self.ready:
             return
-        async with self._lock:
-            dropped = 0
-            for entry in list(self.hub.entries.values()):
-                if not self._prunable(entry):
-                    continue
-                thread_id = entry.session.session_id
-                result = await self._safe_request("thread/read", {"threadId": thread_id})
-                thread = result.get("thread") if isinstance(result.get("thread"), dict) else result
-                if not isinstance(thread, dict) or not thread or threads.is_ours(thread):
-                    continue
-                self._known.discard(thread_id)
-                self._loaded.discard(thread_id)
-                self._used.pop(thread_id, None)
-                self._indexed.pop(thread_id, None)
-                self._foreign.append(thread_id)
-                await self.hub.withdraw(entry)
-                dropped += 1
-            if dropped:
-                log.info("dropped codex threads another application owns", count=dropped)
+        candidates = [entry for entry in list(self.hub.entries.values()) if self._prunable(entry)]
+        if not candidates:
+            return
+        on_disk = await asyncio.to_thread(
+            rollouts.owned_on_disk, {entry.session.session_id for entry in candidates}
+        )
+        dropped = 0
+        for entry in candidates:
+            thread_id = entry.session.session_id
+            owned = on_disk.get(thread_id)
+            if owned is None:
+                owned = await self._read_owned(thread_id)
+            if owned is not False:
+                continue
+            if self.hub.entries.get(thread_id) is not entry or not self._prunable(entry):
+                continue
+            self._forget(thread_id)
+            self._foreign.append(thread_id)
+            await self.hub.withdraw(entry)
+            dropped += 1
+        if dropped:
+            log.info("dropped codex threads that are not this device's", count=dropped)
+
+    async def _read_owned(self, thread_id: str) -> bool | None:
+        """Whether the daemon's description of a thread makes it ours; `None` when it gave none."""
+        result = await self._safe_request(
+            "thread/read", {"threadId": thread_id}, timeout=LIST_TIMEOUT
+        )
+        thread = result.get("thread") if isinstance(result.get("thread"), dict) else result
+        if not isinstance(thread, dict) or not thread:
+            return None
+        return threads.is_ours(thread)
 
     def _prunable(self, entry: SessionEntry) -> bool:
         """Whether A18 may still take this session away.
@@ -445,9 +519,11 @@ class CodexDaemonService:
             return True
         return isinstance(runner, CodexDaemonSession) and not runner.busy
 
-    async def _safe_request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    async def _safe_request(
+        self, method: str, params: dict[str, Any], timeout: float = LIST_TIMEOUT
+    ) -> dict[str, Any]:
         try:
-            return await self.client.request(method, params)
+            return await self.client.request(method, params, timeout=timeout)
         except RcError as exc:
             log.warning("codex daemon request failed", method=method, error=exc.message[:200])
             return {}
@@ -459,12 +535,35 @@ class CodexDaemonService:
         spoke: bool = False,
         child_updates: list[tuple[str, str, bool]] | None = None,
     ) -> None:
-        """Adopt one thread the index named rather than described.
+        """Adopt one thread the index named rather than described, once however often it is named.
 
         `spoke` is for a thread that has just sent a notification: it is in
         use, whatever the index still says about it, and the client using it
-        is not this device, which drives only threads it already holds.
+        is not this device, which drives only threads it already holds. A thread
+        several callers name at once is read by the first; the others wait for
+        that read instead of making their own.
         """
+        reading = self._reading.get(thread_id)
+        if reading is not None:
+            await asyncio.shield(reading)
+            return
+        task = asyncio.ensure_future(
+            self._read_and_adopt(thread_id, spoke=spoke, child_updates=child_updates)
+        )
+        self._reading[thread_id] = task
+        try:
+            await asyncio.shield(task)
+        finally:
+            if self._reading.get(thread_id) is task:
+                del self._reading[thread_id]
+
+    async def _read_and_adopt(
+        self,
+        thread_id: str,
+        *,
+        spoke: bool,
+        child_updates: list[tuple[str, str, bool]] | None,
+    ) -> None:
         if thread_id in self._foreign or self.is_closing(thread_id):
             return
         result = await self._safe_request("thread/read", {"threadId": thread_id})
@@ -481,7 +580,7 @@ class CodexDaemonService:
             # speaks: nothing this device can offer would be its to offer.
             self._foreign.append(summary.thread_id)
             return
-        self._known.add(summary.thread_id)
+        self._know(summary.thread_id)
         await self._adopt(summary, loaded=True, terminal=spoke, spoke=spoke)
 
     async def _adopt_child(
@@ -630,7 +729,7 @@ class CodexDaemonService:
             await self.publish_control(entry)
 
         async def on_thread_id(thread_id: str) -> None:
-            self._known.add(thread_id)
+            self._know(thread_id)
             self._loaded.add(thread_id)
             await self.hub.rekey(entry, thread_id)
 
@@ -768,9 +867,7 @@ class CodexDaemonService:
         if entry is None:
             if thread_id not in self._loaded:
                 return
-            async with self._lock:
-                if thread_id not in self.hub.entries:
-                    await self._adopt_by_id(thread_id, spoke=True)
+            await self._adopt_by_id(thread_id, spoke=True)
             return
         self._loaded.add(thread_id)
         await entry.channel.revive()
@@ -821,10 +918,9 @@ class CodexDaemonService:
             return
         if self._session(summary.thread_id) is not None:
             return
-        async with self._lock:
-            self._known.add(summary.thread_id)
-            self._loaded.add(summary.thread_id)
-            await self._adopt(summary, loaded=True, terminal=True)
+        self._know(summary.thread_id)
+        self._loaded.add(summary.thread_id)
+        await self._adopt(summary, loaded=True, terminal=True)
 
     async def _thread_named(self, thread_id: str, name: str) -> None:
         """Codex named the thread; the sidebars follow it.
@@ -864,7 +960,7 @@ class CodexDaemonService:
 
     def _forget(self, thread_id: str) -> None:
         """Drop one thread from the index, leaving its session alone."""
-        self._known.discard(thread_id)
+        self._known.pop(thread_id, None)
         self._loaded.discard(thread_id)
         self._used.pop(thread_id, None)
         self._indexed.pop(thread_id, None)

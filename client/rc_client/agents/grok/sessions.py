@@ -25,6 +25,9 @@ from .translate import GrokTranslator, session_update
 MAX_SESSIONS = 50
 MAX_AGE_DAYS = 14
 UPDATES = "updates.jsonl"
+# The programs whose processes write a session's update log: `grok`, and the
+# launcher Grok ships as `agent`.
+WRITERS = frozenset({"grok", "agent"})
 SUMMARY = "summary.json"
 
 

@@ -57,7 +57,6 @@ class GrokLeaderService:
         # When the scan may next try to join, and how long it waited last.
         self._retry_at = 0.0
         self._retry_wait = 0.0
-        self._lock = asyncio.Lock()
 
     # ------------------------------------------------------------- accessors
 
@@ -121,19 +120,23 @@ class GrokLeaderService:
     # ------------------------------------------------------------------ scan
 
     async def tick(self, binary: str | None) -> None:
-        """Reconcile the registry, the leader and the hub. Runs on every scan."""
+        """Reconcile the registry, the leader and the hub, on a loop of its own.
+
+        It never runs inside the scan that decides who holds the other agents'
+        sessions: joining the leader, or loading a session in it, can take its
+        time, and the ticks follow one another, so nothing here is locked.
+        """
         if binary:
             self._binary = binary
         entries, known = await asyncio.to_thread(grok_sessions.active_entries)
         live: dict[str, grok_sessions.RegisteredSession] = {}
         if known:
             live = {entry.session_id: entry for entry in entries if entry.live}
-        async with self._lock:
-            await self._rejoin(live)
-            self._registered = set(live)
-            await self._adopt(live)
-            await self._refresh_control()
-            await self._check_drift(live)
+        await self._rejoin(live)
+        self._registered = set(live)
+        await self._adopt(live)
+        await self._refresh_control()
+        await self._check_drift(live)
 
     async def _adopt(self, live: dict[str, grok_sessions.RegisteredSession]) -> None:
         """Take every registered session the leader turns out to be holding."""

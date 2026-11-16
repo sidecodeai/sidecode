@@ -1,4 +1,4 @@
-"""Amendments A18 and A48: which Codex threads the device may show.
+"""Amendments A18, A48 and A59: which Codex threads the device may show.
 
 The originator/source pairs below were read off a real machine, from
 `thread/list` on Codex 0.154 and from the `session_meta` of the rollouts on
@@ -27,12 +27,25 @@ def test_a_thread_this_device_opened_is_ours_under_either_name() -> None:
     [
         ("codex-tui", "cli"),
         ("codex_cli_rs", "cli"),
-        ("codex_exec", "exec"),
         ("codex-tui", "vscode"),
     ],
 )
 def test_a_terminal_running_its_own_codex_is_ours(originator: str, source: str) -> None:
     assert owned_here(originator, source) is True
+
+
+@pytest.mark.parametrize(
+    ("originator", "source"),
+    [
+        ("codex_exec", "exec"),
+        ("codex_exec", "cli"),
+        ("codex-tui", "exec"),
+        (DAEMON_CLIENT_NAME, "exec"),
+    ],
+)
+def test_a_codex_exec_run_is_never_a_session(originator: str, source: str) -> None:
+    """A59: a script's or an automation's run is nobody's to sit in or continue."""
+    assert owned_here(originator, source) is False
 
 
 @pytest.mark.parametrize(

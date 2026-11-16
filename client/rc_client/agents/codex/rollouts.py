@@ -20,6 +20,9 @@ from .translate import CodexTranslator, _plan_items
 
 MAX_ROLLOUTS = 50
 MAX_AGE_DAYS = 14
+# The program whose processes write rollouts: a TUI with its own app-server, or
+# the shared daemon. Who writes a rollout is what makes its thread a terminal's.
+WRITERS = frozenset({"codex"})
 
 
 @dataclass(slots=True)
@@ -94,6 +97,39 @@ def discover(limit: int = MAX_ROLLOUTS, max_age_days: int = MAX_AGE_DAYS) -> lis
             )
         )
     return found
+
+
+def owned_on_disk(thread_ids: set[str]) -> dict[str, bool]:
+    """Whether each of these threads is the device's to publish, as its own rollout says.
+
+    A rollout is named after its thread, so one walk of the history finds every
+    one of them without asking anybody; the answer is the `session_meta` the
+    rollout opens with (A18, A59). A thread whose rollout is not on disk, or
+    cannot be read, is left out: nothing has been said about it.
+    """
+    root = SESSIONS_DIR
+    if not thread_ids or not root.is_dir():
+        return {}
+    lengths = {len(thread_id) for thread_id in thread_ids}
+    found: dict[str, bool] = {}
+    for entry in root.glob("*/*/*/rollout-*.jsonl"):
+        thread_id = _named_thread(entry.stem, thread_ids, lengths)
+        if thread_id is None or thread_id in found:
+            continue
+        meta = _session_meta(str(entry))
+        if meta is None or str(meta.get("session_id") or meta.get("id") or "") != thread_id:
+            continue
+        found[thread_id] = owned_here(meta.get("originator"), meta.get("source"))
+    return found
+
+
+def _named_thread(stem: str, thread_ids: set[str], lengths: set[int]) -> str | None:
+    """The thread among these whose id ends the file's name, `rollout-<time>-<id>`."""
+    for length in lengths:
+        candidate = stem[-length:]
+        if stem[-length - 1 : -length] == "-" and candidate in thread_ids:
+            return candidate
+    return None
 
 
 @dataclass(slots=True)

@@ -4,7 +4,9 @@ Discovery re-scans every 10 s; live files are tailed every 2 s, and at once when
 something waits on the rows an attached session is writing. An attached Claude
 session's transcript is looked for on every tail pass until it is found. A
 session the daemon drives itself is never ingested from disk, so events are
-never doubled.
+never doubled. The shared Codex daemon and the Grok leader are kept current on
+loops of their own, every 10 s as well, so a slow answer from either never holds
+back what the scan says about the other agents' terminals.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -29,10 +32,11 @@ from ..agents.grok.translate import SETTINGS as GROK_SETTINGS
 from ..config import MirrorConfig
 from ..logging_setup import logger
 from ..models import Session, now_ms
-from ..procscan import file_writers
+from ..procscan import Proc, file_writers
 from . import offsets, titles
 from .hub import SessionEntry, SessionHub
 from .limits import TurnEnd
+from .scan_timing import ScanTimer
 
 log = logger("rc_client.mirror")
 
@@ -136,6 +140,13 @@ class MirrorService:
             asyncio.create_task(self._scan_loop()),
             asyncio.create_task(self._tail_loop()),
         ]
+        codex_daemon, grok_leader = self.codex_daemon, self.grok_leader
+        if codex_daemon is not None:
+            tick = codex_daemon.tick
+            self._tasks.append(asyncio.create_task(self._tick_loop("codex", tick, resolve_codex)))
+        if grok_leader is not None:
+            tick = grok_leader.tick
+            self._tasks.append(asyncio.create_task(self._tick_loop("grok", tick, resolve_grok)))
 
     async def stop(self) -> None:
         if self.hub.shared.reader is self:
@@ -192,6 +203,10 @@ class MirrorService:
             await self._backfill_known()
         except Exception:
             log.exception("terminal session settings backfill failed")
+        try:
+            await self._prune_foreign_codex()
+        except Exception:
+            log.exception("withdrawing codex sessions that are not this device's failed")
         while True:
             try:
                 await self.scan_once()
@@ -201,42 +216,98 @@ class MirrorService:
                 log.exception("terminal session scan failed")
             await asyncio.sleep(SCAN_INTERVAL)
 
+    async def _tick_loop(
+        self,
+        agent: str,
+        tick: Callable[[str | None], Awaitable[None]],
+        binary: Callable[[], str | None],
+    ) -> None:
+        """Keep one agent's own service current, apart from the scan.
+
+        The Codex daemon and the Grok leader answer when they can, and the scan
+        that says who holds every other session used to wait for them; a tick
+        that fails is said once and tried again at the next interval.
+        """
+        while True:
+            try:
+                await tick(binary())
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("agent service tick failed", agent=agent)
+            await asyncio.sleep(SCAN_INTERVAL)
+
     async def scan_once(self, *, settings: bool = True) -> None:
         """Re-scan the agent state directories and refresh who controls what.
 
         Only the filesystem walk runs off the loop: registering a mirror
         creates tasks, so it must happen on the event loop thread. `settings`
-        is whether the sessions just adopted have their settings read too.
+        is whether the sessions just adopted have their settings read too. The
+        scan says how long each part of it took.
         """
+        timer = ScanTimer()
         found_claude = await asyncio.to_thread(
             transcripts.discover, self.limits.max_sessions, self.limits.max_age_days
         )
-        # Claude's terminals first: they need nothing from the Codex daemon or the Grok leader,
-        # whose ticks wait on those processes, and the first hello waits for who holds what.
+        timer.lap("claude_discover")
+        # Claude's terminals first: the first hello waits for who holds what.
         self._adopt_claude(found_claude)
         # After the adoption, so a session whose transcript was just found is
         # never mistaken for one that never had one.
         await self.hub.sweep_ghosts()
+        timer.lap("claude_adopt")
         await self._refresh_claude_control()
+        timer.lap("claude_control")
         found_codex = await asyncio.to_thread(
             rollouts.discover, self.limits.max_sessions, self.limits.max_age_days
         )
+        timer.lap("codex_discover")
         found_grok = await asyncio.to_thread(
             grok_sessions.discover, self.limits.max_sessions, self.limits.max_age_days
         )
-        if self.codex_daemon is not None:
-            await self.codex_daemon.tick(resolve_codex())
-        if self.grok_leader is not None:
-            await self.grok_leader.tick(resolve_grok())
+        timer.lap("grok_discover")
         self._adopt_codex(found_codex)
         await self._adopt_grok(found_grok)
+        timer.lap("adopt")
         await self._watch_titles()
+        timer.lap("titles")
         await self._refresh_codex_control()
+        timer.lap("codex_control")
         await self._refresh_grok_control()
+        timer.lap("grok_control")
         if settings:
             # Every mirrored session whose settings have not been read yet: the
             # ones just adopted, and any whose read failed last time.
             await self._backfill_settings(list(self._claude))
+            timer.lap("settings")
+        timer.report(claude=len(self._claude), codex=len(self._codex), grok=len(self._grok))
+
+    async def _prune_foreign_codex(self) -> None:
+        """Withdraw the Codex sessions published before they were known not to be the device's.
+
+        A `codex exec` run was published as a session until A59, and another
+        application's thread until A18. With the shared daemon connected its own
+        pass at startup does this from its index; without it, each thread's own
+        rollout says, read once from disk.
+        """
+        if self.codex_daemon is not None and self.codex_daemon.ready:
+            return
+        candidates = {
+            session_id
+            for session_id, entry in self.hub.entries.items()
+            if entry.session.agent == "codex" and self._adoptable(entry)
+        }
+        if not candidates:
+            return
+        owned = await asyncio.to_thread(rollouts.owned_on_disk, candidates)
+        foreign = sorted(thread_id for thread_id, ours in owned.items() if not ours)
+        for thread_id in foreign:
+            entry = self.hub.entries.get(thread_id)
+            if entry is not None and self._adoptable(entry):
+                self._codex.pop(thread_id, None)
+                await self.hub.withdraw(entry)
+        if foreign:
+            log.info("dropped codex sessions that are not this device's", count=len(foreign))
 
     def _driven_claude(self) -> set[str]:
         """Claude sessions this device is running right now.
@@ -417,7 +488,24 @@ class MirrorService:
         """
         return self.grok_leader is not None and self.grok_leader.knows(session_id)
 
+    def _drop_departed(self, mirrors: dict[str, Any], window: set[str]) -> None:
+        """Stop reading every file that left the discovery window and that no terminal holds.
+
+        A file the scan no longer lists is older than the window, or one of more
+        than it keeps, and reading it every two seconds and asking who writes it
+        every ten cost more with every day the daemon ran. A terminal that takes
+        the session up again writes the file, which brings it back into the
+        window and has it adopted again.
+        """
+        for session_id in list(mirrors):
+            if session_id in window:
+                continue
+            entry = self.hub.entries.get(session_id)
+            if entry is None or entry.session.control != "terminal":
+                mirrors.pop(session_id, None)
+
     def _adopt_codex(self, found: list[rollouts.RolloutInfo]) -> None:
+        self._drop_departed(self._codex, {info.thread_id for info in found})
         for info in found:
             if info.thread_id in self._codex or self._codex_is_daemons(info.thread_id):
                 continue
@@ -452,6 +540,7 @@ class MirrorService:
         Grok names its own sessions, so the title and the settings in force are
         read straight out of `summary.json` rather than waited for.
         """
+        self._drop_departed(self._grok, {info.session_id for info in found})
         for info in found:
             if info.session_id in self._grok or self._grok_is_leaders(info.session_id):
                 continue
@@ -488,22 +577,33 @@ class MirrorService:
                 await named(entry.channel, info.title)
 
     async def _refresh_grok_control(self) -> None:
-        """Grok's own registry says who is live; the file's writers are the fallback."""
+        """Grok's own registry says who is live; the file's writers are the fallback.
+
+        The writers of every file the registry does not answer for are read in
+        one pass, not one helper process per file.
+        """
         active, known = await asyncio.to_thread(grok_sessions.active_ids)
+        tracked: list[tuple[str, SessionEntry, GrokMirror]] = []
         for session_id, mirror in list(self._grok.items()):
             if self._grok_is_leaders(session_id):
                 self._grok.pop(session_id, None)
                 continue
             entry = self._live_entry(session_id, self._grok)
-            if entry is None:
+            if entry is not None:
+                tracked.append((session_id, entry, mirror))
+        unanswered = [item for item in tracked if not (known and item[0] in active)]
+        writers = await file_writers(grok_sessions.WRITERS) if unanswered else None
+        if writers is not None and not writers.complete:
+            log.warning("the grok log writers could not be read; control is left as it was")
+        for session_id, entry, mirror in tracked:
+            if not self._still_mirrored(session_id, entry):
                 continue
             if known and session_id in active:
                 owned = True
+            elif writers is None or not writers.complete:
+                continue
             else:
-                writers, seen = await file_writers(mirror.tailer.path)
-                if not seen:
-                    continue
-                owned = bool([pid for pid in writers if pid != os.getpid()])
+                owned = bool(writers.of(mirror.tailer.path))
             await self._set_control(entry, "terminal" if owned else "none", mirror.tailer.running)
 
     @staticmethod
@@ -516,6 +616,10 @@ class MirrorService:
         the runner is gone but the session is still ours.
         """
         return entry.runner is None and entry.session.origin != "remote"
+
+    def _still_mirrored(self, session_id: str, entry: SessionEntry) -> bool:
+        """Whether a session looked at before a scan awaited anything is still the mirror's."""
+        return self.hub.entries.get(session_id) is entry and self._adoptable(entry)
 
     def _live_entry(self, session_id: str, mirrors: dict[str, Any]) -> SessionEntry | None:
         """Re-resolve the hub entry, dropping the mirror when it is no longer ours.
@@ -564,6 +668,8 @@ class MirrorService:
         if not tracked:
             return
         scan = self.hub.bindings.refine(await scan_holders())
+        if not scan.complete:
+            log.warning("the terminal holder scan was incomplete; control is left as it was")
         assigned = scan.assign(
             [
                 SessionRef(
@@ -602,18 +708,39 @@ class MirrorService:
                 await self._set_control(entry, "none", False)
 
     async def _refresh_codex_control(self) -> None:
+        """A rollout some Codex process writes is a terminal's; one nobody writes is nobody's.
+
+        Every rollout's writers come from one look at the Codex processes there
+        are. A rollout exactly one process writes names the terminal's process,
+        which is what a close from an app ends (A61).
+        """
+        tracked: list[tuple[str, SessionEntry, CodexMirror]] = []
         for session_id, mirror in list(self._codex.items()):
             if self._codex_is_daemons(session_id):
                 self._codex.pop(session_id, None)
                 continue
             entry = self._live_entry(session_id, self._codex)
-            if entry is None:
+            if entry is not None:
+                tracked.append((session_id, entry, mirror))
+        if not tracked:
+            return
+        writers = await file_writers(rollouts.WRITERS)
+        if not writers.complete:
+            log.warning("the codex rollout writers could not be read; control is left as it was")
+            return
+        for session_id, entry, mirror in tracked:
+            if not self._still_mirrored(session_id, entry):
                 continue
-            writers, known = await file_writers(mirror.tailer.path)
-            if not known:
-                continue
-            owned = bool([pid for pid in writers if pid != os.getpid()])
-            await self._set_control(entry, "terminal" if owned else "none", mirror.tailer.running)
+            procs = writers.of(mirror.tailer.path)
+            self._note_writer(entry, procs)
+            await self._set_control(entry, "terminal" if procs else "none", mirror.tailer.running)
+
+    @staticmethod
+    def _note_writer(entry: SessionEntry, procs: tuple[Proc, ...]) -> None:
+        """Remember the one process writing a session's file; several name none of them."""
+        only = procs[0] if len(procs) == 1 else None
+        entry.holder_pid = only.pid if only is not None else None
+        entry.holder_identity = only.identity if only is not None else None
 
     async def _set_control(self, entry: SessionEntry, control: str, running: bool) -> None:
         """Amendment A7: `readonly` only while the terminal holds an idle session."""

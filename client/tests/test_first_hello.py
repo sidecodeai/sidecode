@@ -280,21 +280,25 @@ async def test_a_first_scan_that_fails_still_settles(
 
 
 class StuckCodexDaemon:
-    """A shared Codex daemon whose scan tick is waiting on its app-server."""
+    """A shared Codex daemon whose tick is waiting on its app-server."""
 
     def __init__(self) -> None:
         self.release = asyncio.Event()
+        self.ticks = 0
+        self.ready = False
 
     async def tick(self, binary: str | None) -> None:
+        self.ticks += 1
         await self.release.wait()
 
     def knows(self, thread_id: str) -> bool:
         return False
 
 
-async def test_the_first_scan_decides_claude_holders_before_it_waits_on_codex(
+async def test_the_scan_never_waits_on_the_codex_tick(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The daemon's tick runs on a loop of its own, so a stuck one holds no scan back."""
     found = previous_run(tmp_path)
     find_terminals(monkeypatch, tmp_path, found)
     registry = Registry(config_module.database_path())
@@ -306,19 +310,17 @@ async def test_the_first_scan_decides_claude_holders_before_it_waits_on_codex(
     hub.load()
     stuck = StuckCodexDaemon()
     mirror = MirrorService(hub, codex_daemon=cast(CodexDaemonService, stuck))
-    scan = asyncio.create_task(mirror.scan_once(settings=False))
+    mirror.start()
     try:
-
-        async def held() -> None:
-            while hub.entry("alive").session.control != "terminal":
-                await asyncio.sleep(0.01)
-
-        await asyncio.wait_for(held(), timeout=5)
+        assert await mirror.wait_settled(5) is True
+        assert hub.entry("alive").session.control == "terminal"
         assert hub.entry("gone").session.control == "none"
-        # The Codex tick is still stuck: Claude's terminals did not wait for it.
-        assert not scan.done()
+        # The tick started and is still stuck; the scan finished without it.
+        assert stuck.ticks == 1
+        await asyncio.wait_for(mirror.scan_once(settings=False), timeout=5)
+        assert stuck.ticks == 1
     finally:
         stuck.release.set()
-        await scan
+        await mirror.stop()
         await hub.close()
         registry.close()

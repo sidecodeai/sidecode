@@ -293,55 +293,124 @@ async def process_open_paths(pids: list[int]) -> tuple[dict[int, OpenPaths], boo
     return _parse_open_paths(out), True
 
 
-async def file_writers(path: str) -> tuple[list[int], bool]:
-    """Pids holding `path` open for writing. The bool is False if unknown."""
+@dataclass(frozen=True, slots=True)
+class Writers:
+    """Which processes hold which regular files open for writing, by the files' real paths.
+
+    `complete` is False when the scan could not be finished, which says nothing about who
+    writes what: a caller treats it as "unknown", never as "nobody".
+    """
+
+    by_path: dict[str, tuple[Proc, ...]]
+    complete: bool
+
+    def of(self, path: str) -> tuple[Proc, ...]:
+        """The processes writing `path`, none when nobody the scan asked about is."""
+        return self.by_path.get(os.path.realpath(path), ())
+
+
+def runs_one_of(proc: Proc, names: frozenset[str]) -> bool:
+    """Whether this process runs one of these programs.
+
+    The program is the first word of the command line, or the second when the
+    first is the interpreter a launcher script runs under (`node …/bin/codex`).
+    """
+    return any(os.path.basename(token) in names for token in proc.argv[:2])
+
+
+async def file_writers(names: frozenset[str]) -> Writers:
+    """Every regular file the processes running one of `names` hold open for writing, in one pass.
+
+    One process table and one look at the open files of the processes it names, however many
+    files the caller wants to know about: asking after each file on its own was a helper process
+    per file per scan. The device's own processes are left out, its agent children included.
+    """
+    scan = await scan_processes()
+    if not scan.complete:
+        return Writers(by_path={}, complete=False)
+    ours = descendants(scan.procs, os.getpid())
+    candidates = {
+        proc.pid: proc for proc in scan.procs if proc.pid not in ours and runs_one_of(proc, names)
+    }
+    if not candidates:
+        return Writers(by_path={}, complete=True)
+    written, complete = await _written_paths(sorted(candidates))
+    if not complete:
+        return Writers(by_path={}, complete=False)
+    by_path: dict[str, list[Proc]] = {}
+    for pid, paths in written.items():
+        proc = candidates.get(pid)
+        if proc is None:
+            continue
+        for path in set(paths):
+            by_path.setdefault(os.path.realpath(path), []).append(proc)
+    return Writers(by_path={path: tuple(procs) for path, procs in by_path.items()}, complete=True)
+
+
+async def _written_paths(pids: list[int]) -> tuple[dict[int, list[str]], bool]:
+    """The regular files each pid holds open for writing. The bool is False when unknown."""
     if IS_LINUX:
-        try:
-            target = os.stat(path)
-        except OSError:
-            return [], True
-        writers: list[int] = []
-        for entry in os.listdir("/proc"):
-            if not entry.isdigit():
-                continue
-            pid = int(entry)
-            fd_dir = f"/proc/{pid}/fd"
-            try:
-                fds = os.listdir(fd_dir)
-            except OSError:
-                continue
-            for fd in fds:
-                try:
-                    stat = os.stat(f"{fd_dir}/{fd}")
-                    if stat.st_ino != target.st_ino or stat.st_dev != target.st_dev:
-                        continue
-                    with open(f"/proc/{pid}/fdinfo/{fd}", encoding="utf-8") as handle:
-                        flags_line = next(
-                            (row for row in handle if row.startswith("flags:")), "flags: 0"
-                        )
-                except (OSError, StopIteration, ValueError):
-                    continue
-                flags = int(flags_line.split()[1], 8)
-                if flags & os.O_ACCMODE in (os.O_WRONLY, os.O_RDWR):
-                    writers.append(pid)
-                break
-        return writers, True
-    code, out = await _run(LSOF, "-n", "-P", "-w", "-F", "pfan", "--", path)
+        return await asyncio.to_thread(_linux_written_paths, pids), True
+    code, out = await _run(
+        LSOF, "-n", "-P", "-w", "-p", ",".join(str(pid) for pid in pids), "-F", "pfatn"
+    )
     if code not in (0, 1):
-        return [], False
-    writers = []
-    current: int | None = None
-    access = ""
+        return {}, False
+    return _parse_written(out), True
+
+
+def _parse_written(out: str) -> dict[int, list[str]]:
+    """Read one `lsof -F pfatn` report: `p<pid>`, then `f`, `a`, `t`, `n` per file.
+
+    Only a regular file opened for writing counts: `a` is `w` or `u`, and `t` is `REG`.
+    """
+    written: dict[int, list[str]] = {}
+    pid: int | None = None
+    access = kind = ""
     for line in out.splitlines():
-        if line.startswith("p") and line[1:].isdigit():
-            current = int(line[1:])
-            access = ""
-        elif line.startswith("a"):
-            access = line[1:]
-        elif line.startswith("n") and current is not None and access in {"w", "u"}:
-            if os.path.realpath(line[1:]) == os.path.realpath(path):
-                writers.append(current)
-    return sorted(set(writers)), True
+        tag, value = line[:1], line[1:]
+        if tag == "p" and value.isdigit():
+            pid, access, kind = int(value), "", ""
+        elif tag == "f":
+            access, kind = "", ""
+        elif tag == "a":
+            access = value
+        elif tag == "t":
+            kind = value
+        elif tag == "n" and pid is not None and access in {"w", "u"} and kind == "REG":
+            written.setdefault(pid, []).append(value)
+    return written
+
+
+def _linux_written_paths(pids: list[int]) -> dict[int, list[str]]:
+    """`/proc/<pid>/fd` and the open flags in `/proc/<pid>/fdinfo`, for each pid."""
+    written: dict[int, list[str]] = {}
+    for pid in pids:
+        fd_dir = f"/proc/{pid}/fd"
+        try:
+            fds = os.listdir(fd_dir)
+        except OSError:
+            continue
+        for fd in fds:
+            path = _linux_written_fd(pid, fd_dir, fd)
+            if path is not None:
+                written.setdefault(pid, []).append(path)
+    return written
+
+
+def _linux_written_fd(pid: int, fd_dir: str, fd: str) -> str | None:
+    """The path of one descriptor when it is a regular file open for writing."""
+    try:
+        if not stat.S_ISREG(os.stat(f"{fd_dir}/{fd}").st_mode):
+            return None
+        with open(f"/proc/{pid}/fdinfo/{fd}", encoding="utf-8") as handle:
+            flags_line = next((row for row in handle if row.startswith("flags:")), "flags: 0")
+        flags = int(flags_line.split()[1], 8)
+        if flags & os.O_ACCMODE not in (os.O_WRONLY, os.O_RDWR):
+            return None
+        return os.readlink(f"{fd_dir}/{fd}")
+    except (OSError, ValueError, IndexError):
+        return None
 
 
 def process_uid(pid: int) -> int | None:
