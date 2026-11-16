@@ -134,6 +134,16 @@ no events for a cursor the buffer no longer covers, which is what drives the app
 keep the transcript and ask the device for what follows the cursor. The mock's `session.history`
 takes `after_seq` (A9) for that forward walk, as well as `before_seq`.
 
+The session-flow amendments are in the mock too. `session.history` with `brief: true` cuts every
+tool call the way A60 says (`mock/brief.ts`: input to 1 KiB, no output, no patch, each flagged),
+and `session.block` still answers the whole block. The Mac's Claude Code and Codex list
+`close_terminal` (A61); Grok Build and pi follow `protocol/fixtures/objects/agent.grok.json` and
+`agent.pi.json`, which `tests/agents.test.tsx` holds them to, and the CI runner's client predates
+the amendment. A Close on a row a terminal holds (`mock/closeTerminal.ts`) quits the agent after
+1.2 s and closes the session as A39 does; "Typecheck the web app" answers `unsupported` (two Codex
+terminals in its folder), "Refactor relay routing" answers `conflict` after 3 s (its `claude` does
+not exit), and an agent without the capability answers `unsupported`.
+
 ## Structure
 
 ```
@@ -823,8 +833,10 @@ Nothing of this reaches the gateway.
   then the Archive"): on a `remote` row that is not archived, a circled cross that sends
   `session.archive {archived: true}` — after a `ConfirmDialog` when the row's dot tone is
   `working`, at once otherwise — and the device answers with the session closed, stopped and
-  unowned, which is what puts the row in the Archive marked "Archived". The store's `close` is the
-  only caller of the frame; nothing else archives or unarchives from the browser.
+  unowned, which is what puts the row in the Archive marked "Archived". A row a terminal holds
+  carries it too when the device can quit its agent there (A61, § "Closing a session a terminal
+  holds"). The store's `close` is the only caller of the frame; nothing else archives or
+  unarchives from the browser.
 - **The agent filter** is `agentFilter` in the sessions store rather than in a page, so the Sessions
   page and the chat sidebar always show the same slice. It is not persisted, and its options come
   from `selectAgents`, the agents the loaded sessions actually run. A25 turned it from a segmented
@@ -963,7 +975,9 @@ Nothing of this reaches the gateway.
   and its numbers jump legitimately. After the newest page or a complete repair the timeline counts
   itself as read through the session's `last_seq` as it stood when the request left
   (`coverThrough`), because the device keeps no `status` or `meta` and the first live event after
-  an idle conversation would otherwise look like a skip. `chatFold.ts` holds the folds of
+  an idle conversation would otherwise look like a skip; a newest page sent beside a subscribe is
+  counted through the `last_seq` that subscribe's reply carries as well, once both have answered
+  (§ "Opening a conversation"). `chatFold.ts` holds the folds of
   state-only events (`foldChat`, `foldSession`) and `chatSync.ts` what a subscribe still owes, how a
   page is folded in and when the rows start again.
 - **A conversation that cannot be read says so.** `ChatSession.historyLoaded` is true once the
@@ -1044,12 +1058,83 @@ Nothing of this reaches the gateway.
   there is nothing to take over. Three optional agent booleans say what it carries —
   `shared_interrupt`, `shared_settings` and `shared_attachments` — each defaulting to false.
 - **Long output folds** beyond 20 lines, and `output_truncated` adds "Open full output", which
-  fetches the untruncated block.
+  fetches the untruncated block. History arrives brief (A60, § "Opening a conversation"), so a
+  tool row can hold no output or patch at all; opening it fetches the block.
 - **Reading position** holds: the timeline auto-follows until you scroll away, then counts new
   blocks behind a "Back to latest" button, centred at the foot of the transcript above the composer
   and widening into a capsule around that centre when it carries a count. One click lands at the
-  very end of the transcript and the button leaves.
+  very end of the transcript and the button leaves. Where a conversation opens is
+  § "Opening a conversation".
 - **Failed actions** surface in a dismissible banner above the composer rather than failing silently.
+
+## Opening a conversation
+
+Opening a conversation — from a list, a notification, a link, or another conversation in the
+sidebar — is quick and lands where the person left off, not at the bottom of a long transcript
+(`docs/DESIGN.md` § "Reading position").
+
+- **Brief pages (A60).** Every `session.history` the transcript sends — the newest page, an older
+  page, a hole or a resync being repaired — carries `brief: true` (`historyPage` in
+  `src/stores/chat.ts`). A device that knows A60 cuts each `tool_call` in the page: `input` to
+  1 KiB with `input_truncated`, no `output` with `output_truncated`, no `diff.patch` with
+  `patch_truncated`, the path and the counts kept. `ToolRow` can be opened on such a row, and
+  opening a finished one whose content was cut (`isCut` in `blocks/toolCut.ts`) fetches the whole
+  block once with `session.block`, the way "Open full output" does; "Loading…" stands where the
+  output goes meanwhile, and "Open full output" stands there again if the fetch failed (the banner
+  says why). `replaceBlock` marks the item `full`, so the row asks nothing more; a later event for
+  the block is a new copy without the mark. A running row is not fetched: its next event brings the
+  output. A device from before A60 ignores the field and sends the page in full, which the rows draw
+  as they always did.
+- **The newest page goes out with the subscribe.** `useChat.open` no longer waits for the subscribe
+  reply before it asks for the newest page: when none was read, the page is sent right after the
+  subscribe, and the two are merged by block whichever answers first. The subscribe went out
+  first, so the page holds everything up to the `last_seq` its reply carries, and once both are in,
+  the timeline is counted as read through that count (`countAfterBoth`). `ChatSession.subscription`
+  (`pending`, `live`, `failed`) says where this open's subscribe stands: `close` puts it back to
+  `pending`, a page that reads well never clears the failure of a subscribe beside it, and Retry
+  subscribes again even while such a page is still out.
+- **A stale copy is a cold open.** The chat store keeps the three conversations left last. When the
+  person opens one of them and the session's `last_seq` is more than 300 past the copy's cursor
+  (`isStale` and `STALE_AFTER` in `chatSync.ts`), the copy is started again (`restart`) and read
+  from the newest page, with no forward walk. `ChatPage` passes `{fresh: true}` when the route has
+  moved to the conversation, and not when the socket came back, so a reconnect keeps the copy and
+  the reader's place as before.
+- **Where it opens.** `chooseAnchor` in `src/features/chat/anchor.ts` is the rule, pure: a message
+  of the person's own (`ownMessages`: a `user_message` whose `source` is not `agent`, delivered —
+  not one the device holds back or one the CLI absorbed; an unconfirmed send is no row) after the
+  saved reading position gives the newest such message; otherwise, with a saved position, the
+  newest of theirs at or before it; never read in this browser, their newest; and with none of
+  theirs among the rows held, an older page is read first — at most two after the newest
+  (`SEARCH_PAGES`, counted in `ChatSession.pagesAsked`, failures included) — before the tail.
+  `useOpening` reads the timeline into it once the rows are this open's (the subscribe answered and
+  the newest page read), and `useOlderSearch` reads the older pages. Read as the rules stand, the
+  first three always land on the person's newest delivered message.
+- **How it is placed.** `useScrollFollow` takes the opening: the row's top goes 12 px under the top
+  of the transcript; when the rows from it to the end fit, the transcript sits at the bottom and
+  follows as before; otherwise following is off and "Back to latest" carries the count as usual.
+  It places the opening again on every change to the rows and on a `ResizeObserver` callback —
+  Markdown arriving lazily changes the height of rows above it — until the reader scrolls (a wheel,
+  a swipe, the scroll keys, the scroll bar), touches or clicks the transcript, presses "Back to
+  latest", or 2 s after it was first placed (`SETTLE_MS`). Rows on screen when it was placed are
+  not counted as missed. Older history pages in at the top only once the reader has scrolled
+  themselves, so an opening near the top asks for nothing. Each row sits in a `.timeline-row`
+  wrapper with `display: contents` that names its key and its `seq`; the `.tool + .tool` border
+  rule has a twin across two wrappers.
+- **One timeline per conversation.** `ChatPage` keys `<Timeline>` by the conversation, as it keys
+  the header and the composer, so the follow state, the prepend anchor, the scroll and the opening
+  start again when the route moves to another conversation instead of carrying over.
+- **The reading position** is the `seq` of the furthest row whose top edge has been inside the
+  transcript (`furthestSeen`). `useReadingTracker` measures it at most once a second while the
+  transcript scrolls, and when the conversation is left — another conversation, another page, the
+  tab hidden, the page closing — and `readingPosition.ts` keeps it in local storage under
+  `rc.reading.<username>`, one entry per conversation, the 500 read last, moving only forward. The
+  page's origin is its gateway, so the browser already keeps it per gateway; it is never sent
+  anywhere, and a browser that cannot store keeps it for the tab.
+- `tests/anchor.test.ts` holds the rule, `tests/readingPosition.test.ts` the storage,
+  `tests/useScrollFollow.test.tsx` the placement and the top-of-list wait, `tests/opening.test.tsx`
+  the timeline's opening, its older-page search, the saved position and the keyed timeline,
+  `tests/chat.test.ts` the brief requests, the page beside the subscribe and the stale copy,
+  `tests/tool-brief.test.tsx` the brief tool row and `tests/mock-brief.test.ts` the mock's pages.
 
 ## Shared terminal sessions
 
@@ -1429,6 +1514,29 @@ with no "Saved as" notice. The reply keeps `updated_at`, so a renamed row keeps 
   `tests/ContextMenu.test.tsx` the menu, `tests/mock-rename.test.ts` the mock device and
   `tests/protocol-fixtures.test.ts` the contract's frames.
 
+## Closing a session a terminal holds (A61)
+
+A row a terminal holds — `control` `terminal` or `shared`, not archived — offers the same Close as
+a row the device drives (A39) when its agent lists `close_terminal` on its device and the device is
+online (`offersClose` and `canCloseTerminal` in `features/sessions/close.ts`); the capability is
+the only question, never a version, and the request is A39's `session.archive {archived: true}`.
+The web's Close lives on the Sessions page row alone, as A39's does.
+
+- **It always asks.** `closeQuestion` gives the dialog's paragraphs: "This also quits {agent} in its
+  terminal on {device}. Anything typed there and not sent is lost." (随码: "{agent} 在 {device}
+  终端里的进程也会退出，终端里尚未发送的内容会丢失。"), with the agent's name as the app draws it and
+  the device's as the gateway reports it, and A39's "The agent is still working; what it has not
+  finished is lost." after it while the dot is green. The title is "Close this session?" and the
+  buttons Close and Cancel. A session the device drives still asks only while it works.
+- **A refusal stays in the dialog**, on a line under the question (`ConfirmDialog` takes several
+  paragraphs and an `error`): `unsupported` reads "This session can't be closed from here. Close it
+  in its terminal.", `conflict` reads the A55 sentence "The session is busy. Try again later."
+  (`strings.sessions.busy`, which the rename dialog reads too), and every other code keeps the
+  app's words for it (`closeFailure`). The device can take up to about 10 s to answer, and Close
+  stays disabled meanwhile. On success the row goes to the Archive by the existing rule.
+- `tests/session-close.test.ts` holds the rules, `tests/SessionsPage.test.tsx` the row, the dialog
+  in both languages and the refusals, and `tests/mock-close.test.ts` the mock device.
+
 ## The device row
 
 `features/devices/DeviceRow.tsx` draws what `docs/DESIGN.md` § "The device row" rules. A lucide
@@ -1553,3 +1661,8 @@ sticks above the keyboard.
   for a command rather than an edit.
 - `session.delete` and renaming a session exist in the protocol and the device implements both, but
   the web UI has no entry point for either.
+- The session-flow changes — brief pages and the fetch on opening a tool row (A60), the newest page
+  beside the subscribe, the stale copy, where a conversation opens and the reading position, and
+  Close on a row a terminal holds (A61) — are covered by the vitest suites and the mock, and have
+  not been driven in a browser or against a device that speaks A60 or A61; jsdom lays nothing out,
+  so how the opening settles while real Markdown arrives is untried.
