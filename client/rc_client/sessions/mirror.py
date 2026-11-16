@@ -279,13 +279,14 @@ class MirrorService:
         timer.report(claude=len(self._claude), codex=len(self._codex), grok=len(self._grok))
 
     async def _discover_codex(self) -> list[rollouts.RolloutInfo] | None:
-        """The rollouts to mirror, or None while the shared daemon has not been tried yet.
+        """The rollouts to mirror, or None until the shared daemon has been tried and read.
 
         The device tries the daemon in the background as it starts (A11): a
-        thread the daemon serves is the daemon's to describe, and until it has
-        been asked the mirror cannot tell such a thread from a terminal's own.
+        thread the daemon serves is the daemon's to describe, and until its
+        index has been read once the mirror would take such a thread for a
+        terminal's own, held by the daemon's process.
         """
-        if self.codex_daemon is not None and not self.codex_daemon.attempted:
+        if self.codex_daemon is not None and not self.codex_daemon.indexed:
             return None
         return await asyncio.to_thread(
             rollouts.discover, self.limits.max_sessions, self.limits.max_age_days

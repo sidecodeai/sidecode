@@ -53,11 +53,18 @@ class AgentStartup:
         self._task = asyncio.create_task(self._run(), name="agents")
 
     async def stop(self) -> None:
+        """Stop starting agents, and let go of whatever waits for one: the device is stopping."""
         task, self._task = self._task, None
         if task is not None:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        for event in self._started.values():
+            event.set()
+
+    def needs_service(self, agent: str) -> bool:
+        """Whether `agent` starts by reaching a service: Codex its daemon, Grok its leader."""
+        return agent in self._before
 
     def started(self, agent: str) -> bool:
         """Whether `agent` has started, or nothing is starting it."""

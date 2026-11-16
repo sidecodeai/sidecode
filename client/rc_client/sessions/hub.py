@@ -59,6 +59,10 @@ MAX_ATTACHMENTS = 8
 # otherwise grow them without end. A59 can withdraw thousands of `codex exec`
 # runs at once, and every removal past the bound stays in the apps for good.
 MAX_PENDING_REMOVALS = 10_000
+# What a removal's link is while the link could not take its frame: said again on the next pass.
+UNSAID = -1
+# The room in the link's queue that repeated removals leave to everything else.
+REMOVAL_HEADROOM = 512
 # How long closing a session may take before the reply goes out anyway (A39).
 # An agent that will not die is still let go of here: the person asked for the
 # session to be closed, and a request that never answers helps nobody.
@@ -172,6 +176,13 @@ class SessionHub:
         # Whether the gateway link is up right now; the daemon wires the real
         # answer in, so a repeated removal is never published into a gap.
         self.link_up: Callable[[], bool] = lambda: True
+        # How many more frames the link takes right now; past that it drops them.
+        self.link_room: Callable[[], int] = lambda: MAX_PENDING_REMOVALS
+        # Whether something may act through an agent yet: after a restart each agent starts in
+        # the background, and the daemon wires in which have (`Daemon._may_act`).
+        self.may_act: Callable[[str], bool] = lambda agent: True
+        # The sessions an app has asked something of since the daemon started (A58).
+        self._app_touched: set[str] = set()
         # The requests being served, by session and request id, and what they will answer.
         self._flying: dict[tuple[str, str], asyncio.Future[dict[str, Any]]] = {}
         # Set when the daemon stops: no queue is drained after that.
@@ -398,6 +409,18 @@ class SessionHub:
         self.entries[session.session_id] = entry
         self.registry.upsert_session(session)
         return entry
+
+    @property
+    def closing(self) -> bool:
+        """Whether the daemon is stopping, so nothing new may start."""
+        return self._closed
+
+    def note_app_request(self, session_id: str) -> None:
+        """An app asked something of this session: it is the person's, whatever else says so."""
+        self._app_touched.add(session_id)
+
+    def app_touched(self, session_id: str) -> bool:
+        return session_id in self._app_touched
 
     def begin_close(self) -> None:
         """The daemon is stopping. Its bridges close with it, and their CLIs do not.
@@ -1675,9 +1698,15 @@ class SessionHub:
         down when it went out.
         """
         session_id = entry.session.session_id
+        # With no room the frame `_remove` publishes is dropped, so the removal is said again on
+        # the next pass rather than on the next link.
+        link = self._link if self.link_up() and self.link_room() > 0 else UNSAID
         await self._remove(entry)
-        self._removed.append((self._link, session_id))
-        del self._removed[:-MAX_PENDING_REMOVALS]
+        self._removed.append((link, session_id))
+        lost = len(self._removed) - MAX_PENDING_REMOVALS
+        if lost > 0:
+            del self._removed[:lost]
+            log.warning("removals the gateway may never hear of were forgotten", count=lost)
 
     async def _repeat_removals(self) -> None:
         """Announce again every removal that went out over an earlier link.
@@ -1688,9 +1717,13 @@ class SessionHub:
         if not self.link_up():
             return
         current = self._link
-        stale = [session_id for link, session_id in self._removed if link < current]
-        self._removed = [item for item in self._removed if item[0] >= current]
-        for session_id in stale:
+        # No more than the link takes now, leaving room for everything else: the rest wait for the
+        # next pass, which comes with the next scan.
+        room = max(0, self.link_room() - REMOVAL_HEADROOM)
+        stale = [item for item in self._removed if item[0] < current][:room]
+        said = set(stale)
+        self._removed = [item for item in self._removed if item not in said]
+        for _, session_id in stale:
             await self.publish({"type": "session.removed", "session_id": session_id})
 
     async def _holder_control(self, entry: SessionEntry) -> str:

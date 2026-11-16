@@ -207,6 +207,12 @@ class GatewayLink:
     def connected(self) -> bool:
         return self._connected
 
+    def room(self) -> int:
+        """How many more frames `send` takes right now; past that, or unlinked, it drops them."""
+        if not (self._connected or self._greeting):
+            return 0
+        return max(0, SEND_QUEUE_ITEMS - len(self._queue))
+
     def start(self) -> None:
         self._task = asyncio.create_task(self._run())
 

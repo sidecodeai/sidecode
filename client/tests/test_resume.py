@@ -428,6 +428,26 @@ async def test_the_resume_sends_the_fixed_prompt_as_the_person(harness: Harness)
     assert harness.entry.session.resume is None
 
 
+async def test_a_resume_due_while_its_agent_is_still_starting_waits_for_it(
+    harness: Harness,
+) -> None:
+    """After a restart each agent starts in the background; nothing is dropped meanwhile."""
+    await enable(harness)
+    await harness.hit_limit(LimitStop(FIVE_HOURS, NOW + HOUR))
+    harness.clock.advance(HOUR + 2 * MINUTE)
+    started: set[str] = set()
+    harness.hub.may_act = lambda agent: agent in started
+
+    await harness.hub.resumes.tick()
+    assert harness.runner.sent == []
+    assert [event["status"] for event in harness.events("resume")] == ["scheduled"]
+    assert harness.entry.session.resume is not None
+
+    started.add("claude")
+    await harness.hub.resumes.tick()
+    assert harness.runner.sent == [RESUME_PROMPT]
+
+
 async def test_a_resume_whose_time_has_not_come_stays_pending(harness: Harness) -> None:
     await enable(harness)
     await harness.hit_limit(LimitStop(FIVE_HOURS, NOW + HOUR))

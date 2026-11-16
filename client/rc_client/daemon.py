@@ -49,6 +49,9 @@ AGENT_REFRESH_INTERVAL = 900.0
 # How long the first hello of a run waits for the first scan to say which terminals still hold
 # their sessions. The scan runs while the link connects, so this is the most it can cost.
 FIRST_SCAN_WAIT = 3.0
+# How long the first hello of a device's first run on this build waits for its agents, with no
+# list from an earlier run to say instead: inside the 15 s the gateway gives a hello.
+FIRST_AGENTS_WAIT = 10.0
 # How long a request that acts through an agent waits for that agent to start after a restart,
 # inside the 20 s the native apps give a request. Past it the request is refused and never run.
 AGENT_START_WAIT = 15.0
@@ -101,6 +104,8 @@ class Daemon:
             proxy=config.proxy,
         )
         self.hub.link_up = lambda: self.link.connected
+        self.hub.link_room = self.link.room
+        self.hub.may_act = self._may_act
         self._greeted = False
         # What the last hello or `agents.updated` of this run said the agents are, once one has.
         self._said: list[dict[str, Any]] | None = None
@@ -135,6 +140,7 @@ class Daemon:
         # can publish a session, so a restart does not lose one.
         self.hub.resumes.load()
         self._last_detected = announced.load(self.registry)
+        self._seed_agents()
         # The bridges and terminal proxies of the CLIs that outlived the last daemon have been
         # dialling back since it went.
         await self._prepare_attachment()
@@ -187,6 +193,29 @@ class Daemon:
         except OSError as exc:
             log.warning("pi attachment unavailable", error=str(exc))
 
+    def _seed_agents(self) -> None:
+        """Act through what the last run found for an agent that needs no service, until asked.
+
+        Claude and pi are a CLI each, and what they offered when the daemon last stopped is what
+        they offer now, so a request for one need not wait for it to be asked again. Codex and
+        Grok are not: which runner a request gets depends on their daemon and their leader.
+        """
+        decoded = [announced.decode(item) for item in self._last_detected]
+        self.agents = [
+            info
+            for info in decoded
+            if info is not None and not self._startup.needs_service(info.agent)
+        ]
+
+    def _may_act(self, agent: str) -> bool:
+        """Whether something may act through `agent` now: it has started, or it needs no service
+        and the last run's answer stands in for this run's."""
+        if self._startup.started(agent):
+            return True
+        return not self._startup.needs_service(agent) and any(
+            info.agent == agent for info in self.agents
+        )
+
     async def _detect_one(self, agent: str) -> AgentInfo | None:
         return await detect_one(agent, self._detect_context())
 
@@ -236,7 +265,7 @@ class Daemon:
         if self._last_detected:
             settled = await scan
         else:
-            settled, _ = await asyncio.gather(scan, self._startup.wait_all(FIRST_SCAN_WAIT))
+            settled, _ = await asyncio.gather(scan, self._startup.wait_all(FIRST_AGENTS_WAIT))
         if not settled:
             log.warning(
                 "first hello sent before the first terminal scan settled", waited=FIRST_SCAN_WAIT
@@ -361,15 +390,36 @@ class Daemon:
         """
 
         async def handle(frame: dict[str, Any]) -> dict[str, Any]:
+            await self._arrived(kind, frame)
             agent = self._acting_agent(kind, frame)
-            if agent is not None and not await self._startup.wait(agent, AGENT_START_WAIT):
+            if (
+                agent is not None
+                and not self._may_act(agent)
+                and not await self._startup.wait(agent, AGENT_START_WAIT)
+            ):
                 raise RcError(
                     "agent_unavailable",
                     f"{agent} is still starting on this device; try again in a moment",
                 )
+            if self.hub.closing:
+                raise RcError("agent_unavailable", "this device is stopping")
             return await handler(frame)
 
         return handle
+
+    async def _arrived(self, kind: str, frame: dict[str, Any]) -> None:
+        """What a request does as it arrives, before it waits for its agent.
+
+        The session is the person's from now on, so withdrawing what is not the device's leaves it
+        alone (A59); and their message or command cancels a resume that falls due while it waits,
+        as it would have before there was anything to wait for (A35).
+        """
+        session_id = frame.get("session_id")
+        if not isinstance(session_id, str) or session_id not in self.hub.entries:
+            return
+        self.hub.note_app_request(session_id)
+        if kind in {"session.send", "session.command"}:
+            await self.hub.resumes.cancelled_by_person(session_id)
 
     def _acting_agent(self, kind: str, frame: dict[str, Any]) -> str | None:
         """The agent a request acts through: the one it names, or its session's."""

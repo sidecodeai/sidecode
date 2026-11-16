@@ -1246,18 +1246,26 @@ shared daemon has been tried (its model list and its handshake), since its answe
 daemon answered; Grok once its leader has been tried. The first `hello` lists what this run has
 found so far and, for the agents not yet started, what the last run detected, kept in the registry
 (`agents/announced.py`); `agents.updated` follows when an agent's answer changes the list. A
-device that no run has detected for yet gives detection the same three seconds as the first scan
-rather than tell the gateway it has no agents. A request that acts through an agent
+device with nothing kept, on its first run of this client, gives detection up to ten seconds
+(`FIRST_AGENTS_WAIT`, inside the fifteen the gateway gives a `hello`) rather than tell the gateway
+it has no agents. Claude and pi need no service, and what they offered when the daemon last
+stopped is what they offer now, so the device acts through the last run's answer for them until
+this run's lands, and a request for one never waits. A request that acts through Codex or Grok
 (`session.create`, `send`, `stop`, `set`, `commands`, `command`, `takeover`, `archive` and
 `delete`) waits for that agent alone, so a Claude reply never waits for the Codex daemon or the
 Grok leader. It waits at most 15 seconds (`AGENT_START_WAIT`, inside the 20 seconds the native
 apps give a request), rather than find no agent or take Codex's fallback path for a thread the
 shared daemon may be serving; past that it is answered `agent_unavailable` and never carried
-out, so an app that gave up on it never sees it happen later. A history read, a queue edit, a
-terminal and everything else never wait. Withdrawing the Codex sessions that are not the
-device's follows Codex's start, and nothing waits for it. Until the Codex daemon and the Grok
-leader have each been tried once, the scan leaves their files alone, since a thread either serves
-is theirs to describe; Claude's terminals are scanned from the first pass. The hub restores the
+out, so an app that gave up on it never sees it happen later, and the same answer goes to one
+that comes while the daemon stops. No Codex runner of the device's own is built while the daemon
+is being tried, whatever asks for it. A history read, a queue edit, a terminal and everything else
+never wait. The person's message or command still cancels a resume (A35) as it arrives, before
+it waits, and a resume that falls due while its agent is starting waits for a later pass rather
+than fail on an agent nobody has asked about yet. Withdrawing the Codex sessions that are not the
+device's follows Codex's start, and nothing waits for it. Until the Grok leader has been tried
+once, and the Codex daemon has been tried and, when it answered, its index read once, the scan
+leaves their files alone, since a thread either serves is theirs to describe; Claude's terminals
+are scanned from the first pass. The hub restores the
 sessions from their rows alone: a session's block positions (A8) are read when it first writes a
 block, where reading them for every session as the device started read every event it had stored
 before the sockets could open.
@@ -2356,11 +2364,14 @@ off the loop, before the next is read: a write queued while the registry applies
 waits for it, and the loop with it. So thousands of exec runs neither hold the link back nor stall
 the loop for more than a moment. A thread whose rollout is not on disk, or cannot be read, is asked
 about with `thread/read` when the daemon is connected, and is otherwise left alone until a later
-run. Only stored terminal sessions are looked at — never one the device created, nor one in the
-middle of a turn it drives — and each one dropped goes with `session.removed`, which the hub says
-again on the next link; the hub keeps up to 10,000 of them for a link (`MAX_PENDING_REMOVALS`),
-since a removal the gateway never hears leaves the session in the apps for good. New foreign work
-and new exec runs never appear on either path.
+run. Only stored terminal sessions are looked at — never one the device created, one in the
+middle of a turn it drives, one it holds (A58) or one an app has acted on since it started — and
+each one dropped goes with `session.removed`, which the hub says again on the next link; the hub
+keeps up to 10,000 of them for a link (`MAX_PENDING_REMOVALS`), since a removal the gateway never
+hears leaves the session in the apps for good. They are said again a queue's worth at a time,
+leaving room for everything else, because the link drops a frame its queue has no room for; one
+the link could not take is said again on the next pass, and any that the bound forgets is logged.
+New foreign work and new exec runs never appear on either path.
 
 ### When there is no daemon
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import itertools
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -31,14 +32,21 @@ from rc_client.agents.grok.service import GrokLeaderService
 from rc_client.agents.registry import DetectContext
 from rc_client.agents.startup import AgentStartup
 from rc_client.daemon import Daemon
-from rc_client.models import AgentInfo, Session
+from rc_client.errors import RcError
+from rc_client.gateway import SEND_QUEUE_ITEMS, GatewayLink
+from rc_client.models import AgentAccount, AgentInfo, Choice, Session
+from rc_client.proxy import DIRECT
 from rc_client.registry import Registry
+from rc_client.sessions import resume as resume_module
 from rc_client.sessions.hub import SessionHub
 from rc_client.sessions.mirror import MirrorService
-from tests.test_codex_daemon_sessions import RecordingRepair
+from tests.test_codex_daemon_sessions import Harness, RecordingRepair, harness
+from tests.test_codex_daemon_sessions import agents as codex_agents
 from tests.test_codex_exec_runs import published, write_rollout
 from tests.test_first_hello import device_config
-from tests.test_gateway_link import FakeGateway
+from tests.test_gateway_link import FakeGateway, hello_payload
+
+__all__ = ["harness"]
 
 LAST_RUN = [
     AgentInfo(agent="claude", available=True, version="1.0").to_dict(),
@@ -52,21 +60,36 @@ THIS_RUN = {
 
 @contextlib.asynccontextmanager
 async def starting_daemon(
-    monkeypatch: pytest.MonkeyPatch, codex_attached: asyncio.Event
+    monkeypatch: pytest.MonkeyPatch,
+    codex_attached: asyncio.Event,
+    *,
+    saved: list[dict[str, Any]] | None = LAST_RUN,
+    asked: dict[str, asyncio.Event] | None = None,
+    resume: str | None = None,
 ) -> AsyncIterator[tuple[Daemon, FakeGateway, list[str]]]:
     """A restarted daemon whose shared Codex daemon and Grok leader answer only once
-    `codex_attached` is set, and the sessions `session.send` was carried out for."""
+    `codex_attached` is set, and the sessions `session.send` was carried out for.
+
+    `saved` is what the last run detected, `asked` holds back the detection of an agent until
+    its event is set, and `resume` is a session with a resume already due (A35).
+    """
     registry = Registry(config_module.database_path())
-    announced.save(registry, LAST_RUN)
+    if saved is not None:
+        announced.save(registry, saved)
     for session_id, agent in (("s-claude", "claude"), ("s-codex", "codex")):
         registry.upsert_session(
             Session(session_id=session_id, device_id="dev-1", agent=agent, cwd="/repo")
         )
+    if resume is not None:
+        registry.set_kv(resume_module.PREFERENCE_KEY, "1")
+        registry.save_resume(resume, 1, False, 0, 300, "remote")
     registry.close()
     sent: list[str] = []
 
-    async def send(self: SessionHub, frame: dict[str, Any]) -> dict[str, Any]:
-        sent.append(str(frame["session_id"]))
+    async def send(
+        self: SessionHub, frame: dict[str, Any], source: str = "remote"
+    ) -> dict[str, Any]:
+        sent.append(str(frame["session_id"]) + ("" if source == "remote" else f" ({source})"))
         return {"accepted": "sent"}
 
     # Before the daemon is built: it takes its handlers as it is built.
@@ -81,6 +104,9 @@ async def starting_daemon(
         return False
 
     async def detect(agent: str, context: DetectContext) -> AgentInfo | None:
+        gate = (asked or {}).get(agent)
+        if gate is not None:
+            await gate.wait()
         return THIS_RUN.get(agent)
 
     monkeypatch.setattr(daemon.codex, "start", reach)
@@ -192,6 +218,124 @@ async def test_a_read_never_waits_for_an_agent(monkeypatch: pytest.MonkeyPatch) 
         assert not codex_attached.is_set()
 
 
+async def test_a_claude_request_acts_on_the_last_run_s_answer_without_waiting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Claude is a CLI: what it offered when the daemon stopped stands in until it is asked."""
+    codex_attached, claude_asked = asyncio.Event(), asyncio.Event()
+    async with starting_daemon(monkeypatch, codex_attached, asked={"claude": claude_asked}) as (
+        _,
+        server,
+        sent,
+    ):
+        await server.wait_for("hello", timeout=5)
+        await server.send(send_frame("claude-send", "s-claude"))
+        assert (await reply_to(server, "claude-send", timeout=2))["ok"] is True
+        assert sent == ["s-claude"]
+        assert not claude_asked.is_set()
+
+
+async def test_a_first_run_hello_waits_for_the_agents_a_while(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With nothing kept from an earlier run, a hello that did not wait would list no agents."""
+    monkeypatch.setattr(daemon_module, "FIRST_SCAN_WAIT", 0.1)
+    monkeypatch.setattr(daemon_module, "FIRST_AGENTS_WAIT", 3.0)
+    codex_attached, claude_asked = asyncio.Event(), asyncio.Event()
+    asyncio.get_running_loop().call_later(0.5, claude_asked.set)
+    async with starting_daemon(
+        monkeypatch, codex_attached, saved=None, asked={"claude": claude_asked}
+    ) as (_, server, _):
+        hello = await server.wait_for("hello", timeout=5)
+        assert [item["agent"] for item in hello["agents"]] == ["claude"]
+
+
+async def test_a_message_waiting_for_its_agent_still_cancels_a_due_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The person got there first (A35), though their message waits for Codex to start."""
+    codex_attached = asyncio.Event()
+    async with starting_daemon(monkeypatch, codex_attached, resume="s-codex") as (
+        daemon,
+        server,
+        sent,
+    ):
+        await server.wait_for("hello", timeout=5)
+        # Due, but not sent while its agent is still starting.
+        await daemon.hub.resumes.tick()
+        assert sent == []
+        assert daemon.hub.entry("s-codex").session.resume is not None
+        await server.send(send_frame("codex-send", "s-codex"))
+
+        async def cancelled() -> None:
+            while daemon.hub.entry("s-codex").session.resume is not None:
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(cancelled(), timeout=2)
+        assert not codex_attached.is_set()
+        codex_attached.set()
+        assert (await reply_to(server, "codex-send", timeout=5))["ok"] is True
+        await daemon.hub.resumes.tick()
+        assert sent == ["s-codex"]
+
+
+async def test_a_request_that_comes_while_the_device_stops_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent: list[str] = []
+
+    async def send(self: SessionHub, frame: dict[str, Any]) -> dict[str, Any]:
+        sent.append(str(frame["session_id"]))
+        return {"accepted": "sent"}
+
+    monkeypatch.setattr(SessionHub, "send", send)
+    registry = Registry(config_module.database_path())
+    registry.upsert_session(
+        Session(session_id="s-claude", device_id="dev-1", agent="claude", cwd="/r")
+    )
+    registry.close()
+    daemon = Daemon(device_config())
+    try:
+        daemon.hub.load()
+        daemon.hub.begin_close()
+        with pytest.raises(RcError) as refused:
+            await daemon._handlers()["session.send"](send_frame("late", "s-claude"))
+        assert refused.value.code == "agent_unavailable"
+        assert sent == []
+    finally:
+        await daemon.hub.close()
+        daemon.registry.close()
+
+
+def test_the_last_run_s_agents_read_back_as_they_were_said() -> None:
+    claude = AgentInfo(
+        agent="claude",
+        available=True,
+        version="2.1.325",
+        path="/usr/local/bin/claude",
+        models=[Choice("opus", "Opus"), Choice("sonnet", "Sonnet")],
+        default_model="opus",
+        permission_modes=[Choice("default", "Ask")],
+        default_permission_mode="default",
+        efforts=[Choice("high", "High")],
+        default_effort="high",
+        speeds=[Choice("fast", "Fast")],
+        capabilities=["interrupt", "takeover", "close_terminal"],
+        attach="channel",
+        attach_ready=True,
+        shared_interrupt=True,
+        shared_settings=True,
+        shared_settings_keys=["model", "effort"],
+        shared_attachments=True,
+        shared_steer=True,
+        accounts=[AgentAccount(provider="anthropic", method="account", plan="max", email="a@b.c")],
+    )
+    decoded = announced.decode(claude.to_dict())
+    assert decoded is not None
+    assert decoded.to_dict() == claude.to_dict()
+    assert announced.decode({"available": True}) is None
+
+
 async def test_an_agent_whose_service_fails_is_still_asked_what_it_offers() -> None:
     answers: dict[str, AgentInfo | None] = {}
 
@@ -244,12 +388,14 @@ async def test_thousands_of_exec_runs_are_withdrawn_a_batch_at_a_time(
         published(hub, thread_id)
     registry.flush()
     batches: list[int] = []
+    marks: list[int] = []
     read = codex_rollouts.owned_at
 
     def owned_at(paths: dict[str, list[str]]) -> dict[str, bool]:
         # The batch before has been written: nothing of it waits in the registry's queue.
         assert registry._queued == []
         batches.append(len(paths))
+        marks.append(turns)
         return read(paths)
 
     monkeypatch.setattr(codex_rollouts, "owned_at", owned_at)
@@ -270,8 +416,8 @@ async def test_thousands_of_exec_runs_are_withdrawn_a_batch_at_a_time(
         assert hub.entries == {}
         assert sum(batches) == len(runs)
         assert len(batches) == 4 and max(batches) == PRUNE_BATCH
-        # The loop went on with other work all along.
-        assert turns > len(runs)
+        # The loop went on with other work between one batch and the next.
+        assert all(earlier < later for earlier, later in itertools.pairwise(marks))
         # Every removal is said again on the next link, not only the last 64.
         frames.clear()
         hub.link_up = lambda: True
@@ -438,5 +584,163 @@ async def test_a_tick_follows_an_attempt_under_way_instead_of_making_its_own(
         assert (attempts, service.attempted) == (2, True)
     finally:
         await service.stop()
+        await hub.close()
+        registry.close()
+
+
+async def test_more_removals_than_the_link_queue_holds_all_reach_the_gateway(
+    tmp_path: Path,
+) -> None:
+    """The link drops what does not fit its queue, so repeats go a queue's worth at a time."""
+    server = FakeGateway()
+    await server.start()
+    link = GatewayLink(server.url, "tok-1", hello=hello_payload, handlers={}, proxy=DIRECT)
+
+    async def publish(frame: dict[str, Any]) -> None:
+        await link.send(frame)
+
+    registry = Registry(tmp_path / "state.sqlite3")
+    hub = SessionHub(registry, publish, "dev-1", lambda: [])
+    hub.link_up = lambda: link.connected
+    hub.link_room = link.room
+    gone = [f"t-{index:05d}" for index in range(SEND_QUEUE_ITEMS + 904)]
+    hub._removed = [(0, session_id) for session_id in gone]
+    link.start()
+    try:
+        await asyncio.wait_for(server.ready.wait(), timeout=5)
+        hub.snapshot()
+
+        def told() -> list[str]:
+            return [frame["session_id"] for frame in server.frames("session.removed")]
+
+        async def all_told() -> None:
+            while len(told()) < len(gone):
+                await hub.sweep_ghosts()
+                await asyncio.sleep(0.05)
+
+        await asyncio.wait_for(all_told(), timeout=20)
+        assert sorted(told()) == gone
+        assert hub._removed == []
+    finally:
+        await link.stop()
+        await server.stop()
+        await hub.close()
+        registry.close()
+
+
+async def test_the_withdrawal_leaves_the_sessions_the_person_took_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An exec run the person opened and wrote to from an app is theirs now (A58, A59)."""
+    root = tmp_path / "codex-sessions"
+    monkeypatch.setattr(codex_rollouts, "SESSIONS_DIR", root)
+
+    async def publish(frame: dict[str, Any]) -> None:
+        return None
+
+    registry = Registry(tmp_path / "state.sqlite3")
+    hub = SessionHub(registry, publish, "dev-1", lambda: [])
+    for thread_id in ("t-held", "t-asked", "t-plain"):
+        write_rollout(root, thread_id, "codex_exec", "exec")
+        published(hub, thread_id)
+    hub.entry("t-held").session.held = True
+    hub.note_app_request("t-asked")
+    try:
+        await CodexDaemonService(hub, "0.1.0").prune_foreign()
+        assert sorted(hub.entries) == ["t-asked", "t-held"]
+    finally:
+        await hub.close()
+        registry.close()
+
+
+async def test_the_mirror_reads_codex_rollouts_only_once_the_daemon_s_index_was_read(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Until then a thread the daemon serves reads as a terminal's, held by its own process."""
+    asked: list[str] = []
+
+    def discover(*args: Any) -> list[Any]:
+        asked.append("codex")
+        return []
+
+    monkeypatch.setattr(codex_rollouts, "discover", discover)
+    harness.daemon.replies["thread/list"] = {"data": []}
+    harness.daemon.replies["thread/loaded/list"] = {"data": []}
+    mirror = MirrorService(harness.hub, codex_daemon=harness.service)
+    assert await harness.service.start("/bin/codex") is True
+    await mirror.scan_once(settings=False)
+    assert asked == []
+    await harness.service.refresh()
+    await mirror.scan_once(settings=False)
+    assert asked == ["codex"]
+
+
+async def test_a_tick_never_opens_a_second_connection_to_the_daemon(harness: Harness) -> None:
+    """The device's own attempt connects while the tick is starting the daemon."""
+    switches: list[bool] = []
+
+    async def mode_changed() -> None:
+        switches.append(True)
+
+    class SlowRepair(RecordingRepair):
+        def __init__(self) -> None:
+            super().__init__()
+            self.release = asyncio.Event()
+
+        async def ensure_running(self) -> bool:
+            self.ensured += 1
+            await self.release.wait()
+            return False
+
+    repair = SlowRepair()
+    harness.daemon.replies["thread/list"] = {"data": []}
+    harness.daemon.replies["thread/loaded/list"] = {"data": []}
+    service = CodexDaemonService(
+        harness.hub, "0.1.0", mode_changed, scan_terminals=harness.terminals, repair=repair
+    )
+    try:
+        tick = asyncio.create_task(service.tick("/bin/codex"))
+        await asyncio.sleep(0.05)
+        assert repair.ensured == 1
+        assert await service.start("/bin/codex") is True
+        repair.release.set()
+        await tick
+        assert [method for method, _ in harness.daemon.calls].count("initialize") == 1
+        assert switches == []
+    finally:
+        await service.stop()
+
+
+async def test_no_codex_runner_is_built_while_the_daemon_is_being_tried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The daemon may be serving the thread: a private app-server would write it as well."""
+
+    async def publish(frame: dict[str, Any]) -> None:
+        return None
+
+    registry = Registry(tmp_path / "state.sqlite3")
+    hub = SessionHub(registry, publish, "dev-1", codex_agents)
+    service = CodexDaemonService(hub, "0.1.0")
+    hub.codex_daemon = service
+    answer = asyncio.Event()
+
+    async def connect(binary: str | None) -> bool:
+        await answer.wait()
+        return False
+
+    monkeypatch.setattr(service, "_connect", connect)
+    published(hub, "t-1")
+    attempt = asyncio.create_task(service.start(None))
+    try:
+        await asyncio.sleep(0)
+        assert service.attempting
+        with pytest.raises(RcError) as refused:
+            await hub.send({"session_id": "t-1", "text": "go on"})
+        assert refused.value.code == "agent_unavailable"
+        assert hub.entry("t-1").runner is None
+    finally:
+        answer.set()
+        await attempt
         await hub.close()
         registry.close()

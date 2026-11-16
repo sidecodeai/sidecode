@@ -265,10 +265,19 @@ class ResumeScheduler:
             due = [
                 record
                 for record in sorted(self._records.values(), key=lambda item: item.at)
-                if record.pending and record.at <= now
+                if record.pending and record.at <= now and self._agent_started(record)
             ]
             for record in due:
                 await self._fire(record)
+
+    def _agent_started(self, record: PendingResume) -> bool:
+        """Whether the session's agent has started, so the resume can be sent through it.
+
+        After a restart each agent starts in the background, and a resume that falls due before
+        its agent has waits for a later pass rather than fail on an agent not asked about yet.
+        """
+        entry = self.hub.entries.get(record.session_id)
+        return entry is None or self.hub.may_act(entry.session.agent)
 
     async def _fire(self, record: PendingResume) -> None:
         entry = self.hub.entries.get(record.session_id)

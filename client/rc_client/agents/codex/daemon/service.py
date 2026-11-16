@@ -168,6 +168,9 @@ class CodexDaemonService:
         # then the mirror reads no rollout, since the daemon may be serving it.
         self._attempt: asyncio.Future[bool] | None = None
         self.attempted = False
+        # Whether the index has been read since the daemon answered, so that the
+        # threads it serves are known before the mirror reads their rollouts.
+        self._read_index = False
 
     # ------------------------------------------------------------- lifecycle
 
@@ -227,6 +230,8 @@ class CodexDaemonService:
         waits for them. A caller that comes while an attempt is under way waits
         for its answer rather than opening a second connection.
         """
+        if self.ready:
+            return True
         attempt = self._attempt
         if attempt is None:
             attempt = asyncio.ensure_future(self._connect(binary))
@@ -238,6 +243,21 @@ class CodexDaemonService:
         self.attempted = True
         if self._attempt is attempt:
             self._attempt = None
+
+    @property
+    def attempting(self) -> bool:
+        """Whether an attempt to reach the daemon is waiting for its answer."""
+        return self._attempt is not None
+
+    @property
+    def indexed(self) -> bool:
+        """Whether the rollout mirror may read Codex's files.
+
+        Not before the daemon has been tried, and, when it answered, not before
+        its index has been read once: until then a thread it serves reads as a
+        terminal's, held by the daemon's own process.
+        """
+        return self.attempted and (not self.ready or self._read_index)
 
     async def _connect(self, binary: str | None) -> bool:
         if not socket_exists():
@@ -291,6 +311,9 @@ class CodexDaemonService:
         # Nothing else on this machine ever starts the shared daemon, and
         # without one every terminal Codex is takeover-only.
         await self._repair.ensure_running()
+        if self.ready or self._client is not None or self._attempt is not None:
+            # Somebody else reached it, or is trying to, while it was being started.
+            return
         if not await self.start(binary):
             return
         await self.refresh()
@@ -370,6 +393,7 @@ class CodexDaemonService:
                     False, epochs.get(summary.thread_id, runner.activity_epoch)
                 )
         await self._check_children()
+        self._read_index = True
 
     async def _check_children(self) -> None:
         """Let a turn end whose subagents have gone silent for good.
@@ -562,10 +586,14 @@ class CodexDaemonService:
     def _prunable(self, entry: SessionEntry) -> bool:
         """Whether A18 may still take this session away.
 
-        A session this device created is its own whatever the index says, and
-        one in the middle of a turn is being driven from an app right now.
+        A session this device created is its own whatever the index says, one
+        in the middle of a turn is being driven from an app right now, and one
+        the device holds or an app has acted on since the start is the
+        person's, whatever its rollout says (A58).
         """
         if entry.session.agent != "codex" or entry.session.origin == "remote":
+            return False
+        if entry.session.held or self.hub.app_touched(entry.session.session_id):
             return False
         runner = entry.runner
         if runner is None:

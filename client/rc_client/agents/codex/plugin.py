@@ -86,6 +86,10 @@ async def build_runner(spec: RunnerSpec) -> SessionRunner:
     daemon = spec.codex_daemon
     if daemon is not None and daemon.ready:
         return daemon.session_for(spec.entry, spec.resume)
+    if daemon is not None and daemon.attempting:
+        # The daemon may be serving this thread, and an app-server of the device's own beside it
+        # would be a second writer of the same rollout.
+        raise RcError("agent_unavailable", "codex is still starting on this device; try again soon")
     if not spec.info.path:
         raise RcError("agent_unavailable", "codex is not installed on this device")
     session = spec.session
