@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from ... import __version__
-from ...errors import RcError
+from ...errors import AgentStarting, RcError
 from ...models import AgentInfo, Choice, Command, Session
+from .. import budget
 from ..base import SessionRunner
 from ..registry import CloseSpec, DetectContext, RenameSpec, RunnerSpec
 from . import account, ending, naming, runtime
@@ -15,6 +16,9 @@ from .daemon.transport import socket_exists
 from .models import ModelCatalog, catalog_cache
 
 AGENT = "codex"
+# How long a runner waits for the shared daemon to be reached when no request set an
+# allowance (`budget`), as for a resume (A35).
+ATTEMPT_WAIT = 10.0
 
 PERMISSION_MODES = [
     Choice("untrusted", "Ask for everything"),
@@ -84,12 +88,16 @@ async def commands(session: Session) -> list[Command]:
 
 async def build_runner(spec: RunnerSpec) -> SessionRunner:
     daemon = spec.codex_daemon
+    if (
+        daemon is not None
+        and not daemon.ready
+        and not await daemon.settled(budget.left(ATTEMPT_WAIT))
+    ):
+        # The daemon is being reached, and may be serving this thread: an app-server of the
+        # device's own beside it would be a second writer of the same rollout.
+        raise AgentStarting("codex")
     if daemon is not None and daemon.ready:
         return daemon.session_for(spec.entry, spec.resume)
-    if daemon is not None and daemon.attempting:
-        # The daemon may be serving this thread, and an app-server of the device's own beside it
-        # would be a second writer of the same rollout.
-        raise RcError("agent_unavailable", "codex is still starting on this device; try again soon")
     if not spec.info.path:
         raise RcError("agent_unavailable", "codex is not installed on this device")
     session = spec.session

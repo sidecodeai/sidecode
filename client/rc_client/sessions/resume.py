@@ -20,7 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from ..errors import RcError, TerminalNotReady
+from ..errors import AgentStarting, RcError, TerminalNotReady
 from ..logging_setup import logger
 from ..models import Session, SessionResume, now_ms
 from .busy import BUSY_STATES
@@ -306,9 +306,10 @@ class ResumeScheduler:
                 source="resume",
             )
         except RcError as exc:
-            if isinstance(exc, TerminalNotReady) or exc.code == "conflict":
-                # The terminal that holds the session has not reconnected, or the session still
-                # reads as the terminal's: a restart's wait, which a minute may end.
+            if isinstance(exc, (TerminalNotReady, AgentStarting)) or exc.code == "conflict":
+                # The terminal that holds the session has not reconnected, the session still
+                # reads as the terminal's, or its agent is still being reached: a restart's wait,
+                # which a minute may end.
                 await self._defer(record, exc.message)
             else:
                 await self._forget(record, "dropped", exc.message)

@@ -11,7 +11,7 @@ from typing import Any
 
 from . import __version__, attachments
 from . import config as config_module
-from .agents import announced
+from .agents import announced, budget
 from .agents.codex.daemon.service import CodexDaemonService
 from .agents.codex.runtime import resolve_binary as resolve_codex
 from .agents.grok.runtime import resolve_binary as resolve_grok
@@ -27,7 +27,7 @@ from .channel.mcp_config import write_mcp_config
 from .channel.settings import write_settings
 from .child_env import scrub_parent_secrets
 from .config import Config
-from .errors import RcError
+from .errors import AgentStarting, RcError
 from .fs import list_dirs, make_dir, merge_recents
 from .gateway import GatewayLink, Handler
 from .git import git_info
@@ -52,9 +52,11 @@ FIRST_SCAN_WAIT = 3.0
 # How long the first hello of a device's first run on this build waits for its agents, with no
 # list from an earlier run to say instead: inside the 15 s the gateway gives a hello.
 FIRST_AGENTS_WAIT = 10.0
-# How long a request that acts through an agent waits for that agent to start after a restart,
-# inside the 20 s the native apps give a request. Past it the request is refused and never run.
-AGENT_START_WAIT = 15.0
+# How long a request that acts through an agent may wait, in all, for that agent to start after a
+# restart and for its shared daemon to be reached. The native apps give a request 20 s, and what it
+# does then takes its own time: a Close may wait 8 s for a CLI to quit. Past it the request is
+# refused and never run.
+AGENT_START_WAIT = 10.0
 # The requests that act through an agent. Each waits for its own agent to start rather than fail;
 # nothing else waits, a history read least of all.
 AGENT_REQUESTS = frozenset(
@@ -105,6 +107,7 @@ class Daemon:
         )
         self.hub.link_up = lambda: self.link.connected
         self.hub.link_room = self.link.room
+        self.hub.offer = self.link.offer
         self.hub.may_act = self._may_act
         self._greeted = False
         # What the last hello or `agents.updated` of this run said the agents are, once one has.
@@ -390,17 +393,15 @@ class Daemon:
         """
 
         async def handle(frame: dict[str, Any]) -> dict[str, Any]:
+            budget.allow(AGENT_START_WAIT)
             await self._arrived(kind, frame)
             agent = self._acting_agent(kind, frame)
             if (
                 agent is not None
                 and not self._may_act(agent)
-                and not await self._startup.wait(agent, AGENT_START_WAIT)
+                and not await self._startup.wait(agent, budget.left(AGENT_START_WAIT))
             ):
-                raise RcError(
-                    "agent_unavailable",
-                    f"{agent} is still starting on this device; try again in a moment",
-                )
+                raise AgentStarting(agent)
             if self.hub.closing:
                 raise RcError("agent_unavailable", "this device is stopping")
             return await handler(frame)
@@ -497,8 +498,14 @@ class Daemon:
         # This reply is the only frame that carries quota (A33). What the device
         # stores is what it publishes, so it keeps the accounts without their
         # windows: otherwise every reply would look like news to the refresh
-        # loop and `agents.updated` would follow each one.
-        self.agents = [info.without_limits() for info in agents]
+        # loop and `agents.updated` would follow each one. An agent that has
+        # started keeps this run's answer: this detection may have begun before
+        # it did, and would say Codex has no daemon when it has one.
+        known = {info.agent: info for info in self.agents}
+        for info in agents:
+            if info.agent not in known or not self._startup.started(info.agent):
+                known[info.agent] = info.without_limits()
+        self.agents = [known[agent] for agent in AGENT_IDS if agent in known]
         return {"agents": [info.to_dict() for info in agents]}
 
     def _detect_context(self, limits: bool = False) -> DetectContext:

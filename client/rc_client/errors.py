@@ -40,3 +40,17 @@ class TerminalNotReady(RcError):
 
     def __init__(self, message: str) -> None:
         super().__init__("timeout", message)
+
+
+class AgentStarting(RcError):
+    """The agent a request acts through has not started yet, or its shared daemon is being reached.
+
+    It answers `agent_unavailable`, and the device has done nothing, nor will it later: after a
+    restart each agent starts in the background, and a request that cannot wait any longer for
+    its agent is refused rather than carried out after the app has given up on it.
+    """
+
+    def __init__(self, agent: str) -> None:
+        super().__init__(
+            "agent_unavailable", f"{agent} is still starting on this device; try again in a moment"
+        )

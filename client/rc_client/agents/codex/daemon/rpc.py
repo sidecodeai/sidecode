@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -83,6 +84,8 @@ class DaemonClient:
         self._tasks: set[asyncio.Task[None]] = set()
         self._stopping = asyncio.Event()
         self._ready = asyncio.Event()
+        # When the connection went down, on the monotonic clock, while it is down.
+        self.down_since: float | None = None
 
     # ------------------------------------------------------------- lifecycle
 
@@ -122,6 +125,7 @@ class DaemonClient:
         except Exception:
             await self._teardown()
             raise
+        self.down_since = None
         log.info("attached to the shared codex daemon", codex_home=str(info.get("codexHome") or ""))
         return info
 
@@ -222,6 +226,8 @@ class DaemonClient:
             log.warning("codex daemon reader stopped", error=str(exc)[:200])
         finally:
             self._ready.clear()
+            if self.down_since is None:
+                self.down_since = time.monotonic()
             self._fail_pending("the codex daemon connection closed")
 
     def _fail_pending(self, message: str) -> None:

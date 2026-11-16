@@ -1253,15 +1253,27 @@ stopped is what they offer now, so the device acts through the last run's answer
 this run's lands, and a request for one never waits. A request that acts through Codex or Grok
 (`session.create`, `send`, `stop`, `set`, `commands`, `command`, `takeover`, `archive` and
 `delete`) waits for that agent alone, so a Claude reply never waits for the Codex daemon or the
-Grok leader. It waits at most 15 seconds (`AGENT_START_WAIT`, inside the 20 seconds the native
-apps give a request), rather than find no agent or take Codex's fallback path for a thread the
-shared daemon may be serving; past that it is answered `agent_unavailable` and never carried
-out, so an app that gave up on it never sees it happen later, and the same answer goes to one
-that comes while the daemon stops. No Codex runner of the device's own is built while the daemon
-is being tried, whatever asks for it. A history read, a queue edit, a terminal and everything else
+Grok leader. It waits at most 10 seconds in all (`AGENT_START_WAIT`, an allowance set as the
+request arrives, `agents/budget.py`), since the native apps give a request 20 seconds and what it
+does then takes its own time, a Close up to 8 seconds more. It waits rather than find no agent or
+take Codex's fallback path for a thread the shared daemon may be serving; past that it is answered
+`agent_unavailable` (`AgentStarting`) and never carried out, so an app that gave up on it never
+sees it happen later, and the same answer goes to one that comes while the daemon stops. No Codex
+runner of the device's own is built while the daemon is being reached, at start-up or later: a
+Codex request that meets an attempt waits for its answer out of the same allowance, then takes the
+shared daemon or the device's own app-server as the answer says, and is refused only if the
+attempt is still waiting when the allowance runs out. A client that lost its connection counts as
+reaching the daemon for 15 seconds (`RECONNECT_GRACE`), since the daemon may still be serving the
+thread; after that it is taken to be gone. A daemon whose socket is there but that does not answer
+is left alone by the tick for 25 seconds, then one, two and at most five minutes in a row of
+failures, so that an attempt does not hold Codex requests up most of the time; one that answers
+resets the wait. A history read, a queue edit, a terminal and everything else
 never wait. The person's message or command still cancels a resume (A35) as it arrives, before
 it waits, and a resume that falls due while its agent is starting waits for a later pass rather
-than fail on an agent nobody has asked about yet. Withdrawing the Codex sessions that are not the
+than fail on an agent nobody has asked about yet; one that meets an attempt to reach the Codex
+daemon is put off a minute, as for a terminal that has not dialled back. A quota read
+(`device.agents`) keeps this run's answer for an agent that has started: its detection may have
+begun before the Codex daemon answered. Withdrawing the Codex sessions that are not the
 device's follows Codex's start, and nothing waits for it. Until the Grok leader has been tried
 once, and the Codex daemon has been tried and, when it answered, its index read once, the scan
 leaves their files alone, since a thread either serves is theirs to describe; Claude's terminals
@@ -2369,8 +2381,10 @@ middle of a turn it drives, one it holds (A58) or one an app has acted on since 
 each one dropped goes with `session.removed`, which the hub says again on the next link; the hub
 keeps up to 10,000 of them for a link (`MAX_PENDING_REMOVALS`), since a removal the gateway never
 hears leaves the session in the apps for good. They are said again a queue's worth at a time,
-leaving room for everything else, because the link drops a frame its queue has no room for; one
-the link could not take is said again on the next pass, and any that the bound forgets is logged.
+leaving room for everything else, because the link drops a frame its queue has no room for, and
+each stays recorded until the link has written it to the socket (`GatewayLink.offer`): the queue
+goes with the link, and what was still in it is said again on the next link. One the link could
+not take is said again on the next pass, and any that the bound forgets is logged.
 New foreign work and new exec runs never appear on either path.
 
 ### When there is no daemon

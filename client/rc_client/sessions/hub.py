@@ -178,6 +178,11 @@ class SessionHub:
         self.link_up: Callable[[], bool] = lambda: True
         # How many more frames the link takes right now; past that it drops them.
         self.link_room: Callable[[], int] = lambda: MAX_PENDING_REMOVALS
+        # Queue a frame on the link and say when it is written (`GatewayLink.offer`); without it
+        # a frame published is taken as said.
+        self.offer: Callable[[dict[str, Any]], asyncio.Future[bool] | None] | None = None
+        # The repeated removals the link has queued and not yet written, by session.
+        self._unwritten: dict[str, asyncio.Future[bool]] = {}
         # Whether something may act through an agent yet: after a restart each agent starts in
         # the background, and the daemon wires in which have (`Daemon._may_act`).
         self.may_act: Callable[[str], bool] = lambda agent: True
@@ -1714,17 +1719,39 @@ class SessionHub:
         Only while the link is up: a repeat published into a gap would be
         dropped like the original, and the record with it.
         """
+        self._settle_removals()
         if not self.link_up():
             return
         current = self._link
         # No more than the link takes now, leaving room for everything else: the rest wait for the
         # next pass, which comes with the next scan.
         room = max(0, self.link_room() - REMOVAL_HEADROOM)
-        stale = [item for item in self._removed if item[0] < current][:room]
-        said = set(stale)
+        stale = [
+            item for item in self._removed if item[0] < current and item[1] not in self._unwritten
+        ][:room]
+        said: set[tuple[int, str]] = set()
+        for item in stale:
+            frame = {"type": "session.removed", "session_id": item[1]}
+            if self.offer is None:
+                await self.publish(frame)
+                said.add(item)
+                continue
+            receipt = self.offer(frame)
+            if receipt is None:
+                break
+            self._unwritten[item[1]] = receipt
         self._removed = [item for item in self._removed if item not in said]
-        for _, session_id in stale:
-            await self.publish({"type": "session.removed", "session_id": session_id})
+
+    def _settle_removals(self) -> None:
+        """Forget the repeated removals the link has written; one it dropped is said again."""
+        written: set[str] = set()
+        for session_id, receipt in list(self._unwritten.items()):
+            if receipt.done():
+                del self._unwritten[session_id]
+                if not receipt.cancelled() and receipt.result():
+                    written.add(session_id)
+        if written:
+            self._removed = [item for item in self._removed if item[1] not in written]
 
     async def _holder_control(self, entry: SessionEntry) -> str:
         """Whether the CLI whose bridge just closed is still sitting in the terminal.

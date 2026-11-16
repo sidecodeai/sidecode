@@ -60,6 +60,16 @@ LIST_BACKOFF_FIRST = 30.0
 LIST_BACKOFF_LAST = 600.0
 # How many sessions `prune_foreign` reads the rollouts of, and withdraws, at a time.
 PRUNE_BATCH = 64
+# How long the tick leaves a daemon alone after its socket was there but nothing answered on it,
+# one wait per failure in a row and the last for all after: a request that meets an attempt waits
+# for its answer, so one that is made every ten seconds would hold Codex up most of the time.
+ATTEMPT_BACKOFF = (25.0, 60.0, 120.0, 300.0)
+# How long a client that lost its connection counts as reaching the daemon again. The daemon may
+# still be serving the thread a request is for, so no private app-server is started for it until
+# then; a daemon that has not come back by then is taken to be gone.
+RECONNECT_GRACE = 15.0
+# How often a wait for a reconnecting client looks again.
+SETTLE_POLL = 0.1
 
 
 def thread_config() -> dict[str, Any] | None:
@@ -168,6 +178,9 @@ class CodexDaemonService:
         # then the mirror reads no rollout, since the daemon may be serving it.
         self._attempt: asyncio.Future[bool] | None = None
         self.attempted = False
+        # How many attempts in a row found a socket nothing answered on, and when the next may be.
+        self._unanswered = 0
+        self._retry_at = 0.0
         # Whether the index has been read since the daemon answered, so that the
         # threads it serves are known before the mirror reads their rollouts.
         self._read_index = False
@@ -246,8 +259,29 @@ class CodexDaemonService:
 
     @property
     def attempting(self) -> bool:
-        """Whether an attempt to reach the daemon is waiting for its answer."""
-        return self._attempt is not None
+        """Whether the daemon is being reached: an attempt waits for its answer, or the client
+        lost its connection less than `RECONNECT_GRACE` ago and is getting it back."""
+        if self._attempt is not None:
+            return True
+        client = self._client
+        if client is None or client.connected or client.down_since is None:
+            return False
+        return time.monotonic() - client.down_since < RECONNECT_GRACE
+
+    async def settled(self, timeout: float) -> bool:
+        """Wait up to `timeout` for the daemon to be reached or given up on; whether it has been."""
+        deadline = time.monotonic() + timeout
+        while self.attempting:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return False
+            attempt = self._attempt
+            if attempt is None:
+                await asyncio.sleep(min(SETTLE_POLL, left))
+                continue
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(asyncio.shield(attempt), left)
+        return True
 
     @property
     def indexed(self) -> bool:
@@ -276,8 +310,13 @@ class CodexDaemonService:
             log.info("the codex daemon socket is present but did not answer", error=str(exc)[:200])
             with contextlib.suppress(Exception):
                 await client.close()
+            self._unanswered += 1
+            wait = ATTEMPT_BACKOFF[min(self._unanswered, len(ATTEMPT_BACKOFF)) - 1]
+            self._retry_at = time.monotonic() + wait
             return False
         self._client = client
+        self._unanswered = 0
+        self._retry_at = 0.0
         return True
 
     async def stop(self) -> None:
@@ -307,6 +346,9 @@ class CodexDaemonService:
             return
         if self._client is not None:
             # The client is reconnecting on its own backoff.
+            return
+        if time.monotonic() < self._retry_at:
+            # Its socket was there and nothing answered on it: left alone for a while.
             return
         # Nothing else on this machine ever starts the shared daemon, and
         # without one every terminal Codex is takeover-only.

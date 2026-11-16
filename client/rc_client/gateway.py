@@ -131,13 +131,17 @@ def close_code(exc: BaseException) -> int | None:
     return int(code) if isinstance(code, int) else None
 
 
+# Said of one queued frame: True once it is written to the socket, False when the link drops it.
+Receipt = asyncio.Future[bool]
+
+
 class ByteQueue:
     """FIFO with both an item cap and a serialized-byte cap."""
 
     def __init__(self, max_items: int, max_bytes: int) -> None:
         self._max_items = max(1, max_items)
         self._max_bytes = max(1024, max_bytes)
-        self._items: list[tuple[str, int]] = []
+        self._items: list[tuple[str, int, Receipt | None]] = []
         self._bytes = 0
         self._event = asyncio.Event()
 
@@ -148,31 +152,38 @@ class ByteQueue:
     def __len__(self) -> int:
         return len(self._items)
 
-    def offer(self, payload: str) -> bool:
+    def offer(self, payload: str, receipt: Receipt | None = None) -> bool:
         """Enqueue unless full. Returns False when the frame was dropped."""
         size = len(payload.encode("utf-8"))
         if size > self._max_bytes:
             return False
         if len(self._items) >= self._max_items or self._bytes + size > self._max_bytes:
             return False
-        self._items.append((payload, size))
+        self._items.append((payload, size, receipt))
         self._bytes += size
         self._event.set()
         return True
 
-    async def get(self) -> str:
+    async def get(self) -> tuple[str, Receipt | None]:
         while not self._items:
             self._event.clear()
             await self._event.wait()
-        payload, size = self._items.pop(0)
+        payload, size, receipt = self._items.pop(0)
         self._bytes = max(0, self._bytes - size)
-        return payload
+        return payload, receipt
 
     def clear(self) -> int:
         dropped = len(self._items)
+        for _, _, receipt in self._items:
+            settle(receipt, False)
         self._items.clear()
         self._bytes = 0
         return dropped
+
+
+def settle(receipt: Receipt | None, written: bool) -> None:
+    if receipt is not None and not receipt.done():
+        receipt.set_result(written)
 
 
 class GatewayLink:
@@ -239,6 +250,20 @@ class GatewayLink:
         payload = json.dumps(frame, ensure_ascii=False)
         if not self._queue.offer(payload):
             log.warning("outbound frame dropped", type=frame.get("type"))
+
+    def offer(self, frame: dict[str, Any]) -> Receipt | None:
+        """Queue a frame as `send` does, and say when it is written; None when it was not taken.
+
+        A frame that waits in the queue is not yet with the gateway: the queue is dropped with
+        the link, and the receipt then says False.
+        """
+        if not (self._connected or self._greeting):
+            return None
+        receipt: Receipt = asyncio.get_running_loop().create_future()
+        if not self._queue.offer(json.dumps(frame, ensure_ascii=False), receipt):
+            log.warning("outbound frame dropped", type=frame.get("type"))
+            return None
+        return receipt
 
     # ------------------------------------------------------------------ loop
 
@@ -383,8 +408,13 @@ class GatewayLink:
 
     async def _sender(self, socket: ClientConnection) -> None:
         while True:
-            payload = await self._queue.get()
-            await socket.send(payload)
+            payload, receipt = await self._queue.get()
+            try:
+                await socket.send(payload)
+            except BaseException:
+                settle(receipt, False)
+                raise
+            settle(receipt, True)
 
     async def _watchdog(self) -> None:
         """Fail the session when no frame at all has arrived for 60 s."""

@@ -5343,7 +5343,7 @@ device created before A58 is `remote` only while it is loaded or joined. The sto
 reliable about which sessions were `remote` when the previous daemon stopped, so the restart that
 installs A58 restores none of them as `remote`, by decision; the next message holds such a session.
 A restart or an update brings the device back online before its agents have started: a request that
-acts through an agent waits up to 15 s for that agent alone, and while it is still starting the
+acts through an agent waits up to 10 s for that agent alone, and while it is still starting the
 request is answered `agent_unavailable` and never carried out. See 4.4, 6.3 and 9.
 
 **2026-11-16 A59 — a `codex exec` run is not a session.** A `codex exec` run is a script's or an
