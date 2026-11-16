@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,15 @@ from .errors import RcError
 
 GIT_TIMEOUT = 8.0
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+@dataclass(frozen=True, slots=True)
+class Worktree:
+    """A worktree `create_worktree` added: where it is, its branch, and the repository's root."""
+
+    path: str
+    branch: str
+    root: str
 
 
 def _git_env() -> dict[str, str]:
@@ -98,8 +108,8 @@ def slugify(value: str) -> str:
     return (slug or "session")[:32]
 
 
-async def create_worktree(repo: str, slug: str) -> str:
-    """Add `<repo>/.rc-worktrees/<slug>` on a fresh branch and return its path."""
+async def create_worktree(repo: str, slug: str) -> Worktree:
+    """Add `<repo>/.rc-worktrees/<slug>` on a fresh branch."""
     info = await git_info(repo)
     if not info.get("is_repo"):
         raise RcError("bad_request", f"worktree requested but {repo} is not a git repository")
@@ -117,4 +127,17 @@ async def create_worktree(repo: str, slug: str) -> str:
     code, _, err = await _git(str(base), "worktree", "add", "-b", branch, str(target), timeout=60.0)
     if code != 0:
         raise RcError("internal", f"git worktree add failed: {err.strip()[:200]}")
-    return str(target)
+    return Worktree(path=str(target), branch=branch, root=str(base))
+
+
+async def remove_worktree(worktree: Worktree) -> bool:
+    """Take back a worktree and its branch, for a session that never started in it.
+
+    Nothing of the person's is in it: the device added it moments before, and the
+    session's agent did not start. Whether both went is what this says.
+    """
+    removed, _, _ = await _git(
+        worktree.root, "worktree", "remove", "--force", worktree.path, timeout=60.0
+    )
+    deleted, _, _ = await _git(worktree.root, "branch", "-D", worktree.branch)
+    return removed == 0 and deleted == 0

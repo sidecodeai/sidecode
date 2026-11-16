@@ -521,7 +521,10 @@ turn.
 `session.create` takes a device, an agent, a working directory, and optionally a model, a permission
 mode, an effort, a speed tier, a first message and a title. With `worktree: true` the daemon runs `git worktree
 add` on a new branch under `<repo>/.rc-worktrees/<slug>` and uses that as the working directory, so
-an agent can work without touching your checkout.
+an agent can work without touching your checkout. A session whose agent does not start, whatever
+the reason, its agent still starting after a restart included, leaves nothing behind: its row,
+its title, what its runner stored and the worktree and branch made for it are taken back, and the
+apps are told it is gone.
 
 A session id is the agent's own: for Claude it is the Claude session id, named up front and passed
 to the SDK; for Codex it is the thread id; for Grok Build it is Grok's own session UUID; for pi it

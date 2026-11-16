@@ -62,6 +62,13 @@ def named_after_files(registry: Registry, session_id: str) -> bool:
     return registry.get_kv(_files_key(session_id)) == "1"
 
 
+def forget(registry: Registry, session_id: str) -> None:
+    """Drop what was recorded about the title of a session that is gone."""
+    for key in (_key(session_id), _files_key(session_id)):
+        if registry.get_kv(key):
+            registry.set_kv(key, "")
+
+
 def rekey(registry: Registry, old_id: str, new_id: str) -> None:
     """Carry a pin, and a name taken from files, across the move to the agent's own id."""
     if old_id == new_id:

@@ -25,7 +25,7 @@ from ..agents.pi.service import PiExtensionService
 from ..agents.registry import RunnerSpec, offline_commands, runner_for
 from ..errors import RcError, TerminalNotReady
 from ..events import brief_event
-from ..git import create_worktree, session_git, slugify
+from ..git import create_worktree, remove_worktree, session_git, slugify
 from ..logging_setup import logger
 from ..models import (
     UNSET,
@@ -524,14 +524,43 @@ class SessionHub:
         first_message = str(params.get("first_message") or "")
         chosen = title_from_text(str(params.get("title") or ""))
         title = chosen or title_from_message(first_message)
-        worktree = bool(params.get("worktree"))
-        if worktree:
-            cwd = await create_worktree(cwd, slugify(title or agent))
+        made = (
+            await create_worktree(cwd, slugify(title or agent)) if params.get("worktree") else None
+        )
+        try:
+            entry = await self._launch(
+                info, params, made.path if made else cwd, title, chosen, model, made is not None
+            )
+        except BaseException:
+            # The session never started in it, and nothing of the person's is there.
+            if made is not None and not await remove_worktree(made):
+                log.warning("a worktree for a session that did not start was left behind")
+            raise
+        await entry.channel.set_state("idle")
+        if first_message:
+            await self._start_turn(entry, first_message, None)
+        return {"session": entry.session.to_dict()}
 
+    async def _launch(
+        self,
+        info: AgentInfo,
+        params: dict[str, Any],
+        cwd: str,
+        title: str,
+        chosen: str,
+        model: str | None,
+        worktree: bool,
+    ) -> SessionEntry:
+        """Store a new session and start its agent. One whose agent did not start leaves no row.
+
+        The row is written before the runner starts, because what the runner says as it starts
+        is stored against it; so a runner that fails takes it back, with its title and anything
+        the runner stored, and the apps are told it is gone.
+        """
         session = Session(
             session_id=str(uuid.uuid4()),
             device_id=self.device_id,
-            agent=agent,
+            agent=info.agent,
             cwd=cwd,
             title=title,
             state="starting",
@@ -552,20 +581,27 @@ class SessionHub:
             # A title the user typed outranks anything the agent later produces.
             titles.pin(self.registry, session.session_id)
 
+        created = session.session_id
         try:
             entry.runner = await self._build_runner(entry, info, resume=None)
             await entry.runner.start()
-        except RcError:
-            self.entries.pop(session.session_id, None)
-            raise
-        except Exception as exc:
-            self.entries.pop(session.session_id, None)
-            raise RcError("agent_unavailable", f"could not start {agent}: {exc}") from exc
+        except BaseException as exc:
+            await self._abandon(entry, created)
+            if isinstance(exc, RcError) or not isinstance(exc, Exception):
+                raise
+            raise RcError("agent_unavailable", f"could not start {info.agent}: {exc}") from exc
+        return entry
 
-        await entry.channel.set_state("idle")
-        if first_message:
-            await self._start_turn(entry, first_message, None)
-        return {"session": entry.session.to_dict()}
+    async def _abandon(self, entry: SessionEntry, created: str) -> None:
+        """Take back a session whose agent did not start, under the id it was created with and
+        any the runner gave it since."""
+        runner, entry.runner = entry.runner, None
+        if runner is not None:
+            with contextlib.suppress(Exception):
+                await runner.close()
+        await self._remove(entry)
+        for session_id in {created, entry.session.session_id}:
+            titles.forget(self.registry, session_id)
 
     async def _build_runner(
         self, entry: SessionEntry, info: AgentInfo, resume: str | None

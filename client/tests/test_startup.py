@@ -15,6 +15,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import itertools
+import os
+import subprocess
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -44,6 +46,7 @@ from rc_client.proxy import DIRECT
 from rc_client.registry import Registry
 from rc_client.sessions import hub as hub_module
 from rc_client.sessions import resume as resume_module
+from rc_client.sessions import titles
 from rc_client.sessions.hub import SessionHub
 from rc_client.sessions.mirror import MirrorService
 from rc_client.sessions.resume import PendingResume
@@ -963,5 +966,130 @@ async def test_repeated_removals_the_link_dropped_with_its_queue_are_said_again(
     finally:
         await link.stop()
         await server.stop()
+        await hub.close()
+        registry.close()
+
+
+# ---------------------------------------------- a create whose agent does not start
+
+GIT_ENV = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
+
+
+def repository(path: Path) -> Path:
+    """A repository with one commit, which a worktree can branch from."""
+    path.mkdir()
+    for args in (
+        ["init", "-q", "-b", "main"],
+        [
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "start",
+        ],
+    ):
+        subprocess.run(
+            ["git", "-C", str(path), *args], check=True, capture_output=True, env=GIT_ENV
+        )
+    return path
+
+
+def left_behind(hub: SessionHub, repo: Path, created: list[str], before: set[str]) -> list[str]:
+    """What a create that did not start left: rows, entries, title pins, worktrees, branches."""
+    hub.registry.flush()
+    rows = {session.session_id for session in hub.registry.load_sessions()}
+    found = [f"row {session_id}" for session_id in sorted(rows - before)]
+    found += [f"entry {session_id}" for session_id in sorted(set(hub.entries) - before)]
+    found += [
+        f"title pin {session_id}"
+        for session_id in created
+        if titles.pinned(hub.registry, session_id)
+    ]
+    worktrees = repo / ".rc-worktrees"
+    found += [f"worktree {path.name}" for path in worktrees.iterdir()] if worktrees.exists() else []
+    branches = subprocess.run(
+        ["git", "-C", str(repo), "branch", "--list", "rc/*"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=GIT_ENV,
+    ).stdout.split()
+    return found + [f"branch {branch}" for branch in branches]
+
+
+def pinned_ids(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The sessions given a title the person typed, as `create` pins it."""
+    created: list[str] = []
+    pin = titles.pin
+
+    def recorded(registry: Registry, session_id: str) -> None:
+        created.append(session_id)
+        pin(registry, session_id)
+
+    monkeypatch.setattr(titles, "pin", recorded)
+    return created
+
+
+async def test_a_codex_create_refused_while_its_daemon_is_reached_leaves_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(codex_plugin, "ATTEMPT_WAIT", 0.1)
+    repo = repository(tmp_path / "repo")
+    created = pinned_ids(monkeypatch)
+    frames: list[dict[str, Any]] = []
+
+    async def record(frame: dict[str, Any]) -> None:
+        frames.append(frame)
+
+    async with codex_being_reached(tmp_path, monkeypatch) as (hub, _, _):
+        hub.publish = record
+        with pytest.raises(AgentStarting):
+            await hub.create(
+                {"agent": "codex", "cwd": str(repo), "worktree": True, "title": "Fix it"}
+            )
+        assert left_behind(hub, repo, created, before={"t-1"}) == []
+        # The apps are told, should anything have been said of it while the runner started.
+        assert [f["session_id"] for f in frames if f["type"] == "session.removed"] == created
+
+
+async def test_a_create_whose_agent_fails_to_start_leaves_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = repository(tmp_path / "repo")
+    closed: list[bool] = []
+
+    class Broken:
+        async def start(self) -> None:
+            raise RuntimeError("no such program")
+
+        async def close(self) -> None:
+            closed.append(True)
+
+    async def runner_for(agent: str, spec: Any) -> Any:
+        return Broken()
+
+    monkeypatch.setattr(hub_module, "runner_for", runner_for)
+    created = pinned_ids(monkeypatch)
+
+    async def publish(frame: dict[str, Any]) -> None:
+        return None
+
+    registry = Registry(tmp_path / "state.sqlite3")
+    hub = SessionHub(
+        registry, publish, "dev-1", lambda: [AgentInfo(agent="claude", available=True)]
+    )
+    try:
+        with pytest.raises(RcError) as refused:
+            await hub.create(
+                {"agent": "claude", "cwd": str(repo), "worktree": True, "title": "Fix it"}
+            )
+        assert refused.value.code == "agent_unavailable"
+        assert left_behind(hub, repo, created, before=set()) == []
+        assert closed == [True]
+    finally:
         await hub.close()
         registry.close()
