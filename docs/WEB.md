@@ -1079,9 +1079,9 @@ sidebar — is quick and lands where the person left off, not at the bottom of a
   1 KiB with `input_truncated`, no `output` with `output_truncated`, no `diff.patch` with
   `patch_truncated`, the path and the counts kept. `ToolRow` can be opened on such a row, and
   opening a finished one whose content was cut (`isCut` in `blocks/toolCut.ts`) fetches the whole
-  block once with `session.block`, the way "Open full output" does; "Loading…" stands where the
-  output goes meanwhile, and "Open full output" stands there again if the fetch failed (the banner
-  says why). `replaceBlock` marks the item `full`, so the row asks nothing more; a later event for
+  block once with `session.block`, the way "Open full output" does. Where the page left the output
+  or the patch out, "Loading…" stands in its place while the block is fetched, and "Open full
+  output" stands there if the fetch failed (the banner says why). `replaceBlock` marks the item `full`, so the row asks nothing more; a later event for
   the block is a new copy without the mark. A running row is not fetched: its next event brings the
   output. A device from before A60 ignores the field and sends the page in full, which the rows draw
   as they always did.
@@ -1099,16 +1099,17 @@ sidebar — is quick and lands where the person left off, not at the bottom of a
   from the newest page, with no forward walk. `ChatPage` passes `{fresh: true}` when the route has
   moved to the conversation, and not when the socket came back, so a reconnect keeps the copy and
   the reader's place as before.
-- **Where it opens.** `chooseAnchor` in `src/features/chat/anchor.ts` is the rule, pure: a message
-  of the person's own (`ownMessages`: a `user_message` whose `source` is not `agent`, delivered —
-  not one the device holds back or one the CLI absorbed; an unconfirmed send is no row) after the
-  saved reading position gives the newest such message; otherwise, with a saved position, the
-  newest of theirs at or before it; never read in this browser, their newest; and with none of
-  theirs among the rows held, an older page is read first — at most two after the newest
+- **Where it opens.** `chooseAnchor` in `src/features/chat/anchor.ts` is the rule, pure. The
+  person's own messages are `ownMessages`: a `user_message` whose `source` is not `agent`,
+  delivered — not one the device holds back or one the CLI absorbed; an unconfirmed send is no row.
+  A message of theirs numbered after the newest event the app held when the conversation was left
+  means they wrote since, from a terminal or another device, and it opens on their newest message;
+  otherwise it opens on their message nearest above where they were reading, the newest at or
+  before that row; never read in this browser, on their newest; and with none of theirs to be
+  found among the rows held, an older page is read first — at most two after the newest
   (`SEARCH_PAGES`, counted in `ChatSession.pagesAsked`, failures included) — before the tail.
-  `useOpening` reads the timeline into it once the rows are this open's (the subscribe answered and
-  the newest page read), and `useOlderSearch` reads the older pages. Read as the rules stand, the
-  first three always land on the person's newest delivered message.
+  `useOpening` reads the timeline and the saved position into it once the rows are this open's (the
+  subscribe answered and the newest page read), and `useOlderSearch` reads the older pages.
 - **How it is placed.** `useScrollFollow` takes the opening: the row's top goes 12 px under the top
   of the transcript; when the rows from it to the end fit, the transcript sits at the bottom and
   follows as before; otherwise following is off and "Back to latest" carries the count as usual.
@@ -1123,13 +1124,15 @@ sidebar — is quick and lands where the person left off, not at the bottom of a
 - **One timeline per conversation.** `ChatPage` keys `<Timeline>` by the conversation, as it keys
   the header and the composer, so the follow state, the prepend anchor, the scroll and the opening
   start again when the route moves to another conversation instead of carrying over.
-- **The reading position** is the `seq` of the furthest row whose top edge has been inside the
-  transcript (`furthestSeen`). `useReadingTracker` measures it at most once a second while the
+- **The reading position** is where the conversation was being read: the `seq` of the lowest row
+  whose top is on screen (`lowestOnScreen`), with the timeline's `lastSeq` — the newest event the
+  app held — beside it. `useReadingTracker` saves the pair at most once a second while the
   transcript scrolls, and when the conversation is left — another conversation, another page, the
-  tab hidden, the page closing — and `readingPosition.ts` keeps it in local storage under
-  `rc.reading.<username>`, one entry per conversation, the 500 read last, moving only forward. The
-  page's origin is its gateway, so the browser already keeps it per gateway; it is never sent
-  anywhere, and a browser that cannot store keeps it for the tab.
+  tab hidden, the page closing — so a reader who scrolled back into an older turn comes back to
+  it. `readingPosition.ts` keeps it in local storage under `rc.reading.<username>`, beside the
+  account's settings, one `[seq, held]` per conversation for the 500 read most recently. The page's
+  origin is its gateway, so the browser already keeps it per gateway; it is never sent anywhere,
+  and a browser that cannot store keeps it for the tab.
 - `tests/anchor.test.ts` holds the rule, `tests/readingPosition.test.ts` the storage,
   `tests/useScrollFollow.test.tsx` the placement and the top-of-list wait, `tests/opening.test.tsx`
   the timeline's opening, its older-page search, the saved position and the keyed timeline,

@@ -108,7 +108,7 @@ export function Timeline({
     opening,
   });
   useOlderSearch(looking && !settled, historyLoading, onLoadOlder);
-  useReadingTracker(ref, account, sessionKey);
+  useReadingTracker(ref, account, sessionKey, timeline.lastSeq);
 
   // Stable so memoised rows do not re-render on every streaming delta.
   const handlers = useMemo<TimelineHandlers>(

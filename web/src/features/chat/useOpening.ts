@@ -35,8 +35,8 @@ interface Input {
 /**
  * The opening, and whether it waits for an older page (rule 4: none of the
  * person's messages among the rows held, and a page left to look in). The
- * position is the one saved before this open: reading moves it on from here,
- * and the opening goes by where the person was when they came.
+ * position is the one saved before this open: reading moves it from here, and
+ * the opening goes by where the person was when they came.
  */
 export function useOpening({
   account,
@@ -46,18 +46,18 @@ export function useOpening({
   historyHasMore,
   pagesAsked,
 }: Input): { opening: Opening; looking: boolean } {
-  const [position] = useState(() => (account === null ? null : readPosition(account, sessionKey)));
+  const [saved] = useState(() => (account === null ? null : readPosition(account, sessionKey)));
   const choice = useMemo(
     () =>
       current
         ? chooseAnchor({
             messages: ownMessages(timeline),
-            position,
+            saved,
             from: timeline.oldestSeq,
             canLookOlder: historyHasMore && pagesAsked < SEARCH_PAGES,
           })
         : null,
-    [current, timeline, position, historyHasMore, pagesAsked],
+    [current, timeline, saved, historyHasMore, pagesAsked],
   );
   const kind = choice === null || choice.kind === 'older' ? 'wait' : choice.kind;
   const key = choice?.kind === 'row' ? choice.key : null;

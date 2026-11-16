@@ -1,7 +1,7 @@
 /**
  * `docs/DESIGN.md` § "Reading position": a conversation opens on the
  * person's own message, placed once its rows are current, looks through at most
- * two older pages for it, and keeps the furthest row read as it is left. The
+ * two older pages for it, and keeps where it was being read as it is left. The
  * page keys the transcript by conversation, so a move to another one starts the
  * scroll and the follow state again.
  */
@@ -11,7 +11,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { Timeline } from '../src/features/chat/Timeline';
 import { ChatPage } from '../src/features/chat/ChatPage';
-import { readPosition } from '../src/features/chat/readingPosition';
+import { readPosition, savePosition } from '../src/features/chat/readingPosition';
 import { useAuth } from '../src/stores/auth';
 import { useChat, type ChatSession } from '../src/stores/chat';
 import { useConnection } from '../src/stores/connection';
@@ -152,6 +152,21 @@ describe('where a conversation opens', () => {
     expect(backToLatest()).not.toBeNull();
   });
 
+  it('opens on their message nearest above where they were reading', () => {
+    // They read the answer to their first question, up to row 5, and left.
+    savePosition('me', 'dev-mac/ses-1', { seq: 5, held: 12 });
+    show(conversation());
+    // Their message at 3 is the third row, at 200 px.
+    expect(scroller()?.scrollTop).toBe(188);
+  });
+
+  it('opens on their newest message when they wrote since they left', () => {
+    // They left with events up to 5; the question at 6 came from elsewhere since.
+    savePosition('me', 'dev-mac/ses-1', { seq: 4, held: 5 });
+    show(conversation());
+    expect(scroller()?.scrollTop).toBe(488);
+  });
+
   it('places nothing before the rows are this open’s', () => {
     const h = show(conversation(), { current: false });
     expect(scroller()?.scrollTop).toBe(800);
@@ -212,11 +227,11 @@ describe('where a conversation opens', () => {
 });
 
 describe('the reading position', () => {
-  it('keeps the furthest row read when the conversation is left', () => {
+  it('keeps the lowest row on screen, and the newest event held, when the conversation is left', () => {
     const { view } = show(conversation());
-    // Placed at 488: rows 5 to 9 have their tops inside the 400 px shown.
+    // Placed at 488: rows 6 to 9 have their tops inside the 400 px shown.
     view.unmount();
-    expect(readPosition('me', 'dev-mac/ses-1')).toBe(9);
+    expect(readPosition('me', 'dev-mac/ses-1')).toEqual({ seq: 9, held: 12 });
   });
 
   it('is kept for nobody when nobody is signed in', () => {

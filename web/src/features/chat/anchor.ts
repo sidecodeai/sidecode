@@ -6,6 +6,7 @@
  * answers.
  */
 import type { TimelineState } from '../../stores/timeline';
+import type { ReadingPosition } from './readingPosition';
 
 /** One of the person's delivered messages: its row and where it stands. */
 export interface OwnMessage {
@@ -20,8 +21,8 @@ export type AnchorChoice = { kind: 'row'; key: string } | { kind: 'tail' } | { k
 export interface AnchorInput {
   /** The person's delivered messages among the rows held, in any order. */
   messages: readonly OwnMessage[];
-  /** The furthest row read on this device, or null when it was never read here. */
-  position: number | null;
+  /** Where the conversation was being read when it was last left here, or null. */
+  saved: ReadingPosition | null;
   /** The lowest `seq` the rows held reach, or null when none are held. */
   from: number | null;
   /** Whether an older page may still be read to look further back. */
@@ -58,24 +59,24 @@ function newest(messages: readonly OwnMessage[]): AnchorChoice | null {
 /**
  * The anchor, rule by rule:
  *
- * 1. a message of theirs after the saved position — they wrote since, so the
- *    position is stale — gives the newest such message;
- * 2. otherwise, with a saved position, the newest of their messages at or
- *    before it;
+ * 1. a message of theirs numbered after the newest event the app held when the
+ *    conversation was left — they wrote since, from a terminal or another
+ *    device, and have moved on — gives their newest message;
+ * 2. otherwise, with a saved position, their message nearest above it: the
+ *    newest at or before the row they were reading;
  * 3. never read on this device, their newest message;
- * 4. none of theirs among the rows held, while an older page may still hold
- *    one, asks for that page first; and with no page left to read, the tail.
+ * 4. none of theirs to be found among the rows held, while an older page may
+ *    still hold one, asks for that page first; and with no page left to read,
+ *    the tail.
  *
- * Rule 1 cannot be ruled out while rows between the position and the held ones
- * are unread, so those are looked through first.
+ * Rule 1 cannot be ruled out while rows after what was held are still unread,
+ * so those are looked through first.
  */
-export function chooseAnchor({ messages, position, from, canLookOlder }: AnchorInput): AnchorChoice {
+export function chooseAnchor({ messages, saved, from, canLookOlder }: AnchorInput): AnchorChoice {
   const further: AnchorChoice = canLookOlder ? { kind: 'older' } : { kind: 'tail' };
-  if (position !== null) {
-    const wrote = newest(messages.filter((message) => message.seq > position));
-    if (wrote) return wrote;
-    if (from === null || from > position + 1) return further;
-    return newest(messages.filter((message) => message.seq <= position)) ?? further;
-  }
-  return newest(messages) ?? further;
+  if (saved === null) return newest(messages) ?? further;
+  const since = newest(messages.filter((message) => message.seq > saved.held));
+  if (since) return since;
+  if (from === null || from > saved.held + 1) return further;
+  return newest(messages.filter((message) => message.seq <= saved.seq)) ?? further;
 }
