@@ -54,6 +54,13 @@
   overflow-y: auto;
 }
 
+/* A confirmation's question, a sentence a paragraph, and the refusal under it. */
+.confirm-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
 .modal-foot {
   display: flex;
   align-items: center;

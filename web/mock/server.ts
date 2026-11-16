@@ -74,6 +74,7 @@ import { briefEvent } from './brief';
 import { filesField, heldTs, hold, readQueueTs } from './queue';
 import { dirEntries, makeDir } from './dirs';
 import { planRename } from './rename';
+import { planTerminalClose } from './closeTerminal';
 import { emptyPreferences, patchPreferences } from './preferences';
 import { FakeShell } from './shell';
 import { clearMark, moveState } from './unseen';
@@ -1565,6 +1566,18 @@ function handleAppFrame(conn: AppConn, frame: Record<string, unknown>): void {
         session.archived = false;
         broadcast({ type: 'session.updated', session });
         reply(conn, id, { session });
+        return;
+      }
+      // A61: a terminal holds it, so its agent is quit there first.
+      if (session.control === 'terminal' || session.control === 'shared') {
+        const plan = planTerminalClose(session, agentFor(session));
+        setTimeout(() => {
+          if (plan.outcome === 'refused') {
+            replyError(conn, id, plan.refusal.code, plan.refusal.message);
+            return;
+          }
+          closeSession(session, () => reply(conn, id, { session }));
+        }, plan.afterMs);
         return;
       }
       closeSession(session, () => reply(conn, id, { session }));

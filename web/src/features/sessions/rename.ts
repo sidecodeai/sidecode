@@ -96,7 +96,7 @@ export function checkName(value: string, current: string): NameCheck {
  */
 export function renameFailure(error: unknown): string {
   if (error instanceof RequestError) {
-    if (error.code === 'conflict') return strings.sessions.renameBusy;
+    if (error.code === 'conflict') return strings.sessions.busy;
     if (error.code === 'unsupported') return strings.sessions.renameUnsupported;
   }
   return errorText(error);

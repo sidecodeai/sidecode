@@ -49,6 +49,12 @@ export type Capability =
    * (`session.set` with `title`). An app offers Rename only while it is listed.
    */
   | 'rename'
+  /**
+   * A61: the device can quit this agent's CLI in the terminal that holds one of
+   * its sessions (`control` `terminal` or `shared`), so an app offers Close on
+   * such a row only while it is listed.
+   */
+  | 'close_terminal'
   | (string & {});
 
 /**

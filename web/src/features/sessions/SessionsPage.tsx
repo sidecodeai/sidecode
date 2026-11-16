@@ -197,7 +197,7 @@ export function SessionsPage() {
                       <SessionRow
                         key={`${session.device_id}/${session.session_id}`}
                         session={session}
-                        online={group.device.online}
+                        device={group.device}
                         onOpen={() => openSession(session.device_id, session.session_id)}
                         onRename={deviceCanRename(group.device, session) ? setRenaming : undefined}
                       />
@@ -218,7 +218,7 @@ export function SessionsPage() {
                           <SessionRow
                             key={`${session.device_id}/${session.session_id}`}
                             session={session}
-                            online={group.device.online}
+                            device={group.device}
                             onOpen={() => openSession(session.device_id, session.session_id)}
                             onRename={
                               deviceCanRename(group.device, session) ? setRenaming : undefined

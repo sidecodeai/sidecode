@@ -55,6 +55,9 @@ export const claudeAgent: AgentInfo = {
     // `/rename` for one it is attached to, and rows appended to the transcript
     // for one nothing holds.
     'rename',
+    // A61: `/exit` typed into an idle shared terminal, otherwise Escape and the
+    // CLI's own end; a `claude` in a terminal of its own is ended as Take over does.
+    'close_terminal',
   ],
   // Amendment A10: this device installs the `claude` shim, so a terminal
   // session started through it can be attached instead of taken over.
@@ -144,6 +147,9 @@ export const codexAgent: AgentInfo = {
     // wherever the device can name a Codex session at all; a thread nothing can
     // reach is refused with `unsupported` (`rename.ts`).
     'rename',
+    // A61: the TUI holding the thread is ended — on the daemon only when it is
+    // the one Codex terminal in the thread's folder (`closeTerminal.ts`).
+    'close_terminal',
   ],
   // A21: Codex's own service tier. The apps draw the lightning only because
   // this list is non-empty; Claude lists none and draws nothing.
@@ -466,8 +472,15 @@ export function withoutLimits(agent: AgentInfo): AgentInfo {
   };
 }
 
+/** A61: the agents of a device whose client predates the amendment. */
+const beforeA61 = (agent: AgentInfo): AgentInfo => ({
+  ...agent,
+  capabilities: agent.capabilities.filter((capability) => capability !== 'close_terminal'),
+});
+
 const macAgents: AgentInfo[] = [claudeAgent, codexAgent, grokAgent, piAgent];
-const ciAgents: AgentInfo[] = [claudeNoShim, codexNoDaemon, grokNoLeader];
+// The CI runner's client is older than A61, so it quits no terminal's agent.
+const ciAgents: AgentInfo[] = [claudeNoShim, codexNoDaemon, grokNoLeader].map(beforeA61);
 
 /** A33: what a `device.agents` reply answers with, per device. */
 export const deviceAgents: Record<string, AgentInfo[]> = {

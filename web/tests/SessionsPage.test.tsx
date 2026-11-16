@@ -13,6 +13,7 @@ import { keyOf, useSessions } from '../src/stores/sessions';
 import { useSettings } from '../src/stores/settings';
 import { en, stringTables, strings } from '../src/strings';
 import { devices, sessions } from '../mock/fixtures';
+import { RequestError } from '../src/lib/ws';
 import type { Device, Session } from '../src/protocol/types';
 
 /** A paired device with nothing on it at all. */
@@ -804,11 +805,12 @@ describe('the close action', () => {
     expect(closeIn('iOS push tokens')).toBeInTheDocument();
   });
 
-  it('offers nothing on a row a terminal holds', () => {
+  it('offers nothing on a row a terminal holds when its agent cannot be quit there', () => {
     renderPage();
-    // `terminal` and `shared`: the terminal owns the row until it exits.
-    expect(closeIn('Refactor relay routing')).toBeNull();
-    expect(closeIn('Wire the channel shim')).toBeNull();
+    // `terminal` on the CI runner, whose client predates A61: the terminal
+    // owns the row until it exits.
+    expect(closeIn('Nightly perf sweep')).toBeNull();
+    expect(closeIn('Bisect the ingest regression')).toBeNull();
   });
 
   it('offers nothing on a row already in the Archive', async () => {
@@ -897,6 +899,194 @@ describe('the close action', () => {
     expect(Object.keys(en.sessions)).not.toContain('archive');
     expect(Object.keys(stringTables['zh-Hans'].sessions)).not.toContain('archive');
     expect(screen.getByRole('button', { name: strings.sessions.archiveGroup(3) })).toBeInTheDocument();
+  });
+});
+
+/**
+ * A61 (`docs/DESIGN.md` § "Close, then the Archive"): a row a terminal holds
+ * offers Close exactly when its agent lists `close_terminal` on a device that
+ * is online, always asks first — naming the agent and the device, and adding
+ * A39's sentence while the agent works — and says in the app's own words why
+ * the device refused.
+ */
+describe('closing a session a terminal holds', () => {
+  const realClose = useSessions.getState().close;
+
+  afterEach(() => {
+    useSessions.setState({ close: realClose });
+    useSettings.setState({ language: 'en' });
+  });
+
+  const closeIn = (title: string) =>
+    within(rowFor(title)).queryByRole('button', { name: strings.sessions.close });
+
+  const dialog = () => screen.getByRole('dialog');
+
+  /** Opens the question on a row and hands back the dialog. */
+  async function ask(title: string): Promise<HTMLElement> {
+    const button = closeIn(title);
+    if (!button) throw new Error(`no Close on ${title}`);
+    await userEvent.click(button);
+    return dialog();
+  }
+
+  /** The device answers every Close with the session closed, unowned and stopped. */
+  const closes = (): string[] => {
+    const closed: string[] = [];
+    useSessions.setState({
+      close: async (session) => {
+        closed.push(session.session_id);
+        useSessions.getState().upsert({
+          ...session,
+          archived: true,
+          control: 'none',
+          state: 'stopped',
+          state_detail: null,
+        });
+      },
+    });
+    return closed;
+  };
+
+  /** The device refuses every Close with this code. */
+  const refuses = (code: string) =>
+    useSessions.setState({
+      close: async () => {
+        throw new RequestError({ code, message: 'the device said no' });
+      },
+    });
+
+  const terminalSentence = (device = MAC) =>
+    strings.sessions.closeTerminalBody('Claude Code', device);
+
+  it('offers it on terminal and shared rows whose agent lists close_terminal', () => {
+    renderPage();
+    expect(closeIn('Refactor relay routing')).toBeInTheDocument();
+    expect(closeIn('Wire the channel shim')).toBeInTheDocument();
+    expect(closeIn('Typecheck the web app')).toBeInTheDocument();
+  });
+
+  it('offers none while the device is offline', () => {
+    useDevices.setState({
+      devices: devices.map((d) => (d.device_id === 'dev-mac' ? { ...d, online: false } : d)),
+    });
+    renderPage();
+    expect(closeIn('Refactor relay routing')).toBeNull();
+    expect(closeIn('Wire the channel shim')).toBeNull();
+    // A session the device drives keeps A39's Close, as before.
+    expect(closeIn('iOS push tokens')).toBeInTheDocument();
+  });
+
+  it('reads the capability and never the version', () => {
+    useDevices.setState({
+      devices: devices.map((d) => (d.device_id === 'dev-ci' ? { ...d, client_version: '9.9.9' } : d)),
+    });
+    renderPage();
+    expect(closeIn('Nightly perf sweep')).toBeNull();
+  });
+
+  it('offers none on a row in the Archive', async () => {
+    useSessions.setState({
+      sessions: index(
+        sessions.map((s) => (s.session_id === 'ses-shared' ? { ...s, archived: true } : s)),
+      ),
+    });
+    renderPage();
+    await userEvent.click(screen.getByRole('button', { name: strings.sessions.archiveGroup(4) }));
+    expect(closeIn('Wire the channel shim')).toBeNull();
+  });
+
+  it('asks first on an idle row, naming the agent and the device', async () => {
+    const closed = closes();
+    renderPage();
+
+    const asked = await ask('Wire the channel shim');
+
+    expect(within(asked).getByText(strings.sessions.closeTitle)).toBeInTheDocument();
+    expect(within(asked).getByText(terminalSentence())).toBeInTheDocument();
+    expect(terminalSentence()).toBe(
+      'This also quits Claude Code in its terminal on mac-studio-office. Anything typed there and not sent is lost.',
+    );
+    // Idle: nothing the agent has not finished.
+    expect(within(asked).queryByText(strings.sessions.closeBody)).toBeNull();
+    expect(closed).toEqual([]);
+  });
+
+  it('adds that the agent is still working while it is', async () => {
+    renderPage();
+    const asked = await ask('Refactor relay routing');
+    expect(within(asked).getByText(terminalSentence())).toBeInTheDocument();
+    expect(within(asked).getByText(strings.sessions.closeBody)).toBeInTheDocument();
+  });
+
+  it('names another agent by the name the app draws', async () => {
+    renderPage();
+    const asked = await ask('Typecheck the web app');
+    expect(
+      within(asked).getByText(strings.sessions.closeTerminalBody('Codex', MAC)),
+    ).toBeInTheDocument();
+  });
+
+  it('sends nothing on Cancel', async () => {
+    const closed = closes();
+    renderPage();
+    const asked = await ask('Wire the channel shim');
+
+    await userEvent.click(within(asked).getByRole('button', { name: strings.common.cancel }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(closed).toEqual([]);
+  });
+
+  it('closes on Close, and the row lands in the Archive', async () => {
+    const closed = closes();
+    renderPage();
+    const asked = await ask('Wire the channel shim');
+
+    await userEvent.click(within(asked).getByRole('button', { name: strings.sessions.close }));
+
+    expect(closed).toEqual(['ses-shared']);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(activeTitles()).not.toContain('Wire the channel shim');
+    await userEvent.click(screen.getByRole('button', { name: strings.sessions.archiveGroup(4) }));
+    expect(archiveTitles()).toContain('Wire the channel shim');
+  });
+
+  it.each([
+    ['unsupported', () => strings.sessions.closeUnsupported],
+    ['conflict', () => strings.sessions.busy],
+    ['device_offline', () => strings.errors.deviceOffline],
+    ['timeout', () => strings.errors.timeout],
+  ])('says why when the device answers %s, and stays open', async (code, line) => {
+    refuses(code);
+    renderPage();
+    const asked = await ask('Wire the channel shim');
+
+    await userEvent.click(within(asked).getByRole('button', { name: strings.sessions.close }));
+
+    expect(await within(dialog()).findByRole('alert')).toHaveTextContent(line());
+    expect(activeTitles()).toContain('Wire the channel shim');
+  });
+
+  it('says it in Chinese', async () => {
+    useSettings.setState({ language: 'zh-Hans' });
+    refuses('unsupported');
+    renderPage();
+    const asked = await ask('Refactor relay routing');
+
+    expect(within(asked).getByText('关闭此会话？')).toBeInTheDocument();
+    expect(
+      within(asked).getByText(
+        'Claude Code 在 mac-studio-office 终端里的进程也会退出，终端里尚未发送的内容会丢失。',
+      ),
+    ).toBeInTheDocument();
+    expect(within(asked).getByText('Agent 仍在工作，未完成的部分会丢失。')).toBeInTheDocument();
+    expect(within(asked).getByRole('button', { name: '取消' })).toBeInTheDocument();
+
+    await userEvent.click(within(asked).getByRole('button', { name: '关闭' }));
+    expect(await within(dialog()).findByRole('alert')).toHaveTextContent(
+      '这个会话无法从这里关闭，请在它的终端里关闭。',
+    );
   });
 });
 

@@ -262,6 +262,18 @@ export const en = {
     close: 'Close',
     closeTitle: 'Close this session?',
     closeBody: 'The agent is still working; what it has not finished is lost.',
+    /**
+     * A61: Close on a session a terminal holds also quits the agent in that
+     * terminal, so it always asks, naming the agent and the device as they are
+     * drawn; while the agent works, `closeBody` follows. `unsupported` means the
+     * device cannot end that terminal's agent precisely, and says where it can
+     * be closed instead.
+     */
+    closeTerminalBody: (agent: string, device: string) =>
+      `This also quits ${agent} in its terminal on ${device}. Anything typed there and not sent is lost.`,
+    closeUnsupported: "This session can't be closed from here. Close it in its terminal.",
+    /** A55 and A61: a rename or a Close the device answered `conflict`. */
+    busy: 'The session is busy. Try again later.',
     open: 'Open session',
     /**
      * A55: renaming a session from the row's menu or the chat header. The
@@ -274,7 +286,6 @@ export const en = {
     renameLabel: 'Session name',
     renameEmpty: 'Enter a name.',
     renameTooLong: (max: number) => `Names can be up to ${max} characters.`,
-    renameBusy: 'The session is busy. Try again later.',
     renameUnsupported: "This session can't be renamed from here. Rename it in its terminal.",
     /**
      * A47: what a screen reader hears for the red dot of a session that

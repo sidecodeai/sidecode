@@ -7,13 +7,15 @@ import { relativeTime, tildePath } from '../../lib/format';
 import { agentLabel, sessionOriginLabel, sessionTitle, strings } from '../../strings';
 import { keyOf, showsUnseenDot } from '../../stores/sessions';
 import { DictationRowLabel } from '../voice/DictationRowLabel';
-import type { Session } from '../../protocol/types';
+import type { Device, Session } from '../../protocol/types';
+import { offersClose } from './close';
 import { SessionCloseButton } from './SessionCloseButton';
 import { useSessionMenu } from './useSessionMenu';
 
 interface Props {
   session: Session;
-  online: boolean;
+  /** The device the session is on, as the gateway lists it; its own group's. */
+  device: Device;
   onOpen: () => void;
   /**
    * A55: present only where the device can rename this session. The row then
@@ -23,11 +25,12 @@ interface Props {
   onRename?: (session: Session) => void;
 }
 
-export function SessionRow({ session, online, onOpen, onRename }: Props) {
-  // A39: only a session the device drives can be closed. A terminal holds its
-  // own row until it exits, and a row in the Archive comes back by being
-  // written to, so neither offers anything.
-  const offersClose = session.control === 'remote' && !session.archived;
+export function SessionRow({ session, device, onOpen, onRename }: Props) {
+  const online = device.online;
+  // A39, A61: a session the device drives can be closed, and one a terminal
+  // holds when the device can quit its agent there. A row in the Archive comes
+  // back by being written to, so it offers nothing.
+  const closable = offersClose(session, device);
   // Where the session came from, whatever it is doing: the state is the dot's
   // colour alone (docs/DESIGN.md § "The session row says where it came from").
   // A hand-archived row says so before its origin.
@@ -75,7 +78,7 @@ export function SessionRow({ session, online, onOpen, onRename }: Props) {
           </span>
         </span>
       </button>
-      {offersClose ? <SessionCloseButton session={session} online={online} /> : null}
+      {closable ? <SessionCloseButton session={session} device={device} /> : null}
       {menu}
     </li>
   );

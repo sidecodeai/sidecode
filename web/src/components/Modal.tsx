@@ -141,10 +141,13 @@ function useOverlay(
 interface ConfirmProps {
   open: boolean;
   title: string;
-  body: string;
+  /** What is asked: one sentence, or several, each a paragraph of its own. */
+  body: string | readonly string[];
   confirmLabel: string;
   danger?: boolean;
   busy?: boolean;
+  /** Why the last confirm was refused, in one line under the question. */
+  error?: string | null;
   onConfirm: () => void;
   onClose: () => void;
 }
@@ -156,9 +159,11 @@ export function ConfirmDialog({
   confirmLabel,
   danger,
   busy,
+  error = null,
   onConfirm,
   onClose,
 }: ConfirmProps) {
+  const paragraphs = typeof body === 'string' ? [body] : body;
   return (
     <Modal
       open={open}
@@ -181,7 +186,18 @@ export function ConfirmDialog({
         </>
       }
     >
-      <p className="hint">{body}</p>
+      <div className="confirm-body">
+        {paragraphs.map((sentence) => (
+          <p key={sentence} className="hint">
+            {sentence}
+          </p>
+        ))}
+        {error === null ? null : (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
     </Modal>
   );
 }
