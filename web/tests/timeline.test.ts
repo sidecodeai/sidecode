@@ -177,6 +177,30 @@ describe('timeline reducer', () => {
     const event = state.items.t1?.event;
     expect(event?.kind === 'tool_call' && event.output).toBe('the whole thing');
   });
+
+  // A60: a row whose block is held in full asks the device for nothing more
+  // when it is opened again.
+  it('marks the swapped-in block as held in full', () => {
+    let state = applyEvent(emptyTimeline(), tool(1, 'succeeded', 'short'));
+    expect(state.items.t1?.full).toBeUndefined();
+
+    state = replaceBlock(state, tool(1, 'succeeded', 'the whole thing'));
+
+    expect(state.items.t1?.full).toBe(true);
+  });
+
+  it('keeps the full copy over a page’s cut one, and lets a newer event replace it', () => {
+    let state = applyEvent(emptyTimeline(), tool(1, 'running', ''));
+    state = replaceBlock(state, tool(1, 'running', 'the whole thing'));
+
+    // A repair page carries the same, cut copy: it is no newer, and the full one stays.
+    state = mergeMissed(state, [tool(1, 'running', '')]);
+    expect(state.items.t1?.full).toBe(true);
+
+    // The block goes on and is written again: that is a new copy, held as it came.
+    state = applyEvent(state, tool(2, 'succeeded', 'done'));
+    expect(state.items.t1?.full).toBeUndefined();
+  });
 });
 
 describe('block ordering (amendment A8)', () => {

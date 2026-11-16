@@ -38,6 +38,12 @@ export interface TimelineItem {
   event: SessionEvent;
   /** Set on a row the device has not confirmed yet. */
   pending?: OptimisticBlock;
+  /**
+   * A60: the block as `session.block` returned it, untruncated, so opening its
+   * row asks the device for nothing more. A later event for the block is a new
+   * copy and does not carry it.
+   */
+  full?: true;
 }
 
 /** A message this app has sent and the device has not echoed back yet (A12). */
@@ -519,7 +525,7 @@ export function replaceBlock(state: TimelineState, event: SessionEvent): Timelin
   if (!previous) return state;
   return {
     ...state,
-    items: { ...state.items, [key]: { ...previous, ts: event.ts, event } },
+    items: { ...state.items, [key]: { ...previous, ts: event.ts, event, full: true } },
   };
 }
 

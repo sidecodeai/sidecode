@@ -236,10 +236,18 @@ export interface RequestMap {
   /**
    * `before_seq` pages back from the newest event; `after_seq` (A9) walks forward
    * from a cursor, oldest first, which is how a gap in a transcript is filled.
-   * The two are mutually exclusive.
+   * The two are mutually exclusive. A60: `brief` has every tool call in the page
+   * cut harder — input to 1 KiB, no output, no patch, each cut flagged — and a
+   * device from before A60 ignores it and answers in full.
    */
   'session.history': [
-    { session_id: string; before_seq?: number; after_seq?: number; limit?: number },
+    {
+      session_id: string;
+      before_seq?: number;
+      after_seq?: number;
+      limit?: number;
+      brief?: boolean;
+    },
     HistoryResult,
   ];
   'session.block': [{ session_id: string; block_id: string }, BlockResult];

@@ -70,6 +70,7 @@ import {
   typedSession,
 } from './typing';
 import { ServedSends, needsResync, replayFor } from './replay';
+import { briefEvent } from './brief';
 import { filesField, heldTs, hold, readQueueTs } from './queue';
 import { dirEntries, makeDir } from './dirs';
 import { planRename } from './rename';
@@ -1165,17 +1166,20 @@ function handleAppFrame(conn: AppConn, frame: Record<string, unknown>): void {
       const all = state.events.get(sessionId) ?? [];
       const beforeSeq = typeof frame.before_seq === 'number' ? frame.before_seq : Infinity;
       const limit = typeof frame.limit === 'number' ? Math.min(frame.limit, 1000) : 200;
+      // A60: a brief page cuts every tool call; `session.block` has the rest.
+      const shape = (events: SessionEvent[]): SessionEvent[] =>
+        frame.brief === true ? events.map(briefEvent) : events;
       if (typeof frame.after_seq === 'number') {
         // A9: forward from a cursor, oldest first, which is how a gap is filled.
         const after = frame.after_seq;
         const newer = historyEvents(all, Infinity).filter((e) => e.seq > after);
         const next = newer.slice(0, limit);
-        reply(conn, id, { events: next, has_more: next.length < newer.length });
+        reply(conn, id, { events: shape(next), has_more: next.length < newer.length });
         return;
       }
       const final = historyEvents(all, beforeSeq);
       const page = final.slice(Math.max(0, final.length - limit));
-      reply(conn, id, { events: page, has_more: page.length < final.length });
+      reply(conn, id, { events: shape(page), has_more: page.length < final.length });
       return;
     }
 

@@ -49,6 +49,18 @@ import { useOutbox, type PendingSend } from './outbox';
 const HISTORY_PAGE = 200;
 
 /**
+ * A60: every page of the transcript is asked for brief. A tool call's output and
+ * patch are what makes a page heavy, and nobody reads them until the row is
+ * opened, which fetches the whole block (`expandBlock`). A device from before
+ * A60 answers in full, and the rows draw that as they always did.
+ */
+const historyPage = (sessionId: string) => ({
+  session_id: sessionId,
+  limit: HISTORY_PAGE,
+  brief: true,
+});
+
+/**
  * How many closed conversations keep their transcript. A tab left open all day
  * used to hold every session it had ever visited, timeline and all; the ones
  * the reader is moving between are worth keeping, the rest are a page of
@@ -359,12 +371,11 @@ export const useChat = create<ChatState>((set, get) => ({
     const counted = isNewestPage ? (useSessions.getState().sessions[key]?.last_seq ?? 0) : 0;
     patch(set, key, (c) => ({ ...c, historyLoading: true }));
     try {
-      const params: { session_id: string; before_seq?: number; limit: number } = {
-        session_id: chat.sessionId,
-        limit: HISTORY_PAGE,
-      };
-      if (chat.timeline.oldestSeq !== null) params.before_seq = chat.timeline.oldestSeq;
-      const result = await rpc('session.history', params);
+      const oldest = chat.timeline.oldestSeq;
+      const result = await rpc('session.history', {
+        ...historyPage(chat.sessionId),
+        ...(oldest === null ? {} : { before_seq: oldest }),
+      });
       if (sent !== epoch) return;
       patch(set, key, (c) => {
         if (c.generation !== generation) return c;
@@ -414,9 +425,8 @@ export const useChat = create<ChatState>((set, get) => ({
       for (let page = 0; page < REPAIR_PAGES; page += 1) {
         const requested = get().sessions[key]?.timeline.lastSeq ?? 0;
         const result = await rpc('session.history', {
-          session_id: chat.sessionId,
+          ...historyPage(chat.sessionId),
           after_seq: cursor,
-          limit: HISTORY_PAGE,
         });
         if (sent !== epoch) return;
         // A live event that arrived while the page was on its way is newer than

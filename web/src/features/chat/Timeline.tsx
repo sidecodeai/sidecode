@@ -173,7 +173,11 @@ const ItemView = memo(function ItemView({ item, handlers, nested }: ItemProps) {
       return <ThinkingRow event={event as ThinkingEvent} />;
     case 'tool_call':
       return (
-        <ToolRow event={event as ToolCallEvent} onOpenFull={handlers.onOpenFull}>
+        <ToolRow
+          event={event as ToolCallEvent}
+          full={item.full === true}
+          onOpenFull={handlers.onOpenFull}
+        >
           {nested?.map((child) => (
             <ItemView key={child.key} item={child} handlers={handlers} />
           ))}

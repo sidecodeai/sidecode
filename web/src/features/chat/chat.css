@@ -464,6 +464,12 @@
   margin-bottom: 4px;
 }
 
+/* A60: the output or patch a brief page left out, while it is fetched or to fetch again. */
+.tool-note {
+  font-size: var(--fs-12);
+  color: var(--ink-tertiary);
+}
+
 .tool-children {
   margin-left: var(--sp-3);
   padding-left: var(--sp-3);

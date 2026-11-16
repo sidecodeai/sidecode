@@ -301,6 +301,7 @@ describe('subscribe replay', () => {
         session_id: SESSION,
         after_seq: 5,
         limit: 200,
+        brief: true,
       });
 
       resolveHistory({ events: [textEvent(20, 'replayed')], has_more: false });
@@ -359,7 +360,7 @@ describe('subscribe replay', () => {
 
       await vi.waitFor(() => expect(chat()?.timeline.order).toEqual(['b20']));
       // Nothing to join to, so no `after_seq`: the newest page it is.
-      expect(rpc.mock.calls.at(-1)).toEqual(['session.history', { session_id: SESSION, limit: 200 }]);
+      expect(rpc.mock.calls.at(-1)).toEqual(['session.history', { session_id: SESSION, limit: 200, brief: true }]);
     });
   });
 
@@ -485,6 +486,40 @@ describe('account scope', () => {
   });
 });
 
+/**
+ * A60: the transcript is read in brief pages, and a tool call's whole block is
+ * fetched when its row is opened.
+ */
+describe('brief pages', () => {
+  const historyCalls = () =>
+    rpc.mock.calls.filter((c) => c[0] === 'session.history').map((c) => c[1] as { brief?: boolean });
+
+  it('asks for the newest page, an older one and a repair brief', async () => {
+    rpc.mockResolvedValueOnce({ events: [textEvent(40, 'newest')], has_more: true });
+    openFresh().onResult({ session, resync: false, events: [] });
+    await vi.waitFor(() => expect(chat()?.historyLoaded).toBe(true));
+    rpc.mockResolvedValueOnce({ events: [textEvent(10, 'older')], has_more: false });
+    await useChat.getState().loadOlder(KEY);
+    rpc.mockResolvedValueOnce({ events: [textEvent(41, 'between')], has_more: false });
+    useChat.getState().ingestEvent(SESSION, textEvent(43, 'skipped one'), DEVICE);
+    await vi.waitFor(() => expect(chat()?.timeline.contiguousSeq).toBe(43));
+
+    expect(historyCalls()).toHaveLength(3);
+    expect(historyCalls().every((call) => call.brief === true)).toBe(true);
+  });
+
+  it('holds a block in full once session.block has answered', async () => {
+    openSession().onResult({ session, resync: false, events: [toolEvent(3, 'succeeded')] });
+    rpc.mockResolvedValueOnce({ event: { ...toolEvent(3, 'succeeded'), output: 'everything' } });
+
+    await useChat.getState().expandBlock(KEY, 't1');
+
+    expect(rpc).toHaveBeenCalledWith('session.block', { session_id: SESSION, block_id: 't1' });
+    expect(chat()?.timeline.items.t1?.full).toBe(true);
+    expect(chat()?.timeline.items.t1?.event).toMatchObject({ output: 'everything' });
+  });
+});
+
 describe('live events', () => {
   it('still projects live status and metadata onto the session summary', () => {
     const handlers = openSession();
@@ -588,7 +623,7 @@ describe('gap repair', () => {
 
     useChat.getState().ingestEvent(SESSION, textEvent(5, 'e'), DEVICE);
 
-    expect(historyCalls()).toEqual([{ session_id: SESSION, after_seq: 2, limit: 200 }]);
+    expect(historyCalls()).toEqual([{ session_id: SESSION, after_seq: 2, limit: 200, brief: true }]);
     await vi.waitFor(() =>
       expect(chat()?.timeline.order).toEqual(['b1', 'b2', 'b3', 'b4', 'b5']),
     );
@@ -713,7 +748,7 @@ describe('gap repair', () => {
     await useChat.getState().loadOlder(KEY);
 
     // 4011 to 4999 are still to be asked for: the page starts below the window, not below the stray rows.
-    expect(historyCalls().at(-1)).toEqual({ session_id: SESSION, before_seq: 5_000, limit: 200 });
+    expect(historyCalls().at(-1)).toEqual({ session_id: SESSION, before_seq: 5_000, limit: 200, brief: true });
   });
 
   // History carries no queue event (PROTOCOL 6.4), and a page moves the cursor over
@@ -832,7 +867,7 @@ describe('gap repair', () => {
 
     rpc.mockResolvedValueOnce({ events: [], has_more: false });
     await useChat.getState().loadOlder(KEY);
-    expect(historyCalls().at(-1)).toEqual({ session_id: SESSION, before_seq: 5_000, limit: 200 });
+    expect(historyCalls().at(-1)).toEqual({ session_id: SESSION, before_seq: 5_000, limit: 200, brief: true });
   });
 
   it('asks one question at a time, and the next for whatever opened meanwhile', async () => {
@@ -852,7 +887,7 @@ describe('gap repair', () => {
     resolveFirst({ events: [textEvent(3, 'c'), textEvent(4, 'd')], has_more: false });
     await vi.waitFor(() => expect(historyCalls()).toHaveLength(2));
     // The second starts where the first stopped, not back at the beginning.
-    expect(historyCalls()[1]).toEqual({ session_id: SESSION, after_seq: 5, limit: 200 });
+    expect(historyCalls()[1]).toEqual({ session_id: SESSION, after_seq: 5, limit: 200, brief: true });
     await vi.waitFor(() => expect(chat()?.timeline.contiguousSeq).toBe(9));
     expect(chat()?.timeline.order).toEqual([
       'b1', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7', 'b8', 'b9',
@@ -894,7 +929,7 @@ describe('gap repair', () => {
     rpc.mockResolvedValueOnce({ events: [textEvent(3, 'c'), textEvent(4, 'd')], has_more: false });
     handlers.onResult({ session: { ...session, last_seq: 5 }, resync: false, events: [] });
 
-    expect(historyCalls()).toEqual([{ session_id: SESSION, after_seq: 2, limit: 200 }]);
+    expect(historyCalls()).toEqual([{ session_id: SESSION, after_seq: 2, limit: 200, brief: true }]);
     await vi.waitFor(() =>
       expect(chat()?.timeline.order).toEqual(['b1', 'b2', 'b3', 'b4', 'b5']),
     );
@@ -933,7 +968,7 @@ describe('gap repair', () => {
     }
     rpc.mockResolvedValueOnce({ events: [textEvent(3_000, 'newest')], has_more: false });
     useChat.getState().ingestEvent(SESSION, textEvent(1_002, 'live'), DEVICE);
-    await vi.waitFor(() => expect(historyCalls().at(-1)).toEqual({ session_id: SESSION, limit: 200 }));
+    await vi.waitFor(() => expect(historyCalls().at(-1)).toEqual({ session_id: SESSION, limit: 200, brief: true }));
 
     // The older page answers late, for rows that are gone.
     resolveOlder({ events: [textEvent(900, 'old')], has_more: false });
@@ -1038,7 +1073,7 @@ describe('a conversation that could not be read', () => {
     (subscribe.mock.calls.at(-1)![2] as Handlers).onResult({ session, resync: false, events: [] });
 
     await vi.waitFor(() => expect(chat()?.timeline.order).toEqual(['b20', 'b21', 'b30']));
-    expect(historyCalls().at(-1)).toEqual({ session_id: SESSION, before_seq: 30, limit: 200 });
+    expect(historyCalls().at(-1)).toEqual({ session_id: SESSION, before_seq: 30, limit: 200, brief: true });
     expect(chat()?.error).toBeNull();
   });
 
@@ -1060,7 +1095,7 @@ describe('a conversation that could not be read', () => {
     await vi.waitFor(() =>
       expect(chat()?.timeline.order).toEqual(['b20', 'b30', 'b31', 'b33', 'b34']),
     );
-    expect(historyCalls().at(-1)).toEqual({ session_id: SESSION, after_seq: 30, limit: 200 });
+    expect(historyCalls().at(-1)).toEqual({ session_id: SESSION, after_seq: 30, limit: 200, brief: true });
     expect(chat()?.error).toBeNull();
   });
 
@@ -1098,7 +1133,7 @@ describe('a conversation that could not be read', () => {
     (subscribe.mock.calls.at(-1)![2] as Handlers).onResult({ session, resync: false, events: [] });
 
     await vi.waitFor(() => expect(chat()?.error).toBeNull());
-    expect(historyCalls()).toEqual([{ session_id: SESSION, after_seq: 1, limit: 200 }]);
+    expect(historyCalls()).toEqual([{ session_id: SESSION, after_seq: 1, limit: 200, brief: true }]);
     expect(hasGap(chat()!.timeline)).toBe(false);
   });
 

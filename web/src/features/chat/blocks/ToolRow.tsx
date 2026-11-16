@@ -7,26 +7,48 @@ import { DiffStat, DiffView } from './DiffView';
 import { OutputBox } from './OutputBox';
 import { ToolIcon } from './toolIcons';
 import { toolCategory } from './toolCategory';
+import { isCut, lacksContent } from './toolCut';
 
 interface Props {
   event: ToolCallEvent;
+  /** A60: the block is held as `session.block` returned it, so nothing more is fetched. */
+  full: boolean;
   onOpenFull: (blockId: string) => Promise<void>;
   children?: ReactNode;
 }
 
-export function ToolRow({ event, onOpenFull, children }: Props) {
+export function ToolRow({ event, full, onOpenFull, children }: Props) {
   const [open, setOpen] = useState(false);
+  const [fetching, setFetching] = useState(false);
   const running = event.status === 'running';
   const now = useNow(running ? 1000 : 0);
   const failed = event.status === 'failed';
   const category = toolCategory(event.tool, event.tool_kind);
+  const cut = isCut(event);
+  // A60: a brief page leaves the output and the patch out, so a cut is detail
+  // to open too, even with nothing of it held yet.
   const hasDetail =
-    event.input !== undefined || event.output !== undefined || event.diff?.patch !== undefined;
+    event.input !== undefined || event.output !== undefined || event.diff?.patch !== undefined || cut;
   // A running tool shows just its live output; the full input and diff appear
   // only when the row is opened deliberately.
   const expanded = open || running;
   const showInput = open && event.input !== undefined;
   const showOutput = open ? event.output !== undefined : running && Boolean(event.output);
+
+  const fetchFull = () => {
+    setFetching(true);
+    // `onOpenFull` reports its own failure, and the row offers the fetch again.
+    void onOpenFull(event.block_id).finally(() => setFetching(false));
+  };
+
+  // A60: a finished block the device cut is fetched whole the moment the
+  // person opens it. A running one is still being written, and its next event
+  // replaces whatever a fetch would bring.
+  const toggle = () => {
+    const opening = !open;
+    setOpen(opening);
+    if (opening && cut && !full && !running && !fetching) fetchFull();
+  };
 
   return (
     <div className={`tool${running ? ' running' : ''}${failed ? ' failed' : ''}`}>
@@ -35,7 +57,7 @@ export function ToolRow({ event, onOpenFull, children }: Props) {
         className="tool-head"
         aria-expanded={expanded}
         disabled={!hasDetail}
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggle}
       >
         <span className="tool-marker" aria-hidden>
           {running ? <span className="dot running pulse" /> : <ToolIcon category={category} />}
@@ -89,6 +111,17 @@ export function ToolRow({ event, onOpenFull, children }: Props) {
                 onOpenFull={() => onOpenFull(event.block_id)}
               />
             </div>
+          ) : null}
+          {open && !full && lacksContent(event) ? (
+            <p className="tool-note">
+              {fetching ? (
+                strings.common.loading
+              ) : (
+                <button type="button" className="link-btn" onClick={fetchFull}>
+                  {strings.chat.openFullOutput}
+                </button>
+              )}
+            </p>
           ) : null}
           {children ? <div className="tool-children">{children}</div> : null}
         </div>
