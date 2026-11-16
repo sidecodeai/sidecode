@@ -57,6 +57,9 @@ class GrokLeaderService:
         # When the scan may next try to join, and how long it waited last.
         self._retry_at = 0.0
         self._retry_wait = 0.0
+        # Whether a join has been tried, whatever came of it: until then the
+        # mirror reads no update log, since the leader may hold its session.
+        self.attempted = False
 
     # ------------------------------------------------------------- accessors
 
@@ -90,6 +93,12 @@ class GrokLeaderService:
         `grok` would do anyway; without `[cli] use_leader` the device stays on
         the private-child path and every terminal session stays mirrored.
         """
+        try:
+            return await self._join(binary)
+        finally:
+            self.attempted = True
+
+    async def _join(self, binary: str | None) -> bool:
         if binary:
             self._binary = binary
         if self.ready:

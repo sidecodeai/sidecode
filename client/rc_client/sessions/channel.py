@@ -52,8 +52,10 @@ class SessionChannel:
         # Set by the hub to hear that this session's queue changed, before the change is said.
         self.on_queue_change: Callable[[Session], None] | None = None
         # Seeded from the registry so a resumed session keeps the ordering its
-        # already-delivered blocks were given.
-        self._first_seq: dict[str, int] = registry.first_seqs(session.session_id)
+        # already-delivered blocks were given. Read when the session first
+        # writes a block: read for every session as the device started, it was
+        # every event the device had stored, before the link could come up.
+        self._first_seq: dict[str, int] | None = None
 
     # ------------------------------------------------------------- lifecycle
 
@@ -144,6 +146,8 @@ class SessionChannel:
         if isinstance(block_id, str) and kind in BLOCK_KINDS:
             # Amendment A8: blocks stay where they first appeared, even when a
             # long-running one is replaced much later.
+            if self._first_seq is None:
+                self._first_seq = self.registry.first_seqs(self.session.session_id)
             payload["first_seq"] = self._first_seq.setdefault(block_id, seq)
         full = {"seq": seq, "ts": now_ms(), "kind": kind, **payload}
         wire = bound_event(full)

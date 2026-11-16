@@ -1214,9 +1214,12 @@ The writers of every rollout come from one look at the Codex processes (`procsca
 one `lsof -p <pids>` on macOS, `/proc/<pid>/fd` and `fdinfo` on Linux), and those of the Grok logs
 that Grok's registry does not answer for from one look at the Grok processes; a rollout exactly one
 process writes remembers that process and its start time, which is the process a Close from an app
-ends (A61). The shared Codex daemon and the Grok leader are ticked on loops of their own, every ten
-seconds as well and never inside the scan, so a daemon that answers slowly holds back nothing
-the scan says about the other agents' terminals. Each scan ends with one log line naming its phases
+ends (A61). The first record of a rollout, which says whose thread it is, is read once per file and
+remembered by inode (`agents/codex/heads.py`): an automation leaves thousands of `codex exec`
+rollouts, each opening with about 20 KB, and reading them all again every ten seconds took minutes
+on a loaded machine. The shared Codex daemon and the Grok leader are ticked on loops of their own,
+every ten seconds as well and never inside the scan, so a daemon that answers slowly holds back
+nothing the scan says about the other agents' terminals. Each scan ends with one log line naming its phases
 in milliseconds (`terminal scan was slow` at info when it took two seconds or more, `terminal scan`
 at debug otherwise), and a holder or writer scan that could not be completed logs a warning and
 leaves control as it was.
@@ -1233,13 +1236,27 @@ the wait ends is not waited for again: the `hello` goes as the hub restored the 
 warning line says so (`first hello sent before the first terminal scan settled`), and what the scan
 finds afterwards is published like any change. A reconnect in the same run never waits.
 
-The channel socket and the pi socket open before any of that, before the daemon adopts Codex's
-threads and joins Grok's leader, which takes seconds. The bridges and terminal proxies of the CLIs
-that outlived the previous daemon have been dialling back since it went, and what they register
-is in the hub by the time the first scan decides who holds what. The gateway link starts after
-the agents are known and not before: its `hello` carries the agent list and the sessions' control,
-and a `hello` sent earlier would say less than the one that follows and show the apps the
-difference.
+The channel socket and the pi socket open first. The bridges and terminal proxies of the CLIs that
+outlived the previous daemon have been dialling back since it went, and what they register is in
+the hub by the time the first scan decides who holds what. The gateway link starts right after
+them and waits for none of the agents: on a loaded machine with thousands of `codex exec` runs
+to withdraw (A59), it once waited minutes for them. Reaching the shared Codex daemon (its model
+list and its handshake), joining the Grok leader and asking every agent's CLI what it offers run in
+the background (`Daemon._start_agents`), Codex and Grok side by side and detection after them,
+since it reports Codex by whether the daemon answered. The first `hello` lists what the last run
+detected, kept in the registry (`agents/announced.py`), and `agents.updated` follows once this run
+knows, if anything changed; a device that no run has detected for yet gives detection the same
+three seconds as the first scan rather than tell the gateway it has no agents. The requests that
+act through an agent (`session.create`, `send`, `stop`, `set`, `commands`, `command`, `takeover`,
+`archive` and `delete`) wait for the agents to have started, at most 45 seconds
+(`AGENT_START_WAIT`, inside the minute the gateway gives a device), rather than find no agent, or
+take Codex's fallback path for a thread the shared daemon may be serving; a history read, a queue
+edit, a terminal and everything else never wait. Until the Codex daemon and the Grok leader have
+each been tried once, the scan leaves their files alone, since a thread either serves is theirs to
+describe; Claude's terminals are scanned from the first pass. The hub restores the sessions from
+their rows alone: a session's block positions (A8) are read when it first writes a block, where
+reading them for every session as the device started read every event it had stored before the
+sockets could open.
 
 An attached Claude session does not wait for the scan. A terminal attaches before its CLI has
 written anything, and the transcript appears with the first row, so every tail pass (every two
@@ -2325,18 +2342,21 @@ refuses a thread whose `originator` is `codex_exec` (`EXEC_ORIGINATOR`) or whose
 (`EXEC_SOURCE`), before anything else is looked at, so neither the daemon's index nor rollout
 discovery adopts one, and an exec rollout is never mirrored or tailed.
 
-Removing what was published before a rule takes one pass. The answer is in each thread's own
-rollout, which is named after the thread, so `rollouts.owned_on_disk` walks the history once for
-all the stored sessions it is asked about, reads the `session_meta` each rollout opens with, and
-judges it by the same predicate; a thread whose rollout is not on disk, or cannot be read, is left
-out. With the daemon connected its service makes the pass each time it connects
-(`CodexDaemonService.prune_foreign`) and asks `thread/read` only about the threads the rollouts said
-nothing of, so it no longer makes one call per stored session; without the daemon the mirror makes
-it once at start, from the rollouts alone (`MirrorService._prune_foreign_codex`), and a thread with
-no rollout waits for a daemon. Only stored terminal sessions are looked at — never one the device
-created, nor one in the middle of a turn it drives — and each one dropped goes with
-`session.removed`, which the hub says again on the next link. New foreign work and new exec runs
-never appear on either path.
+Removing what was published before a rule takes one pass a run, made in the background once the
+daemon has been tried (`CodexDaemonService.prune_foreign`), and nothing waits for it. The answer is
+in each thread's own rollout, which is named after the thread, so one walk of the history finds
+the rollouts of all the stored sessions it is asked about without reading any
+(`rollouts.rollout_paths`). Their `session_meta` records are then read 64 at a time
+(`rollouts.owned_at`) and judged by the same predicate, and each batch is withdrawn and written,
+off the loop, before the next is read: a write queued while the registry applies a large batch
+waits for it, and the loop with it. So thousands of exec runs neither hold the link back nor stall
+the loop for more than a moment. A thread whose rollout is not on disk, or cannot be read, is asked
+about with `thread/read` when the daemon is connected, and is otherwise left alone until a later
+run. Only stored terminal sessions are looked at — never one the device created, nor one in the
+middle of a turn it drives — and each one dropped goes with `session.removed`, which the hub says
+again on the next link; the hub keeps up to 10,000 of them for a link (`MAX_PENDING_REMOVALS`),
+since a removal the gateway never hears leaves the session in the apps for good. New foreign work
+and new exec runs never appear on either path.
 
 ### When there is no daemon
 

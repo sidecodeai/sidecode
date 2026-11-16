@@ -286,6 +286,7 @@ class StuckCodexDaemon:
         self.release = asyncio.Event()
         self.ticks = 0
         self.ready = False
+        self.attempted = True
 
     async def tick(self, binary: str | None) -> None:
         self.ticks += 1

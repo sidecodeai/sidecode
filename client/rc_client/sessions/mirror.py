@@ -203,10 +203,6 @@ class MirrorService:
             await self._backfill_known()
         except Exception:
             log.exception("terminal session settings backfill failed")
-        try:
-            await self._prune_foreign_codex()
-        except Exception:
-            log.exception("withdrawing codex sessions that are not this device's failed")
         while True:
             try:
                 await self.scan_once()
@@ -258,22 +254,22 @@ class MirrorService:
         timer.lap("claude_adopt")
         await self._refresh_claude_control()
         timer.lap("claude_control")
-        found_codex = await asyncio.to_thread(
-            rollouts.discover, self.limits.max_sessions, self.limits.max_age_days
-        )
+        found_codex = await self._discover_codex()
         timer.lap("codex_discover")
-        found_grok = await asyncio.to_thread(
-            grok_sessions.discover, self.limits.max_sessions, self.limits.max_age_days
-        )
+        found_grok = await self._discover_grok()
         timer.lap("grok_discover")
-        self._adopt_codex(found_codex)
-        await self._adopt_grok(found_grok)
+        if found_codex is not None:
+            self._adopt_codex(found_codex)
+        if found_grok is not None:
+            await self._adopt_grok(found_grok)
         timer.lap("adopt")
         await self._watch_titles()
         timer.lap("titles")
-        await self._refresh_codex_control()
+        if found_codex is not None:
+            await self._refresh_codex_control()
         timer.lap("codex_control")
-        await self._refresh_grok_control()
+        if found_grok is not None:
+            await self._refresh_grok_control()
         timer.lap("grok_control")
         if settings:
             # Every mirrored session whose settings have not been read yet: the
@@ -282,32 +278,26 @@ class MirrorService:
             timer.lap("settings")
         timer.report(claude=len(self._claude), codex=len(self._codex), grok=len(self._grok))
 
-    async def _prune_foreign_codex(self) -> None:
-        """Withdraw the Codex sessions published before they were known not to be the device's.
+    async def _discover_codex(self) -> list[rollouts.RolloutInfo] | None:
+        """The rollouts to mirror, or None while the shared daemon has not been tried yet.
 
-        A `codex exec` run was published as a session until A59, and another
-        application's thread until A18. With the shared daemon connected its own
-        pass at startup does this from its index; without it, each thread's own
-        rollout says, read once from disk.
+        The device tries the daemon in the background as it starts (A11): a
+        thread the daemon serves is the daemon's to describe, and until it has
+        been asked the mirror cannot tell such a thread from a terminal's own.
         """
-        if self.codex_daemon is not None and self.codex_daemon.ready:
-            return
-        candidates = {
-            session_id
-            for session_id, entry in self.hub.entries.items()
-            if entry.session.agent == "codex" and self._adoptable(entry)
-        }
-        if not candidates:
-            return
-        owned = await asyncio.to_thread(rollouts.owned_on_disk, candidates)
-        foreign = sorted(thread_id for thread_id, ours in owned.items() if not ours)
-        for thread_id in foreign:
-            entry = self.hub.entries.get(thread_id)
-            if entry is not None and self._adoptable(entry):
-                self._codex.pop(thread_id, None)
-                await self.hub.withdraw(entry)
-        if foreign:
-            log.info("dropped codex sessions that are not this device's", count=len(foreign))
+        if self.codex_daemon is not None and not self.codex_daemon.attempted:
+            return None
+        return await asyncio.to_thread(
+            rollouts.discover, self.limits.max_sessions, self.limits.max_age_days
+        )
+
+    async def _discover_grok(self) -> list[grok_sessions.GrokSessionInfo] | None:
+        """The update logs to mirror, or None while the leader has not been tried yet (A28)."""
+        if self.grok_leader is not None and not self.grok_leader.attempted:
+            return None
+        return await asyncio.to_thread(
+            grok_sessions.discover, self.limits.max_sessions, self.limits.max_age_days
+        )
 
     def _driven_claude(self) -> set[str]:
         """Claude sessions this device is running right now.

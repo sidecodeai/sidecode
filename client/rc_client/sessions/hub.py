@@ -56,8 +56,9 @@ Publisher = Callable[[dict[str, Any]], Awaitable[None]]
 MAX_TEXT_BYTES = 64 * 1024
 MAX_ATTACHMENTS = 8
 # How many removals may wait for a link: a link that never comes back would
-# otherwise grow them without end.
-MAX_PENDING_REMOVALS = 64
+# otherwise grow them without end. A59 can withdraw thousands of `codex exec`
+# runs at once, and every removal past the bound stays in the apps for good.
+MAX_PENDING_REMOVALS = 10_000
 # How long closing a session may take before the reply goes out anyway (A39).
 # An agent that will not die is still let go of here: the person asked for the
 # session to be closed, and a request that never answers helps nobody.

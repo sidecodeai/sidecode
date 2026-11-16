@@ -121,8 +121,10 @@ async def test_the_attachment_sockets_open_before_the_agents_are_adopted(
             await task
         await server.stop()
 
-    # The scan tries Codex again every round, so only how it began says what came first.
-    assert order[:3] == ["sockets", "codex", "grok"]
+    # The two agents are tried side by side, and the scan tries Codex again every round, so only
+    # how it began says what came first.
+    assert order[0] == "sockets"
+    assert {"codex", "grok"} <= set(order[1:])
 
 
 async def request(server: FakeGateway, frame: dict[str, Any]) -> dict[str, Any]:

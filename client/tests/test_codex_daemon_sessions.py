@@ -119,6 +119,14 @@ async def harness(tmp_path: Path, socket_dir: Path, monkeypatch: pytest.MonkeyPa
         built.close()
 
 
+async def indexed(harness: Harness) -> None:
+    """Connect, then what the device does once connected: withdraw the threads that are not its
+    own (A18, A59) and read the index."""
+    assert await harness.service.start("/bin/codex") is True
+    await harness.service.prune_foreign()
+    await harness.service.refresh()
+
+
 async def started(
     harness: Harness, loaded: list[str] | None = None, *, row: dict[str, Any] | None = None
 ) -> None:
@@ -134,7 +142,7 @@ async def started(
     harness.daemon.replies["thread/items/list"] = {"data": []}
     harness.daemon.replies["turn/start"] = {"turn": {"id": "turn-1"}}
     harness.daemon.replies["turn/steer"] = {"turnId": "turn-1"}
-    assert await harness.service.start("/bin/codex") is True
+    await indexed(harness)
 
 
 async def settle(predicate: Any, timeout: float = 2.0) -> None:
@@ -1087,7 +1095,7 @@ async def test_a_thread_deleted_in_codex_stops_being_a_session(harness: Harness)
     }
     harness.daemon.replies["thread/loaded/list"] = {"data": []}
     harness.daemon.replies["thread/items/list"] = {"data": []}
-    assert await harness.service.start("/bin/codex") is True
+    await indexed(harness)
     assert {THREAD, other} <= set(harness.hub.entries)
 
     harness.daemon.replies["thread/list"] = {"data": [thread_row()]}
@@ -1108,7 +1116,7 @@ async def test_an_older_thread_that_fell_off_the_page_is_kept(harness: Harness) 
     }
     harness.daemon.replies["thread/loaded/list"] = {"data": []}
     harness.daemon.replies["thread/items/list"] = {"data": []}
-    assert await harness.service.start("/bin/codex") is True
+    await indexed(harness)
 
     harness.daemon.replies["thread/list"] = {"data": [thread_row()], "nextCursor": "older"}
     await harness.service.refresh()
@@ -1174,7 +1182,7 @@ async def test_a_thread_another_application_owns_is_never_adopted(harness: Harne
     harness.daemon.replies["thread/loaded/list"] = {"data": [foreign]}
     harness.daemon.replies["thread/read"] = {"thread": desktop_row(foreign)}
     harness.daemon.replies["thread/items/list"] = {"data": []}
-    assert await harness.service.start("/bin/codex") is True
+    await indexed(harness)
     assert foreign not in harness.hub.entries
 
     # A foreign thread that speaks is still foreign, and the answer stands: a
@@ -1225,7 +1233,7 @@ async def test_threads_published_before_the_rule_are_withdrawn_at_startup(
     harness.daemon.responder = answer
     harness.daemon.replies["thread/list"] = {"data": []}
     harness.daemon.replies["thread/loaded/list"] = {"data": []}
-    assert await harness.service.start("/bin/codex") is True
+    await indexed(harness)
 
     assert sorted(harness.hub.entries) == [ours, silent, terminal]
     removed = [f["session_id"] for f in harness.frames if f.get("type") == "session.removed"]
@@ -1253,7 +1261,7 @@ async def test_a_withdrawal_the_link_missed_is_repeated_on_the_next_link(
     harness.daemon.replies["thread/list"] = {"data": []}
     harness.daemon.replies["thread/loaded/list"] = {"data": []}
     harness.hub.link_up = lambda: False
-    assert await harness.service.start("/bin/codex") is True
+    await indexed(harness)
 
     def removals() -> list[str]:
         return [f["session_id"] for f in harness.frames if f.get("type") == "session.removed"]
@@ -1305,7 +1313,7 @@ async def test_a_name_codex_announces_replaces_a_title_an_app_set(harness: Harne
 async def test_a_named_thread_in_history_is_titled_by_its_name(harness: Harness) -> None:
     harness.daemon.replies["thread/list"] = {"data": [thread_row(name="Fix the web typecheck")]}
     harness.daemon.replies["thread/loaded/list"] = {"data": []}
-    assert await harness.service.start("/bin/codex") is True
+    await indexed(harness)
     assert harness.hub.entry(THREAD).session.title == "Fix the web typecheck"
 
 

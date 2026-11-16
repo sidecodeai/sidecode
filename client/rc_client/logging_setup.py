@@ -17,7 +17,8 @@ _SECRET_HINTS = ("token", "password", "secret", "pair", "code", "authorization",
 
 
 def _redact(key: str, value: Any) -> Any:
-    lowered = key.lower()
+    # Codex is an agent's name, not a code: `codex_discover_ms` is a timing.
+    lowered = key.lower().replace("codex", "")
     if any(hint in lowered for hint in _SECRET_HINTS):
         return "<redacted>"
     if isinstance(value, str) and len(value) > 200:

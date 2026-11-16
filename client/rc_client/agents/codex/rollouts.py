@@ -6,7 +6,6 @@ working directory. Live rows are appended, so growth is tracked by `st_size`.
 
 from __future__ import annotations
 
-import json
 import os
 import time
 from dataclasses import dataclass, field
@@ -14,7 +13,7 @@ from typing import Any
 
 from ...tailing import FileTail
 from ..base import Emit
-from .provenance import owned_here
+from .heads import heads
 from .runtime import SESSIONS_DIR
 from .translate import CodexTranslator, _plan_items
 
@@ -34,22 +33,6 @@ class RolloutInfo:
     mtime: float
 
 
-def _session_meta(path: str) -> dict[str, Any] | None:
-    try:
-        with open(path, encoding="utf-8", errors="replace") as handle:
-            first = handle.readline()
-    except OSError:
-        return None
-    try:
-        row = json.loads(first)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(row, dict) or row.get("type") != "session_meta":
-        return None
-    payload = row.get("payload")
-    return payload if isinstance(payload, dict) else None
-
-
 def discover(limit: int = MAX_ROLLOUTS, max_age_days: int = MAX_AGE_DAYS) -> list[RolloutInfo]:
     """The most recent rollouts this device may mirror.
 
@@ -58,13 +41,13 @@ def discover(limit: int = MAX_ROLLOUTS, max_age_days: int = MAX_AGE_DAYS) -> lis
     rollout opens with decides whose it is before anything else looks at it
     (A18). A foreign rollout is never tailed and its holder is never asked
     about, which is what keeps an application sitting on its own file from
-    reading as a terminal.
+    reading as a terminal. Each file's first record is read once (`heads`).
     """
     root = SESSIONS_DIR
     if not root.is_dir():
         return []
     cutoff = time.time() - max_age_days * 86400
-    candidates: list[tuple[float, str]] = []
+    candidates: list[tuple[float, str, int, int]] = []
     for entry in root.glob("*/*/*/rollout-*.jsonl"):
         try:
             stat = entry.stat()
@@ -72,55 +55,62 @@ def discover(limit: int = MAX_ROLLOUTS, max_age_days: int = MAX_AGE_DAYS) -> lis
             continue
         if stat.st_mtime < cutoff or stat.st_size == 0:
             continue
-        candidates.append((stat.st_mtime, str(entry)))
+        candidates.append((stat.st_mtime, str(entry), stat.st_ino, stat.st_size))
     candidates.sort(reverse=True)
+    heads.keep({path for _, path, _, _ in candidates})
     found: list[RolloutInfo] = []
     # `limit` counts rollouts this device may mirror, not files walked past:
     # a machine where another application writes most of the history would
     # otherwise fill the whole window with threads nobody here can open.
-    for mtime, path in candidates:
+    for mtime, path, inode, size in candidates:
         if len(found) >= limit:
             break
-        meta = _session_meta(path)
-        if meta is None or not owned_here(meta.get("originator"), meta.get("source")):
-            continue
-        thread_id = str(meta.get("session_id") or meta.get("id") or "")
-        if not thread_id:
+        head = heads.read(path, inode)
+        if head is None or not head.owned or not head.thread_id:
             continue
         found.append(
-            RolloutInfo(
-                thread_id=thread_id,
-                path=path,
-                cwd=str(meta.get("cwd") or ""),
-                size=os.path.getsize(path),
-                mtime=mtime,
-            )
+            RolloutInfo(thread_id=head.thread_id, path=path, cwd=head.cwd, size=size, mtime=mtime)
         )
     return found
 
 
-def owned_on_disk(thread_ids: set[str]) -> dict[str, bool]:
-    """Whether each of these threads is the device's to publish, as its own rollout says.
+def rollout_paths(thread_ids: set[str]) -> dict[str, list[str]]:
+    """The rollouts named after each of these threads, from one walk of the history.
 
-    A rollout is named after its thread, so one walk of the history finds every
-    one of them without asking anybody; the answer is the `session_meta` the
-    rollout opens with (A18, A59). A thread whose rollout is not on disk, or
-    cannot be read, is left out: nothing has been said about it.
+    A rollout is named after its thread, `rollout-<time>-<id>.jsonl`, so the
+    walk reads no file.
     """
     root = SESSIONS_DIR
     if not thread_ids or not root.is_dir():
         return {}
     lengths = {len(thread_id) for thread_id in thread_ids}
-    found: dict[str, bool] = {}
+    found: dict[str, list[str]] = {}
     for entry in root.glob("*/*/*/rollout-*.jsonl"):
         thread_id = _named_thread(entry.stem, thread_ids, lengths)
-        if thread_id is None or thread_id in found:
-            continue
-        meta = _session_meta(str(entry))
-        if meta is None or str(meta.get("session_id") or meta.get("id") or "") != thread_id:
-            continue
-        found[thread_id] = owned_here(meta.get("originator"), meta.get("source"))
+        if thread_id is not None:
+            found.setdefault(thread_id, []).append(str(entry))
     return found
+
+
+def owned_at(paths: dict[str, list[str]]) -> dict[str, bool]:
+    """Whether each thread is the device's to publish, as its own rollout says (A18, A59).
+
+    The answer is the `session_meta` the rollout opens with. A thread whose
+    rollouts cannot be read, or do not open with its own record, is left out:
+    nothing has been said about it.
+    """
+    owned: dict[str, bool] = {}
+    for thread_id, candidates in paths.items():
+        for path in candidates:
+            try:
+                inode = os.stat(path).st_ino
+            except OSError:
+                continue
+            head = heads.read(path, inode)
+            if head is not None and head.thread_id == thread_id:
+                owned[thread_id] = head.owned
+                break
+    return owned
 
 
 def _named_thread(stem: str, thread_ids: set[str], lengths: set[int]) -> str | None:

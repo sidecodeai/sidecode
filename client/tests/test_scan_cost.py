@@ -9,6 +9,7 @@ and one line per scan saying where its time went.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from pathlib import Path
@@ -20,6 +21,7 @@ from rc_client import procscan
 from rc_client.agents.codex import rollouts as codex_rollouts
 from rc_client.agents.codex.daemon import service as service_module
 from rc_client.agents.codex.daemon import threads
+from rc_client.logging_setup import JsonFormatter
 from rc_client.models import Session
 from rc_client.procscan import Proc, Scan, Writers
 from rc_client.registry import Registry
@@ -27,7 +29,7 @@ from rc_client.sessions import mirror as mirror_module
 from rc_client.sessions import scan_timing
 from rc_client.sessions.hub import SessionHub
 from rc_client.sessions.mirror import MirrorService
-from tests.test_codex_daemon_sessions import Harness, harness, thread_row
+from tests.test_codex_daemon_sessions import Harness, harness, indexed, thread_row
 
 __all__ = ["harness"]
 
@@ -226,7 +228,7 @@ async def test_a_listing_that_times_out_is_left_alone_for_a_while(
     monkeypatch.setattr(service_module, "LIST_TIMEOUT", 0.2)
     harness.daemon.replies["thread/loaded/list"] = {"data": []}
     harness.daemon.silent.add("thread/list")
-    assert await harness.service.start("/bin/codex") is True
+    await indexed(harness)
 
     def listings() -> int:
         return sum(1 for method, _ in harness.daemon.calls if method == "thread/list")
@@ -256,7 +258,7 @@ async def test_a_thread_started_during_a_slow_listing_is_taken_at_once(
     monkeypatch.setattr(service_module, "LIST_TIMEOUT", 5.0)
     harness.daemon.replies["thread/list"] = {"data": [thread_row("t-old")]}
     harness.daemon.replies["thread/loaded/list"] = {"data": []}
-    assert await harness.service.start("/bin/codex") is True
+    await indexed(harness)
 
     harness.daemon.silent.add("thread/list")
     refresh = asyncio.create_task(harness.service.refresh())
@@ -278,7 +280,7 @@ async def test_a_thread_started_during_a_slow_listing_is_taken_at_once(
 async def test_a_listing_never_deletes_a_thread_learnt_after_it_began(harness: Harness) -> None:
     harness.daemon.replies["thread/list"] = {"data": [thread_row("t-old")]}
     harness.daemon.replies["thread/loaded/list"] = {"data": []}
-    assert await harness.service.start("/bin/codex") is True
+    await indexed(harness)
     fresh = thread_row("t-new", originator="codex-tui", source="cli")
     await harness.daemon.notify("thread/started", {"thread": fresh})
 
@@ -318,6 +320,20 @@ def test_a_slow_scan_says_where_its_time_went(caplog: pytest.LogCaptureFixture) 
         "total_ms": 3000,
         "codex": 3,
     }
+    # As the log has it: Codex is an agent's name, and its parts are not hidden as secrets.
+    line = json.loads(JsonFormatter().format(record))
+    assert (line["codex_control_ms"], line["codex"]) == (2000, 3)
+
+
+def test_a_secret_beside_an_agent_name_is_still_hidden() -> None:
+    record = logging.LogRecord("rc_client.mirror", logging.INFO, __file__, 1, "x", None, None)
+    record.context = {"codex_token": "t", "code": "123456", "codex_home": "/h"}
+    line = json.loads(JsonFormatter().format(record))
+    assert (line["codex_token"], line["code"], line["codex_home"]) == (
+        "<redacted>",
+        "<redacted>",
+        "/h",
+    )
 
 
 def test_a_quick_scan_is_said_at_debug(caplog: pytest.LogCaptureFixture) -> None:

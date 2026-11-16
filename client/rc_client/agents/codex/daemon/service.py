@@ -58,6 +58,8 @@ LIST_TIMEOUT = 10.0
 # How long `thread/list` is left alone after it failed, doubling to the last.
 LIST_BACKOFF_FIRST = 30.0
 LIST_BACKOFF_LAST = 600.0
+# How many sessions `prune_foreign` reads the rollouts of, and withdraws, at a time.
+PRUNE_BATCH = 64
 
 
 def thread_config() -> dict[str, Any] | None:
@@ -161,6 +163,11 @@ class CodexDaemonService:
         # waited last.
         self._history_at = 0.0
         self._history_wait = 0.0
+        # The attempt to reach the daemon under way, which a second caller waits
+        # for instead of making its own, and whether one has finished: until
+        # then the mirror reads no rollout, since the daemon may be serving it.
+        self._attempt: asyncio.Future[bool] | None = None
+        self.attempted = False
 
     # ------------------------------------------------------------- lifecycle
 
@@ -212,7 +219,27 @@ class CodexDaemonService:
         return self._children.parent(thread_id)
 
     async def start(self, binary: str | None) -> bool:
-        """Try the daemon once. False means the device stays on the fallback path."""
+        """Try the daemon once. False means the device stays on the fallback path.
+
+        Connecting is all. The index is read by the tick that follows, and the
+        sessions published before A18 and A59 are withdrawn by `prune_foreign`:
+        on a machine with a long history either can take minutes, and nothing
+        waits for them. A caller that comes while an attempt is under way waits
+        for its answer rather than opening a second connection.
+        """
+        attempt = self._attempt
+        if attempt is None:
+            attempt = asyncio.ensure_future(self._connect(binary))
+            self._attempt = attempt
+            attempt.add_done_callback(self._attempt_done)
+        return await asyncio.shield(attempt)
+
+    def _attempt_done(self, attempt: asyncio.Future[bool]) -> None:
+        self.attempted = True
+        if self._attempt is attempt:
+            self._attempt = None
+
+    async def _connect(self, binary: str | None) -> bool:
         if not socket_exists():
             return False
         if binary:
@@ -231,11 +258,12 @@ class CodexDaemonService:
                 await client.close()
             return False
         self._client = client
-        await self.prune_foreign()
-        await self.refresh()
         return True
 
     async def stop(self) -> None:
+        attempt, self._attempt = self._attempt, None
+        if attempt is not None:
+            attempt.cancel()
         client, self._client = self._client, None
         if client is not None:
             await client.close()
@@ -245,8 +273,14 @@ class CodexDaemonService:
 
         A daemon started here after the device started switches the mode without
         a restart; sessions already discovered on the fallback path keep the
-        runner they have until they are next resumed.
+        runner they have until they are next resumed. An attempt to connect
+        that is still waiting for an answer, the device's own at start-up, is
+        followed rather than raced.
         """
+        attempt = self._attempt
+        if attempt is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.shield(attempt)
         if self.ready:
             await self.refresh()
             await self._repair.check_drift(self._restart_safe)
@@ -257,7 +291,10 @@ class CodexDaemonService:
         # Nothing else on this machine ever starts the shared daemon, and
         # without one every terminal Codex is takeover-only.
         await self._repair.ensure_running()
-        if await self.start(binary) and self._on_mode_change is not None:
+        if not await self.start(binary):
+            return
+        await self.refresh()
+        if self._on_mode_change is not None:
             await self._on_mode_change()
 
     async def _restart_safe(self) -> bool:
@@ -462,39 +499,55 @@ class CodexDaemonService:
             await self.hub.delete({"session_id": thread_id})
 
     async def prune_foreign(self) -> None:
-        """Drop sessions published for threads that are not the device's to show (A18, A59).
+        """Withdraw the sessions published for threads that are not the device's (A18, A59).
 
         Everything adopted from now on is filtered as it arrives, so this runs
-        once, on the connection the device starts with, and only over sessions
-        the device is not driving. A thread's own rollout answers first, from
-        disk; the daemon is asked only about the ones without one. A thread
+        once a run, after the daemon has been tried, over the sessions the device
+        is not driving. Until A59 every `codex exec` run was published, and an
+        automation leaves thousands of them, so the rollouts are read a batch at
+        a time and each batch is withdrawn and written before the next is read;
+        nothing waits for the pass. A thread's own rollout answers first; the daemon,
+        when it is connected, is asked only about a thread without one. A thread
         nothing can describe is left alone: silence is not evidence that it is
         somebody else's.
         """
-        if not self.ready:
-            return
         candidates = [entry for entry in list(self.hub.entries.values()) if self._prunable(entry)]
         if not candidates:
             return
-        on_disk = await asyncio.to_thread(
-            rollouts.owned_on_disk, {entry.session.session_id for entry in candidates}
+        paths = await asyncio.to_thread(
+            rollouts.rollout_paths, {entry.session.session_id for entry in candidates}
         )
         dropped = 0
-        for entry in candidates:
-            thread_id = entry.session.session_id
-            owned = on_disk.get(thread_id)
-            if owned is None:
-                owned = await self._read_owned(thread_id)
-            if owned is not False:
-                continue
-            if self.hub.entries.get(thread_id) is not entry or not self._prunable(entry):
-                continue
-            self._forget(thread_id)
-            self._foreign.append(thread_id)
-            await self.hub.withdraw(entry)
-            dropped += 1
+        for first in range(0, len(candidates), PRUNE_BATCH):
+            batch = candidates[first : first + PRUNE_BATCH]
+            named = {
+                entry.session.session_id: paths[entry.session.session_id]
+                for entry in batch
+                if entry.session.session_id in paths
+            }
+            on_disk = await asyncio.to_thread(rollouts.owned_at, named)
+            for entry in batch:
+                if await self._withdraw_foreign(entry, on_disk.get(entry.session.session_id)):
+                    dropped += 1
+            # Written before the next batch is read, off the loop: a write queued while the
+            # registry applies a large batch waits for it, and the loop with it.
+            await asyncio.to_thread(self.hub.registry.flush)
         if dropped:
             log.info("dropped codex threads that are not this device's", count=dropped)
+
+    async def _withdraw_foreign(self, entry: SessionEntry, owned: bool | None) -> bool:
+        """Withdraw one candidate of `prune_foreign` that turns out to be somebody else's."""
+        thread_id = entry.session.session_id
+        if owned is None and self.ready:
+            owned = await self._read_owned(thread_id)
+        if owned is not False:
+            return False
+        if self.hub.entries.get(thread_id) is not entry or not self._prunable(entry):
+            return False
+        self._forget(thread_id)
+        self._foreign.append(thread_id)
+        await self.hub.withdraw(entry)
+        return True
 
     async def _read_owned(self, thread_id: str) -> bool | None:
         """Whether the daemon's description of a thread makes it ours; `None` when it gave none."""

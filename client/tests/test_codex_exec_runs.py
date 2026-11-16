@@ -15,10 +15,10 @@ from typing import Any
 import pytest
 
 from rc_client.agents.codex import rollouts as codex_rollouts
+from rc_client.agents.codex.daemon.service import CodexDaemonService
 from rc_client.models import Session
 from rc_client.registry import Registry
 from rc_client.sessions.hub import SessionEntry, SessionHub
-from rc_client.sessions.mirror import MirrorService
 from tests.test_codex_daemon_sessions import Harness, harness, thread_row
 
 __all__ = ["harness"]
@@ -73,7 +73,9 @@ def test_a_rollout_says_whose_its_thread_is(
     write_rollout(tmp_path, "t-exec", "codex_exec", "exec")
     write_rollout(tmp_path, "t-tui", "codex-tui", "cli")
     monkeypatch.setattr(codex_rollouts, "SESSIONS_DIR", tmp_path)
-    assert codex_rollouts.owned_on_disk({"t-exec", "t-tui", "t-gone"}) == {
+    named = codex_rollouts.rollout_paths({"t-exec", "t-tui", "t-gone"})
+    assert sorted(named) == ["t-exec", "t-tui"]
+    assert codex_rollouts.owned_at(named) == {
         "t-exec": False,
         "t-tui": True,
     }
@@ -88,6 +90,7 @@ async def test_the_daemon_index_never_adopts_an_exec_run(harness: Harness) -> No
     }
     harness.daemon.replies["thread/loaded/list"] = {"data": []}
     assert await harness.service.start("/bin/codex") is True
+    await harness.service.refresh()
     assert "t-exec" not in harness.hub.entries
     assert "t-tui" in harness.hub.entries
 
@@ -106,6 +109,7 @@ async def test_exec_runs_published_before_are_withdrawn_from_their_rollouts(
     harness.daemon.replies["thread/list"] = {"data": []}
     harness.daemon.replies["thread/loaded/list"] = {"data": []}
     assert await harness.service.start("/bin/codex") is True
+    await harness.service.prune_foreign()
 
     assert sorted(harness.hub.entries) == ["t-tui"]
     removed = [f["session_id"] for f in harness.frames if f.get("type") == "session.removed"]
@@ -113,7 +117,7 @@ async def test_exec_runs_published_before_are_withdrawn_from_their_rollouts(
     assert [method for method, _ in harness.daemon.calls if method == "thread/read"] == []
 
 
-async def test_without_the_daemon_the_mirror_withdraws_them(
+async def test_without_the_daemon_their_rollouts_alone_withdraw_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = tmp_path / "codex-sessions"
@@ -131,9 +135,9 @@ async def test_without_the_daemon_the_mirror_withdraws_them(
         published(hub, session_id)
     # One the device launched is its own, whatever any file says.
     published(hub, "t-remote", origin="remote")
-    mirror = MirrorService(hub)
+    service = CodexDaemonService(hub, "0.1.0")
     try:
-        await mirror._prune_foreign_codex()
+        await service.prune_foreign()
         assert sorted(hub.entries) == ["t-remote", "t-tui"]
         assert [f["session_id"] for f in frames if f.get("type") == "session.removed"] == ["t-exec"]
     finally:

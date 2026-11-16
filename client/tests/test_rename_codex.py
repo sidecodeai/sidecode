@@ -29,7 +29,14 @@ from rc_client.models import Session
 from rc_client.sessions import titles
 from rc_client.sessions.hub import SessionEntry
 from tests.rename_helpers import summaries, title_events
-from tests.test_codex_daemon_sessions import THREAD, Harness, settle, started, thread_row
+from tests.test_codex_daemon_sessions import (
+    THREAD,
+    Harness,
+    indexed,
+    settle,
+    started,
+    thread_row,
+)
 from tests.test_codex_daemon_sessions import harness as harness
 from tests.test_hub import build_hub
 
@@ -433,7 +440,7 @@ async def test_a_thread_the_index_names_is_the_users_from_the_first_sight(
 ) -> None:
     harness.daemon.replies["thread/list"] = {"data": [thread_row(name=LEDGER)]}
     harness.daemon.replies["thread/loaded/list"] = {"data": []}
-    assert await harness.service.start("/bin/codex") is True
+    await indexed(harness)
 
     assert harness.hub.entry(THREAD).session.title == LEDGER
     assert titles.pinned(harness.registry, THREAD)
