@@ -1246,10 +1246,13 @@ them and waits for none of the agents: on a loaded machine with thousands of `co
 to withdraw (A59), it once waited minutes for them. Each agent then starts on its own in the
 background (`agents/startup.py`): Claude and pi are asked what they offer at once; Codex once the
 shared daemon has been tried (its model list and its handshake), since its answer says whether the
-daemon answered; Grok once its leader has been tried. The first `hello` lists what this run has
-found so far and, for the agents not yet started, what the last run detected, kept in the registry
-(`agents/announced.py`); `agents.updated` follows when an agent's answer changes the list. A
-device with nothing kept, on its first run of this client, gives detection up to ten seconds
+daemon answered; Grok once its leader has been tried. Each agent's adapter is imported on a worker
+thread the first time anything needs it, detection, a request or a resume (`registry.load`):
+Claude's brings in its SDK, which took ten seconds on a cold disk after an update, and on the event
+loop that held up the link and every terminal along with it. The first `hello` lists what this run
+has found so far and, for the agents not yet started, what the last run detected, kept in the
+registry (`agents/announced.py`); `agents.updated` follows when an agent's answer changes the list.
+A device with nothing kept, on its first run of this client, gives detection up to ten seconds
 (`FIRST_AGENTS_WAIT`, inside the fifteen the gateway gives a `hello`) rather than tell the gateway
 it has no agents. Claude and pi need no service, and what they offered when the daemon last
 stopped is what they offer now, so the device acts through the last run's answer for them until

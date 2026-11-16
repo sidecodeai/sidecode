@@ -20,13 +20,15 @@ import subprocess
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
 from rc_client import config as config_module
 from rc_client import daemon as daemon_module
 from rc_client.agents import announced, budget
+from rc_client.agents import registry as agent_registry
 from rc_client.agents.codex import heads as heads_module
 from rc_client.agents.codex import plugin as codex_plugin
 from rc_client.agents.codex import rollouts as codex_rollouts
@@ -1093,3 +1095,81 @@ async def test_a_create_whose_agent_fails_to_start_leaves_nothing(
     finally:
         await hub.close()
         registry.close()
+
+
+# ------------------------------------------------------------ an adapter's first import
+
+SLOW_IMPORT = 1.5
+
+
+def slow_adapters(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Adapters that take `SLOW_IMPORT` to import, as Claude's SDK does on a cold disk."""
+    built: list[str] = []
+
+    async def build_runner(spec: Any) -> Any:
+        built.append("runner")
+        return None
+
+    def plugin(agent: str) -> Any:
+        time.sleep(SLOW_IMPORT)
+
+        async def detect(context: DetectContext) -> AgentInfo:
+            return AgentInfo(agent=agent, available=True, version="2.0")
+
+        return SimpleNamespace(AGENT=agent, detect=detect, build_runner=build_runner)
+
+    monkeypatch.setattr(agent_registry, "plugin", plugin)
+    monkeypatch.setattr(agent_registry, "_loaded", {})
+
+
+async def test_an_adapter_s_first_import_never_stalls_the_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Detection, a quota read and a resume ask through it, and so does any request."""
+    slow_adapters(monkeypatch)
+    lags: list[float] = []
+    stop = asyncio.Event()
+
+    async def probe() -> None:
+        while not stop.is_set():
+            started = time.monotonic()
+            await asyncio.sleep(0.01)
+            lags.append(time.monotonic() - started - 0.01)
+
+    task = asyncio.create_task(probe())
+    try:
+        detected, _ = await asyncio.gather(
+            agent_registry.detect_one("claude", DetectContext()),
+            agent_registry.runner_for("codex", cast(Any, None)),
+        )
+    finally:
+        stop.set()
+        await task
+    assert detected is not None and detected.version == "2.0"
+    assert max(lags) < SLOW_IMPORT / 3
+
+
+async def test_an_adapter_s_first_import_never_holds_the_first_hello(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slow_adapters(monkeypatch)
+    registry = Registry(config_module.database_path())
+    announced.save(registry, LAST_RUN)
+    registry.close()
+    server = FakeGateway()
+    await server.start()
+    daemon = Daemon(device_config())
+    daemon.link.url = server.url
+    started = time.monotonic()
+    task = asyncio.create_task(daemon.run())
+    try:
+        await server.wait_for("hello", timeout=10)
+        assert time.monotonic() - started < SLOW_IMPORT
+        # The agents start all the same, once their adapters are in.
+        await asyncio.wait_for(daemon._startup.wait_all(10), timeout=15)
+        assert daemon._startup.done
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        await server.stop()

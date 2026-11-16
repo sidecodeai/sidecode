@@ -161,7 +161,11 @@ detections = Detections()
 
 
 def plugin(agent: str) -> AgentPlugin:
-    """The adapter for `agent`, or the error the session frames answer with."""
+    """The adapter for `agent`, or the error the session frames answer with.
+
+    Its first import brings in the agent's SDK, which takes seconds on a cold disk: anything on
+    the event loop asks `load` instead.
+    """
     if agent not in AGENT_IDS:
         raise RcError("unsupported", f"no adapter for agent {agent}")
     cached = _loaded.get(agent)
@@ -183,17 +187,29 @@ async def detect_all(context: DetectContext | None = None) -> list[AgentInfo]:
     return [info for info in answers if info is not None]
 
 
+async def load(agent: str) -> AgentPlugin:
+    """The adapter for `agent`, imported on a worker thread the first time anything needs it.
+
+    On the event loop that import froze everything the device was doing, its gateway link
+    included, for as long as the SDK took to load. An adapter counts as loaded only once its
+    import has finished, so a second caller in the meantime waits on a thread of its own too.
+    """
+    if agent in _loaded:
+        return plugin(agent)
+    return await asyncio.to_thread(plugin, agent)
+
+
 async def detect_one(agent: str, context: DetectContext) -> AgentInfo | None:
     """What one agent offers, as `detect_all` asks it; None when it has no answer."""
     return await detections.detect(agent, context, partial(_ask, agent, context))
 
 
-def _ask(agent: str, context: DetectContext) -> Awaitable[AgentInfo]:
-    return plugin(agent).detect(context)
+async def _ask(agent: str, context: DetectContext) -> AgentInfo:
+    return await (await load(agent)).detect(context)
 
 
 async def runner_for(agent: str, spec: RunnerSpec) -> SessionRunner:
-    return await plugin(agent).build_runner(spec)
+    return await (await load(agent)).build_runner(spec)
 
 
 async def offline_commands(agent: str, session: Session) -> list[Command]:
@@ -204,7 +220,7 @@ async def offline_commands(agent: str, session: Session) -> list[Command]:
     templates and skills on disk, the list Grok last advertised. Without it the
     answer is empty until the session is resumed.
     """
-    offline = getattr(plugin(agent), "commands", None)
+    offline = getattr(await load(agent), "commands", None)
     if offline is None:
         return []
     return list(await offline(session))
@@ -212,7 +228,7 @@ async def offline_commands(agent: str, session: Session) -> list[Command]:
 
 async def close_terminal_in_agent(agent: str, spec: CloseSpec) -> bool:
     """End the CLI a terminal runs a session in, and say whether it ended in time (A61)."""
-    hook = cast("CloseHook | None", getattr(plugin(agent), "close_terminal", None))
+    hook = cast("CloseHook | None", getattr(await load(agent), "close_terminal", None))
     if hook is None:
         raise RcError("unsupported", f"{agent} sessions cannot be closed from here")
     return await hook(spec)
@@ -228,7 +244,7 @@ async def rename_in_agent(agent: str, spec: RenameSpec) -> str:
     one asked for. A plugin without the hook cannot be renamed from here, and
     one that lists the `rename` capability must have it.
     """
-    hook = cast("RenameHook | None", getattr(plugin(agent), "rename", None))
+    hook = cast("RenameHook | None", getattr(await load(agent), "rename", None))
     if hook is None:
         raise RcError("unsupported", f"{agent} sessions cannot be renamed from here")
     return await hook(spec)
