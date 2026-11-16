@@ -6,10 +6,8 @@
  * and only then closes the session as A39 closes one; the mock takes a moment
  * where a CLI would.
  *
- * Claude Code and Codex list `close_terminal` on the Mac. Grok Build and pi
- * list it only once `protocol/fixtures/objects/agent.grok.json` and
- * `agent.pi.json` do, because `tests/agents.test.tsx` holds the mock's two
- * agents to those files.
+ * Every agent on the Mac lists `close_terminal`, last, as the protocol's agent
+ * fixtures do; `tests/agents.test.tsx` holds Grok Build and pi to theirs.
  *
  * Both refusals an app has words for come from state, as they do on a device:
  *

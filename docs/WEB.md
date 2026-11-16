@@ -136,10 +136,9 @@ takes `after_seq` (A9) for that forward walk, as well as `before_seq`.
 
 The session-flow amendments are in the mock too. `session.history` with `brief: true` cuts every
 tool call the way A60 says (`mock/brief.ts`: input to 1 KiB, no output, no patch, each flagged),
-and `session.block` still answers the whole block. The Mac's Claude Code and Codex list
-`close_terminal` (A61); Grok Build and pi follow `protocol/fixtures/objects/agent.grok.json` and
-`agent.pi.json`, which `tests/agents.test.tsx` holds them to, and the CI runner's client predates
-the amendment. A Close on a row a terminal holds (`mock/closeTerminal.ts`) quits the agent after
+and `session.block` still answers the whole block. Every agent on the Mac lists `close_terminal`
+(A61), last, as the protocol's agent fixtures do, and the CI runner's client predates the
+amendment. A Close on a row a terminal holds (`mock/closeTerminal.ts`) quits the agent after
 1.2 s and closes the session as A39 does; "Typecheck the web app" answers `unsupported` (two Codex
 terminals in its folder), "Refactor relay routing" answers `conflict` after 3 s (its `claude` does
 not exit), and an agent without the capability answers `unsupported`.
@@ -1124,9 +1123,10 @@ sidebar — is quick and lands where the person left off, not at the bottom of a
 - **One timeline per conversation.** `ChatPage` keys `<Timeline>` by the conversation, as it keys
   the header and the composer, so the follow state, the prepend anchor, the scroll and the opening
   start again when the route moves to another conversation instead of carrying over.
-- **The reading position** is where the conversation was being read: the `seq` of the lowest row
-  whose top is on screen (`lowestOnScreen`), with the timeline's `lastSeq` — the newest event the
-  app held — beside it. `useReadingTracker` saves the pair at most once a second while the
+- **The reading position** is where the conversation was being read: the lowest row whose top is
+  on screen (`lowestOnScreen`), by its place in display order — the `seq` of its block's first
+  event, the key rows are ordered by, so a long row that finished late still sorts above a message
+  drawn below it — with the timeline's `lastSeq`, the newest event the app held, beside it. `useReadingTracker` saves the pair at most once a second while the
   transcript scrolls, and when the conversation is left — another conversation, another page, the
   tab hidden, the page closing — so a reader who scrolled back into an older turn comes back to
   it. `readingPosition.ts` keeps it in local storage under `rc.reading.<username>`, beside the

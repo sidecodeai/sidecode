@@ -26,18 +26,23 @@ const plan = (id: string) => {
 };
 
 describe('closing a session a terminal holds, on the mock device', () => {
-  it('lists close_terminal for Claude Code and Codex on the Mac, and for nothing on the CI runner', () => {
+  it('lists close_terminal, last, for every agent on the Mac, and for nothing on the CI runner', () => {
     const listing = (deviceId: string) =>
       devices
         .find((d) => d.device_id === deviceId)
         ?.agents.filter((a) => a.capabilities.includes('close_terminal'))
         .map((a) => a.agent);
-    expect(listing('dev-mac')).toEqual(['claude', 'codex']);
+    expect(listing('dev-mac')).toEqual(['claude', 'codex', 'grok', 'pi']);
     expect(listing('dev-ci')).toEqual([]);
+    for (const agent of devices.find((d) => d.device_id === 'dev-mac')?.agents ?? []) {
+      expect(agent.capabilities.at(-1), agent.agent).toBe('close_terminal');
+    }
   });
 
   it('quits the agent after a moment', () => {
     expect(plan('ses-shared')).toEqual({ outcome: 'close', afterMs: QUIT_MS });
+    expect(plan('ses-grok-shared')).toEqual({ outcome: 'close', afterMs: QUIT_MS });
+    expect(plan('ses-grok-terminal')).toEqual({ outcome: 'close', afterMs: QUIT_MS });
   });
 
   it('refuses an agent that does not list close_terminal', () => {
@@ -46,7 +51,7 @@ describe('closing a session a terminal holds, on the mock device', () => {
       outcome: 'refused',
       refusal: { code: 'unsupported' },
     });
-    expect(plan('ses-grok-shared')).toMatchObject({
+    expect(plan('ses-grok-no-leader')).toMatchObject({
       outcome: 'refused',
       refusal: { code: 'unsupported' },
     });

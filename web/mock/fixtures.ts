@@ -246,6 +246,8 @@ export const grokAgent: AgentInfo = {
     'history',
     'commands',
     'rename',
+    // A61: `session/cancel`, the CLI's end, then `session/close` once it is gone.
+    'close_terminal',
   ],
   // A28: `[cli] use_leader` is on here, so every `grok` this machine starts
   // joins the leader the device is a client of. `session/cancel` and
@@ -315,6 +317,8 @@ export const piAgent: AgentInfo = {
     'commands',
     // A55: RPC `set_session_name`, or the extension's `set_name` in a running pi.
     'rename',
+    // A61: the extension's own shutdown, or the end of the pi its hello named.
+    'close_terminal',
   ],
   attach: 'extension',
   attach_ready: true,
