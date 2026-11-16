@@ -148,6 +148,21 @@ async def link_to(
     return link
 
 
+async def arrived(gateway: FakeGateway, frame_type: str, count: int) -> list[dict[str, Any]]:
+    """The frames of this type the gateway has received, once there are `count` of them.
+
+    A link counts as connected the moment the ack is in, before it has answered what came ahead
+    of the ack, so its answers reach the gateway a moment after `link_to` returns.
+    """
+
+    async def enough() -> None:
+        while len(gateway.frames(frame_type)) < count:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(enough(), timeout=5)
+    return gateway.frames(frame_type)
+
+
 async def test_hello_is_sent_with_the_bearer_token_and_protocol_version(
     gateway: FakeGateway,
 ) -> None:
@@ -482,9 +497,10 @@ async def test_a_gateway_that_stays_under_the_byte_cap_is_served(
     await gateway.start()
 
     link = await link_to(gateway, {})
+    pongs = await arrived(gateway, "pong", 2)
 
     assert link.connected and gateway.connections == 1
-    assert len(gateway.frames("pong")) == 2
+    assert len(pongs) == 2
     await link.stop()
     await gateway.stop()
 
@@ -497,9 +513,10 @@ async def test_a_gateway_that_sends_as_many_frames_as_the_cap_allows_is_served(
     await gateway.start()
 
     link = await link_to(gateway, {})
+    pongs = await arrived(gateway, "pong", 3)
 
     assert link.connected and gateway.connections == 1
-    assert len(gateway.frames("pong")) == 3
+    assert len(pongs) == 3
     await link.stop()
     await gateway.stop()
 

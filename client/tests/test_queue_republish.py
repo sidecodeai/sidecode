@@ -293,7 +293,18 @@ async def test_the_daemon_says_it_after_every_reconnect(
     monkeypatch.setattr(mirror_module, "scan_holders", no_terminals)
     monkeypatch.setattr(rollouts, "SESSIONS_DIR", tmp_path / "agent-state" / "codex")
     async with restarted_daemon() as (daemon, server):
+
+        async def link_settled() -> None:
+            """The link is up and the work it starts with is done: the Up next it said, the scan.
+
+            Until then that work may still say the queue on the link the round is about to close,
+            after the round has cleared what the gateway received.
+            """
+            while not daemon.link.connected or daemon.link._inflight:
+                await asyncio.sleep(0.01)
+
         await server.wait_for("hello", timeout=10)
+        await asyncio.wait_for(link_settled(), timeout=10)
         assert [f for f in server.frames("session.event") if f["event"]["kind"] == "queue"] == []
 
         # A message is held after the first connect, and the gateway then loses its memory of it.
@@ -318,3 +329,4 @@ async def test_the_daemon_says_it_after_every_reconnect(
             ]
             # After the hello of the new link, never before it.
             assert server.received.index(frame) > server.received.index(server.frames("hello")[0])
+            await asyncio.wait_for(link_settled(), timeout=10)
