@@ -1,22 +1,180 @@
 /*
- * The Settings screen (docs/DESIGN.md § "The Settings screen"): an identity
- * header on the canvas, four groups of two-line rows on one soft surface each,
- * and the versions as the last line. Nothing parts two rows but spacing, and no
- * footnote hangs under a group — what a state has to say is the row's own
- * second line.
+ * Settings (docs/DESIGN.md § "The Settings screen"): one page of sections.
+ * The page is the nav, the section, then the footer caption, in that order at
+ * every width. A wide screen draws the nav and, under it, the caption in a
+ * column beside the section on show; a narrow one (the top bar's own
+ * breakpoint, 760 px) draws the list of sections at /settings and each section
+ * alone, with the way back over it. Inside a section, groups of two-line rows
+ * sit on one soft surface each, parted from each other by spacing; nothing
+ * parts two rows, and no footnote hangs under a group — what a state has to
+ * say is the row's own second line.
  */
 
 .settings {
-  max-width: 620px;
+  /* The nav column, the section's column and the space between them. */
+  --settings-nav-w: 200px;
+  --settings-content-max: 680px;
+  --settings-gap: var(--sp-8);
+  /* How far under the top bar the nav stays while the section scrolls. */
+  --settings-nav-top: calc(var(--header-h) + var(--sp-6));
+  /* One item of the nav, and the space between two. */
+  --settings-nav-item-h: 36px;
+  --settings-nav-item-gap: 2px;
 }
 
-/* Who and where, on the canvas rather than on a surface. */
+/* The nav and the footer caption share the first column, the caption a step
+   under the nav, and both stay in view while a long section scrolls beside
+   them. The page says how many items the nav has (`--settings-nav-items`), so
+   the caption knows where the nav ends. */
+.settings-layout {
+  --settings-nav-h: calc(
+    var(--settings-nav-items, 4) * (var(--settings-nav-item-h) + var(--settings-nav-item-gap)) -
+      var(--settings-nav-item-gap)
+  );
+  display: grid;
+  grid-template-columns: var(--settings-nav-w) minmax(0, var(--settings-content-max));
+  grid-template-areas: 'side content';
+  column-gap: var(--settings-gap);
+}
+
+.settings-nav {
+  grid-area: side;
+  align-self: start;
+  position: sticky;
+  top: var(--settings-nav-top);
+  display: flex;
+  flex-direction: column;
+  gap: var(--settings-nav-item-gap);
+}
+
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--settings-nav-item-h);
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-sm);
+  color: var(--ink-secondary);
+  font-size: var(--fs-14);
+  white-space: nowrap;
+  text-decoration: none;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.settings-nav-item:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.settings-nav-item.active {
+  background: var(--hover-selected);
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.settings-nav-item svg {
+  flex: none;
+}
+
+/* The footer caption: the versions, in the caption's type and the tertiary
+   ink. */
+.settings-foot {
+  grid-area: side;
+  align-self: start;
+  position: sticky;
+  top: calc(var(--settings-nav-top) + var(--settings-nav-h) + var(--sp-6));
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-top: calc(var(--settings-nav-h) + var(--sp-6));
+  padding: 0 var(--sp-3);
+  font-size: var(--fs-12);
+  line-height: 1.5;
+  color: var(--ink-tertiary);
+}
+
+/* The versions break only between their parts, each kept whole. The dot
+   belongs to the part after it and sits in the gap before it, so a part that
+   starts a line has its dot outside the line, where the clip takes it, and no
+   line starts or ends on a dot. */
+.settings-versions {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: var(--sp-3);
+  overflow: hidden;
+}
+
+.settings-versions-part {
+  position: relative;
+  white-space: nowrap;
+}
+
+.settings-versions-part + .settings-versions-part::before {
+  content: '·';
+  position: absolute;
+  left: calc(var(--sp-3) / -2);
+  transform: translateX(-50%);
+}
+
+/* The section on show, one element under another and parted by spacing. */
+.settings-content,
+.settings-index-general,
+.settings-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  min-width: 0;
+}
+
+.settings-content {
+  grid-area: content;
+}
+
+/* The list of sections is the narrow screen's alone. */
+.settings-list {
+  display: none;
+}
+
+/* The way back and the section's title are the narrow screen's; here the nav
+   says which section this is, and the title is kept for assistive technology,
+   taking no room in the column. */
+.settings-section-head {
+  display: contents;
+}
+
+.settings-back {
+  display: none;
+}
+
+.settings-section-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Who and where: on the canvas at the head of Account, and on a surface of its
+   own, leading to Account, at the head of the narrow list. */
 .settings-identity {
   display: flex;
   align-items: center;
   gap: var(--sp-4);
-  margin-bottom: var(--sp-6);
   min-width: 0;
+  color: var(--ink);
+}
+
+.settings-identity.target {
+  padding: var(--sp-4) var(--sp-5);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.settings-identity.target:hover {
+  background: var(--hover);
 }
 
 /* The top bar's circle at the size a header takes. */
@@ -27,14 +185,20 @@
 }
 
 .settings-identity-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
   min-width: 0;
 }
 
 .settings-identity-name {
+  overflow: hidden;
   font-size: var(--fs-17);
   font-weight: 600;
   line-height: 1.35;
   letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-identity-meta {
@@ -65,10 +229,6 @@
   white-space: pre;
 }
 
-.settings-section + .settings-section {
-  margin-top: var(--sp-6);
-}
-
 .settings-row {
   display: flex;
   align-items: center;
@@ -81,6 +241,7 @@
   background: transparent;
   color: var(--ink);
   text-align: left;
+  text-decoration: none;
 }
 
 /* A row a click anywhere on reaches: the pointer tints it, as a list row does. */
@@ -93,8 +254,16 @@
   background: var(--hover);
 }
 
+/* A section's glyph, at the leading edge of its row in the narrow list. */
+.settings-row-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--ink-secondary);
+}
+
 .settings-row-text {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 1px;
   min-width: 0;
@@ -127,16 +296,95 @@
   color: var(--ink-tertiary);
 }
 
-.settings-versions {
-  margin-top: var(--sp-8);
-  font-size: var(--fs-12);
-  line-height: 1.5;
-  color: var(--ink-tertiary);
-  text-align: center;
+@media (max-width: 760px) {
+  .settings-layout {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-8);
+  }
+
+  /* No nav: the footer caption closes the list of sections, centred, where it
+     already comes in the page, and a section shows no caption at all. */
+  .settings-nav,
+  .settings.at-section .settings-foot {
+    display: none;
+  }
+
+  .settings-foot {
+    position: static;
+    align-items: center;
+    margin-top: 0;
+    padding: 0;
+    text-align: center;
+  }
+
+  /* Here the caption has the page's width: the versions make one centred row. */
+  .settings-versions {
+    justify-content: center;
+  }
+
+  .settings-list {
+    display: flex;
+  }
+
+  .settings-index-general {
+    display: none;
+  }
+
+  /* A section stands alone: the way back to the list and its title take the
+     page heading's place, which stays for assistive technology. */
+  .settings.at-section .settings-head {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .settings-section-head {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--sp-1);
+  }
+
+  .settings-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    height: 32px;
+    margin-left: -6px;
+    padding-right: var(--sp-2);
+    color: var(--ink-secondary);
+    font-size: var(--fs-14);
+    text-decoration: none;
+    transition: color var(--dur-fast) var(--ease);
+  }
+
+  .settings-back:hover {
+    color: var(--ink);
+  }
+
+  .settings-section-title {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+    font-size: var(--fs-22);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.25;
+  }
 }
 
 @media (max-width: 640px) {
-  .settings-row {
+  .settings-row,
+  .settings-identity.target {
     padding-inline: var(--sp-4);
   }
 }

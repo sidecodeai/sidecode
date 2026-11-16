@@ -47,13 +47,14 @@ src/
   lib/            api.ts (HTTP), ws.ts (app socket), gateway.ts (socket handle), formatters
   stores/         zustand stores: auth, connection, devices, sessions, chat, outbox, settings
                   timeline.ts is the pure event -> renderable-items reducer
-  components/     Buttons, modal/drawer, popover/menu, context menu, segmented control, switch, status dots
+  components/     Buttons, modal/drawer, popover/menu, context menu, tooltip, segmented control, switch, status dots
   layout/         Top bar shell and the product mark
   features/
     login/        Password sign-in
     devices/      Device list, rename/revoke, Add device modal with live pairing steps
     sessions/     Session list, New session drawer, directory browser and probe
     chat/         Sidebar, header, timeline and blocks, composer, status line
+    account-menu/ The account button and its menu, at the sidebar's foot and in the top bar
     voice/        Mic capture, 16 kHz PCM16 conversion, live transcription panel
     live/         Voice assistant: the entry, the panel, the call and its saved history
     settings/     Account, web push, voice, about
@@ -147,6 +148,7 @@ for a reload. Nothing reloads by itself, because drafts live in memory only.
 
 ## Responsive
 
-At 1024 px and above the chat is a two-pane layout with the session sidebar. Below that the
-sidebar collapses (the Sessions page takes its place), the chat runs full width with a back
-button, and the composer sticks to the bottom above the keyboard.
+At 1024 px and above the chat is a two-pane layout with the session sidebar, which folds by hand
+to a rail of icons and opens again (its toggle, or ⌘. / Ctrl+.). Below that the sidebar is not
+drawn (the Sessions page takes its place), the chat runs full width with a back button, and the
+composer sticks to the bottom above the keyboard.

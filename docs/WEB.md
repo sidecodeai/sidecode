@@ -15,7 +15,7 @@ hand-written CSS with no framework. It talks only to the gateway and follows
 | `/pair` | Claims the token a host printed as a QR code and shows the same handshake (A23) |
 | `/sessions` | Every session across every device: one collapsible group per device, its active rows and then its own collapsed **Archive**, a search, a status filter, an agent filter and a device filter, and **New session** in a right-hand drawer; a right-click on a row offers **Rename** (A55) |
 | `/sessions/:deviceId/:sessionId` | The chat: sidebar, timeline, composer, status line; the title renames the session (A55) |
-| `/settings` | The Settings screen (`docs/DESIGN.md` § "The Settings screen"): an identity header — initials, username, `role · connection dot · host` — then four groups of two-line rows, **Account** (Users for the admin role, Change password for every account but `admin`, Sign out, which asks first), **While you're away** (Notify me, "Resume after the limit resets", A35), **Voice** (Transcribe, which names the gateway and offers nothing to choose, A44; polish and its model and strength) and **Reading** (language, timeline detail), and one caption line with the gateway and protocol versions |
+| `/settings`, `/settings/<section>` | Settings (`docs/DESIGN.md` § "The Settings screen"), one page of sections, each at its own address: **General** (`general`: Reading — language, timeline detail; While you're away — Notify me, "Resume after the limit resets", A35), **Voice** (`voice`: Transcribe, which names the gateway and offers nothing to choose, A44; polish and its model and strength) and **Account** (`account`: the identity header — initials, name, `role · connection dot · host` — then Sign-in: Change password for every account but `admin`; then, under no caption, Users for the admin role and Sign out, which asks first). Wider than 760 px a nav of the sections sits beside the one on show, with the footer caption under it — the gateway and protocol versions — and `/settings` shows General; at 760 px and below `/settings` is the list of sections, which a section replaces, with a way back. An address that names no section leads to `/settings` |
 | `/users` | The admin's accounts screen: the registration switch, one row per account, Reset password / Disable / Delete, and **Add user** (A24). A member who types it lands on Sessions |
 
 ## Commands
@@ -141,9 +141,9 @@ src/
   protocol/    wire types and frame shapes
   lib/         HTTP client, app socket, formatters
   stores/      zustand stores; timeline.ts is the pure event -> renderable-items reducer
-  components/  buttons, modal, drawer, popover, context menu, segmented control, status dots
+  components/  buttons, modal, drawer, popover, context menu, tooltip, segmented control, status dots
   layout/      the signed-in shell, the mark, and the landing rule
-  features/    login, devices, sessions, chat, voice, live, settings, users
+  features/    login, devices, sessions, chat, voice, live, settings, users, account-menu
   push/        Web Push subscription and service worker registration
   styles/      tokens.css and base.css
 mock/          the mock gateway
@@ -521,21 +521,36 @@ gateway takes registrations, swaps the card for username, password and **Create 
 `409` taken, `400` the username and password rules, `403` registration closed, which also removes
 the link.
 
-**The Settings header and the Account group.** The header (`features/settings/IdentityHeader.tsx`)
+**Settings' sections.** `features/settings/SettingsPage.tsx` is the page: its sections are
+`sections.ts` (General, Voice and Account), routed under `/settings/*` — `/settings` itself is the
+index, an address ending in `/` names the same section, and an address that names no section leads
+back to it. The page is the nav (`SettingsNav.tsx`), the section, then the
+footer caption (`SettingsFoot.tsx`), in that order at every width, so the caption is read and
+tabbed to last; the narrow screen's list of sections is `SectionList.tsx`, each section's way back
+and title `SettingsSection.tsx`. Which shape a screen gets — the nav beside the section wider than
+760 px with the caption under it, the list and a section alone at 760 px and below — is
+`settings.css`'s alone; nothing measures the window, and nothing is drawn out of the order it is
+read in.
+
+**The Settings header and the Account section.** The header (`features/settings/IdentityHeader.tsx`)
 says who is signed in and where: the initials and the gateway host come from `lib/identity.ts`,
 the one rule the top bar uses too, and the connection dot's tone from `connectionTone.ts` (green
 for an open socket, pulsing amber while it connects or reconnects, grey otherwise; a browser the
-gateway refuses is signed out, so the ruling's red never arises here). The Account group
-(`AccountGroup.tsx`) holds the rows that account has, and the two are independent because the
-gateway's own rules are: **Users** appears for the admin role, and **Change password** (a modal
-asking the current password and the new one; `401` reads "That is not your current password.")
-appears for every account except the built-in `admin`, whose password is the gateway's
-`RC_PASSWORD` and which `POST /api/password` refuses by username. A second account created with the
-admin role therefore gets both rows. **Sign out** stays last and asks first (`ConfirmDialog`), with
-the row's own sentence as the dialog's body. Every row on the screen is `SettingsRow` or
-`SettingsActionRow` (`SettingsRow.tsx`): a title, one sentence, the control at the trailing edge,
-no hairline; a state — push blocked or unsupported, no polish model, no transcription, a refused
-preference — replaces the sentence and disables the control rather than adding an element.
+gateway refuses is signed out, so the ruling's red never arises here). It opens the Account
+section (`AccountSection.tsx`), and on a narrow screen it is also the list's first row, leading
+there. Under it `AccountGroup.tsx` draws the rows that account has, and they are independent
+because the gateway's own rules are. The **Sign-in** group holds how the account signs in and
+nothing else: **Change password** (a modal asking the current password and the new one; `401`
+reads "That is not your current password."), which appears for every account except the built-in
+`admin`, whose password is the gateway's `RC_PASSWORD` and which `POST /api/password` refuses by
+username, so `admin` has no Sign-in group. The group after it has no caption: **Users** for
+the admin role, so a second account created with the admin role gets the password and Users both,
+and **Sign out**, which asks first (`ConfirmDialog`), with the row's own sentence as the dialog's
+body. Change password is in this one place in Settings. Every row is `SettingsRow`, `SettingsActionRow` or, in the list of
+sections, `SettingsLinkRow` (`SettingsRow.tsx`): a title, one sentence, the control at the
+trailing edge, no hairline; a state — push blocked or unsupported, no polish model, no
+transcription, a refused preference — replaces the sentence and disables the control rather than
+adding an element.
 
 **Signing out empties the tab.** `signOut` in `src/stores/signOut.ts` is the one place that knows
 the list: it closes the socket, puts the connection store back to what no `hello` has confirmed
@@ -562,7 +577,8 @@ the socket, so it is whatever the last `GET /api/users` said, and every write re
 
 **The app's own preferences belong to the account, not to the browser.** The settings store
 persists under `rc.settings.<username>`, and `readSettingsFor` in `src/stores/settings.ts` points
-it at the signed-in account whenever that changes — `App` calls it from the auth store's username.
+it at the signed-in account whenever that changes — `App` calls it from the auth store's username,
+in a layout effect, so the first frame an account is drawn in already has its own choices.
 The persist `merge` lays the defaults under whatever was stored, so an account that has chosen
 nothing reads the defaults rather than inheriting the last person's language, polish choices or
 timeline detail. The login screen, where nobody is signed in, keeps its own key, `rc.settings`.
@@ -1262,8 +1278,9 @@ with no "Saved as" notice. The reply keeps `updated_at`, so a renamed row keeps 
   Terminal-held rows and rows in the Archive are offered it like any other. A device from before A55
   lists nothing, and the app then draws no new control at all.
 - **Where.** The chat header's title is a button (`.chat-title-btn`, tooltip "Rename") only while it
-  is offered, plain text otherwise. A right-click on a Sessions row or a sidebar item, or the
-  ContextMenu key or Shift+F10 on the focused one, opens a menu of Rename alone
+  is offered, plain text otherwise. A right-click on a Sessions row or a sidebar item, the
+  ContextMenu key or Shift+F10 on the focused one, or a sidebar item's More button opens a menu of
+  Rename alone
   (`components/ContextMenu.tsx`, `useContextMenu.ts`, `features/sessions/useSessionMenu.tsx`): the
   first item has focus, the arrow keys move, and Escape, Tab, a press outside, a scroll or a resize
   closes it. Close stays the row's own control. The Sessions page and the sidebar own the dialog's
@@ -1386,8 +1403,22 @@ again — the first class of a selector, which is what a rule applies to when no
 message bubble is inert, as `docs/DESIGN.md` rules: neither `.user-row` nor `.user-bubble` has a
 hover rule of any kind, because a message is a record and not a control.
 
-At 1024 px and above the chat is two panes with the session sidebar. Below that the sidebar
-collapses into the Sessions page, the chat runs full width with a back button, and the composer
+At 1024 px and above the chat is two panes with the session sidebar (`features/chat/Sidebar.tsx`,
+`sidebar.css`), whose own width is its grid column: `--sidebar-w` open, `--sidebar-rail-w` (52 px)
+folded by hand to its rail (`docs/DESIGN.md` § "The chat sidebar"). `useSidebarFold.ts` keeps the
+choice in `stores/settings.ts` as `sidebarCollapsed` — per account, and false for a stored state
+without it — listens for ⌘. (Apple systems) or Ctrl+. only while the chat page is mounted, ignoring
+key repeats, and lets the width slide only after a fold the person asked for. When the fold's commit
+has removed what had focus inside the sidebar, it focuses the toggle before the browser paints. The content keeps the width of its state
+and `overflow: clip` cuts it while the column slides, so nothing reflows on the way; what a state
+does not draw is not rendered at all, and the toggle, New session and the account button stay the
+same elements across a fold. The head's and the rail's icon buttons are `components/TooltipButton.tsx`,
+whose tooltip (`useTooltip.tsx`) is a portal on the body, hidden from assistive technology. A row
+with a menu draws a More button (`SidebarItem.tsx`) that opens the row's context menu through
+`useContextMenu`'s `openFrom`. The account button and its menu are `features/account-menu/`
+(`AccountButton` at the sidebar's foot, on the rail and in `AppLayout`'s top bar; `AccountMenu`;
+`SignOutDialog`, the one Sign out dialog, which the Settings row opens too). Below 1024 px the
+sidebar is not drawn, folded or not, the chat runs full width with a back button, and the composer
 sticks above the keyboard.
 
 ## Known gaps

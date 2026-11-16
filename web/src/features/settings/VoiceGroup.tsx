@@ -1,8 +1,9 @@
 /**
- * A29 — dictation: who transcribes it, and whether a model tidies it up before
- * it is sent. A gateway that offers no transcription and a gateway with no
- * polish model each say so in their own row; the group itself never collapses
- * to a note.
+ * A29 — the Voice section: who transcribes dictation, and whether a model tidies
+ * it up before it is sent. One surface with no caption, since the section's
+ * title already says Voice. A gateway that offers no transcription and a
+ * gateway with no polish model each say so in their own row; the surface never
+ * collapses to a note.
  */
 import { useEffect, useState } from 'react';
 import { Menu } from '../../components/Popover';
@@ -23,7 +24,7 @@ export function VoiceGroup() {
   const setPolishEnabled = useSettings((s) => s.setPolishEnabled);
 
   return (
-    <SettingsGroup title={strings.settings.voice}>
+    <SettingsGroup>
       {/* A44: the web only transcribes on the gateway, whose provider detects
           the language, so the row names the gateway and has nothing to choose:
           no menu here, and no language anywhere. */}

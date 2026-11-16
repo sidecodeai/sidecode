@@ -1,0 +1,34 @@
+/*
+ * A label beside an icon button (`useTooltip.tsx`): small, in the ink, and
+ * above every overlay, since its portal on the body is a sibling of theirs. It
+ * takes no pointer, so it never stands between the pointer and the page. The
+ * layout effect sets `left` and `top`.
+ */
+.tooltip {
+  position: fixed;
+  z-index: var(--z-popover);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 5px var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--ink);
+  color: var(--ink-inverse);
+  font-size: var(--fs-12);
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: rc-tip var(--dur-fast) var(--ease);
+}
+
+/* The shortcut, one step quieter than the label. */
+.tooltip-key {
+  font-family: var(--font-sans);
+  opacity: 0.6;
+}
+
+@keyframes rc-tip {
+  from {
+    opacity: 0;
+  }
+}

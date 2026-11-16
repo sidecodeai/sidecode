@@ -9,13 +9,20 @@ import type { Session } from '../../protocol/types';
  * sidebar alike (A55): Rename, and nothing else — Close stays the row's own
  * control. `onRename` is present only where the device can rename the session;
  * without it the row has no menu and the browser's own is left alone. The row
- * spreads `triggerProps` on its element and draws `menu` inside it.
+ * spreads `triggerProps` on its element and draws `menu` inside it; a row with
+ * a More button of its own (the chat sidebar's) opens the same menu with
+ * `openFrom`, and reads `open` for that button's state.
  */
 export function useSessionMenu(
   session: Session,
   onRename: ((session: Session) => void) | undefined,
-): { triggerProps: HTMLAttributes<HTMLElement>; menu: ReactNode } {
-  const { at, anchor, close, triggerProps } = useContextMenu(onRename !== undefined);
+): {
+  triggerProps: HTMLAttributes<HTMLElement>;
+  menu: ReactNode;
+  open: boolean;
+  openFrom: (button: HTMLElement) => void;
+} {
+  const { at, anchor, close, openFrom, triggerProps } = useContextMenu(onRename !== undefined);
   const menu =
     at && anchor && onRename ? (
       <ContextMenu
@@ -28,5 +35,5 @@ export function useSessionMenu(
         onClose={close}
       />
     ) : null;
-  return { triggerProps, menu };
+  return { triggerProps, menu, open: menu !== null, openFrom };
 }

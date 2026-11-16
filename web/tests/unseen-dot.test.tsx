@@ -232,10 +232,26 @@ describe('how the dot is drawn', () => {
     expect(rule(sessionsCss, '.session-line')).toContain('position: relative');
     expect(rule(sessionsCss, '.session-open')).toContain('--unseen-reach: calc(var(--sp-5) / 2)');
 
-    const chat = css(['features', 'chat', 'chat.css']);
-    expect(rule(chat, '.sidebar-item')).toContain('padding: 0 var(--sp-2) 0 var(--sp-5)');
-    const line = rule(chat, '.sidebar-title-line');
+    const sidebar = css(['features', 'chat', 'sidebar.css']);
+    expect(rule(sidebar, '.sidebar-item')).toContain('padding: 0 var(--sp-2) 0 var(--sp-5)');
+    const line = rule(sidebar, '.sidebar-title-line');
     expect(line).toContain('position: relative');
     expect(line).toContain('--unseen-reach: calc(var(--sp-5) / 2 + var(--status-dot) + var(--sp-2))');
+  });
+
+  /**
+   * A sidebar row with a menu fades its text out under its More button. A mask
+   * hides whatever lies outside the box it is set on, and the dot lies outside
+   * the text, in the gutter: so only the title and the sub-line, each on its
+   * own box, are masked, never a box that holds the dot.
+   */
+  it('is never under the fade a sidebar row draws under its More button', () => {
+    const sidebar = css(['features', 'chat', 'sidebar.css']);
+    const masked = [...sidebar.matchAll(/([^{}]+)\{[^{}]*mask-image/g)].flatMap((match) =>
+      (match[1] ?? '').split(',').map((selector) => selector.trim()),
+    );
+
+    expect(masked.length).toBeGreaterThan(0);
+    for (const selector of masked) expect(selector).toMatch(/ \.sidebar-(title|sub)$/);
   });
 });

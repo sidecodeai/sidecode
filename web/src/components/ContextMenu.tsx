@@ -9,6 +9,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
+import { focusFirstItem, moveMenuFocus } from './menuKeys';
 import { placementAt, type Point } from './popoverPlacement';
 import './popover.css';
 
@@ -56,7 +57,7 @@ export function ContextMenu({ at, anchor, label, items, onClose }: ContextMenuPr
   useEffect(() => {
     opener.current ??=
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    panel.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus({ preventScroll: true });
+    focusFirstItem(panel.current);
   }, []);
 
   const dismiss = useCallback(
@@ -105,35 +106,13 @@ export function ContextMenu({ at, anchor, label, items, onClose }: ContextMenuPr
   }, [anchor, onClose, dismiss]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
-    const buttons = [
-      ...(panel.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? []),
-    ];
-    if (buttons.length === 0) return;
-    const current = buttons.findIndex((button) => button === document.activeElement);
-    let next: number;
-    switch (e.key) {
-      case 'ArrowDown':
-        next = current < 0 ? 0 : (current + 1) % buttons.length;
-        break;
-      case 'ArrowUp':
-        next = current <= 0 ? buttons.length - 1 : current - 1;
-        break;
-      case 'Home':
-        next = 0;
-        break;
-      case 'End':
-        next = buttons.length - 1;
-        break;
-      case 'Tab':
-        // A menu is not a tab stop: leaving it closes it, where focus was.
-        e.preventDefault();
-        dismiss(true);
-        return;
-      default:
-        return;
+    if (e.key !== 'Tab') {
+      moveMenuFocus(e, panel.current);
+      return;
     }
+    // A menu is not a tab stop: leaving it closes it, where focus was.
     e.preventDefault();
-    buttons[next]?.focus();
+    dismiss(true);
   };
 
   return createPortal(

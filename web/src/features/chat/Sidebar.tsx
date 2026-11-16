@@ -1,147 +1,129 @@
-import { useMemo, useState } from 'react';
+import { useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Link, useNavigate } from 'react-router';
+import { Link } from 'react-router';
 import { Plus, Search } from 'lucide-react';
 import { Mark } from '../../layout/Mark';
-import { ArchiveGroupHeader, DeviceGroupHeader } from '../../components/GroupHeader';
+import { TooltipButton } from '../../components/TooltipButton';
+import { cx } from '../../lib/cx';
 import { strings } from '../../strings';
 import { useDevices } from '../../stores/devices';
-import { useFront } from '../../stores/front';
-import {
-  countWaiting,
-  selectSessionLayout,
-  selectSessionList,
-  showsUnseenDot,
-  useSessions,
-} from '../../stores/sessions';
-import { useSettings } from '../../stores/settings';
-import type { Device, Session } from '../../protocol/types';
+import { countWaiting, selectSessionList, useSessions } from '../../stores/sessions';
+import type { Session } from '../../protocol/types';
+import { AccountButton } from '../account-menu/AccountButton';
 import { SessionRenameDialog } from '../sessions/SessionRenameDialog';
-import { deviceCanRename } from '../sessions/rename';
-import { SidebarItem } from './SidebarItem';
+import { SidebarList } from './SidebarList';
+import { SidebarToggle } from './SidebarToggle';
+import { useSidebarFold } from './useSidebarFold';
+import './sidebar.css';
 
 interface Props {
   activeKey: string;
   onNewSession: () => void;
 }
 
+/**
+ * The chat's first column (`docs/DESIGN.md` § "The chat sidebar"): the toggle,
+ * the brand and New session, the search, the sessions, and at its foot the
+ * count and the account. Folded by hand it is a rail of the toggle, New
+ * session, Search and the account's initials. Whatever a state does not draw is
+ * not in the page at all, so nothing hidden can take focus or be read out, and
+ * the controls both states draw stay the same elements, focus included.
+ */
 export function Sidebar({ activeKey, onNewSession }: Props) {
   const sessionsRecord = useSessions((s) => s.sessions);
-  // The agent filter is shared with the Sessions page; the status filter is not.
-  // The conversation open beside this list changes status under the reader's
-  // eyes, and a filtered list would drop its row the moment it did.
-  const agentFilter = useSessions((s) => s.agentFilter);
   const devices = useDevices((s) => s.devices);
-  const collapsedDevices = useSettings((s) => s.collapsedDevices);
-  const archiveExpanded = useSettings((s) => s.archiveExpanded);
-  const toggleDeviceCollapsed = useSettings((s) => s.toggleDeviceCollapsed);
-  const toggleArchiveExpanded = useSettings((s) => s.toggleArchiveExpanded);
-  const front = useFront((s) => s.key);
   const [query, setQuery] = useState('');
   // A55: the session whose Rename dialog is open, kept here and not in a row so
   // that the dialog outlives a row that moves between lists.
   const [renaming, setRenaming] = useState<Session | null>(null);
-  const navigate = useNavigate();
+  const { collapsed, moving, setCollapsed, aside, toggle } = useSidebarFold();
+  const id = useId();
+  const searchField = useRef<HTMLInputElement>(null);
+  // The rail's Search opens the sidebar and puts the caret in the field once it
+  // is drawn: after the fold has moved the focus it took away, and before paint.
+  const searchAsked = useRef(false);
 
-  const needle = query.trim();
-  const groups = useMemo(
-    () =>
-      selectSessionLayout(sessionsRecord, devices, {
-        agentFilter,
-        query: needle,
-        collapsedDevices,
-        archiveExpanded,
-      }),
-    [sessionsRecord, devices, agentFilter, needle, collapsedDevices, archiveExpanded],
-  );
+  useLayoutEffect(() => {
+    if (collapsed || !searchAsked.current) return;
+    searchAsked.current = false;
+    searchField.current?.focus({ preventScroll: true });
+  }, [collapsed]);
 
   const waiting = useMemo(
     () => countWaiting(selectSessionList(sessionsRecord)),
     [sessionsRecord],
   );
 
-  const item = (session: Session, device: Device) => {
-    const key = `${session.device_id}/${session.session_id}`;
-    return (
-      <SidebarItem
-        key={key}
-        session={session}
-        online={device.online}
-        active={key === activeKey}
-        // A47: the conversation in front of the person is being looked at, so
-        // its row never shows the dot the `session.seen` on its way clears.
-        unseen={showsUnseenDot(session, front)}
-        onOpen={() => navigate(`/sessions/${key}`)}
-        onRename={deviceCanRename(device, session) ? setRenaming : undefined}
-      />
-    );
-  };
+  const side = collapsed ? 'right' : 'bottom';
 
   return (
-    <aside className="sidebar">
-      <div className="sidebar-head">
-        <Link to="/sessions" className="brand sidebar-brand">
-          <Mark size={18} />
-          <span>{strings.productName}</span>
-        </Link>
-        <button
-          type="button"
-          className="icon-btn"
-          aria-label={strings.chat.newSession}
-          onClick={onNewSession}
-        >
-          <Plus size={16} />
-        </button>
+    <aside
+      ref={aside}
+      id={id}
+      className={cx('sidebar', collapsed && 'collapsed', moving && 'moving')}
+    >
+      <div className="sidebar-inner">
+        <div className="sidebar-head">
+          <SidebarToggle
+            ref={toggle}
+            collapsed={collapsed}
+            waiting={waiting}
+            controls={id}
+            onToggle={() => setCollapsed(!collapsed)}
+          />
+          {collapsed ? null : (
+            <Link to="/sessions" className="brand sidebar-brand">
+              <Mark size={18} />
+              <span>{strings.productName}</span>
+            </Link>
+          )}
+          <TooltipButton
+            className="sidebar-action"
+            label={strings.chat.newSession}
+            side={side}
+            onClick={onNewSession}
+          >
+            <Plus size={20} aria-hidden />
+          </TooltipButton>
+          {collapsed ? (
+            <TooltipButton
+              className="sidebar-action"
+              label={strings.common.search}
+              side={side}
+              onClick={() => {
+                searchAsked.current = true;
+                setCollapsed(false);
+              }}
+            >
+              <Search size={20} aria-hidden />
+            </TooltipButton>
+          ) : null}
+        </div>
+
+        {collapsed ? null : (
+          <>
+            <label className="search-field sidebar-search">
+              <Search size={14} aria-hidden />
+              <input
+                ref={searchField}
+                type="search"
+                value={query}
+                placeholder={strings.chat.searchPlaceholder}
+                aria-label={strings.chat.searchPlaceholder}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </label>
+            <SidebarList activeKey={activeKey} query={query} onRename={setRenaming} />
+          </>
+        )}
+
+        <footer className="sidebar-foot">
+          {collapsed ? null : (
+            <p className="sidebar-count">{strings.chat.sidebarFooter(devices.length, waiting)}</p>
+          )}
+          <AccountButton place={collapsed ? 'rail' : 'sidebar'} />
+        </footer>
       </div>
-
-      <label className="search-field sidebar-search">
-        <Search size={14} aria-hidden />
-        <input
-          type="search"
-          value={query}
-          placeholder={strings.chat.searchPlaceholder}
-          aria-label={strings.chat.searchPlaceholder}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-      </label>
-
-      <nav className="sidebar-list scroll-thin" aria-label={strings.nav.sessions}>
-        {groups.map((group) => (
-          <section key={group.device.device_id}>
-            <DeviceGroupHeader
-              name={group.device.name}
-              online={group.device.online}
-              expanded={!group.collapsed}
-              onToggle={() => toggleDeviceCollapsed(group.device.device_id)}
-              locked={group.revealing}
-            />
-            {group.collapsed ? null : (
-              <>
-                {group.active.length > 0 ? (
-                  <ul>{group.active.map((session) => item(session, group.device))}</ul>
-                ) : null}
-                {group.archive.length > 0 ? (
-                  <>
-                    <ArchiveGroupHeader
-                      count={group.archive.length}
-                      expanded={group.archiveExpanded}
-                      onToggle={() => toggleArchiveExpanded(group.device.device_id)}
-                      locked={group.revealing}
-                    />
-                    {group.archiveExpanded ? (
-                      <ul>{group.archive.map((session) => item(session, group.device))}</ul>
-                    ) : null}
-                  </>
-                ) : null}
-              </>
-            )}
-          </section>
-        ))}
-      </nav>
-
-      <footer className="sidebar-foot hint">
-        {strings.chat.sidebarFooter(devices.length, waiting)}
-      </footer>
 
       {/* On the body, because this pane is hidden below 1024 px and a dialog
           inside it would go with it. */}

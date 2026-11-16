@@ -1,0 +1,126 @@
+/*
+ * The account button (`AccountButton.tsx`): the initials in the ink, and at the
+ * foot of the open chat sidebar the name with a quiet line under it. The
+ * pointer tints it as it tints a row, and the tint stays while its menu is
+ * open. Wherever it sits, the centre of the initials is the centre of the rail,
+ * so folding the sidebar does not move them.
+ */
+.account-button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: var(--sp-1);
+  border: none;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  transition:
+    background var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+
+.account-button:hover,
+.account-button[aria-expanded='true'] {
+  background: var(--hover);
+}
+
+.account-button[data-place='sidebar'] {
+  width: 100%;
+}
+
+/* Beside the name, and on the rail, the initials are a size up from the top bar's. */
+.account-button[data-place='sidebar'] .avatar,
+.account-button[data-place='rail'] .avatar {
+  width: 32px;
+  height: 32px;
+  font-size: var(--fs-12);
+}
+
+/* In the top bar the circle is the button, and the tint is a ring round it. */
+.account-button[data-place='topbar'] {
+  padding: 0;
+  border-radius: 50%;
+}
+
+.account-button[data-place='topbar']:hover,
+.account-button[data-place='topbar'][aria-expanded='true'] {
+  background: transparent;
+  box-shadow: 0 0 0 3px var(--surface-active);
+}
+
+.account-button-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.account-button-name {
+  font-size: var(--fs-13);
+  font-weight: 600;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-button-meta {
+  font-size: var(--fs-12);
+  line-height: 1.4;
+  color: var(--ink-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * The menu (`AccountMenu.tsx`) on the popover's surface: a head that names the
+ * account and is no item, the items, and Sign out apart from them.
+ */
+.account-menu {
+  min-width: 232px;
+}
+
+.account-menu-head {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: var(--sp-2) 10px var(--sp-1);
+}
+
+.account-menu-name {
+  font-size: var(--fs-13);
+  font-weight: 600;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-menu-meta {
+  font-size: var(--fs-12);
+  line-height: 1.4;
+  color: var(--ink-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* An item reads as a row. */
+.account-menu .menu-item {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.account-menu-rule {
+  height: 1px;
+  margin: var(--sp-1) 10px;
+  background: var(--hairline);
+}
+
+.account-menu-danger .menu-label {
+  color: var(--danger);
+}

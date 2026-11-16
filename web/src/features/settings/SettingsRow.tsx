@@ -6,6 +6,7 @@
  */
 import { useId, useRef, type ReactNode } from 'react';
 import { ChevronRight } from 'lucide-react';
+import { Link } from 'react-router';
 import { cx } from '../../lib/cx';
 
 interface RowProps {
@@ -64,8 +65,42 @@ export function SettingsActionRow({ title, sentence, onPress, danger }: ActionPr
       onClick={onPress}
     >
       <RowText title={title} sentence={sentence} sentenceId={sentenceId} danger={danger} />
-      {danger ? null : <ChevronRight size={16} aria-hidden className="settings-row-chevron" />}
+      {danger ? null : <Leads />}
     </button>
+  );
+}
+
+interface LinkProps {
+  title: string;
+  sentence: string;
+  to: string;
+  /** The section's glyph at the leading edge. */
+  icon: ReactNode;
+}
+
+/**
+ * A row that leads to a section of Settings: the whole row is the link, named
+ * by its title, with the sentence read as its description.
+ */
+export function SettingsLinkRow({ title, sentence, to, icon }: LinkProps) {
+  const sentenceId = useId();
+  return (
+    <Link to={to} className="settings-row target" aria-label={title} aria-describedby={sentenceId}>
+      <span className="settings-row-icon" aria-hidden>
+        {icon}
+      </span>
+      <RowText title={title} sentence={sentence} sentenceId={sentenceId} />
+      <Leads />
+    </Link>
+  );
+}
+
+/** The trailing edge of a row that leads somewhere: the chevron. */
+function Leads() {
+  return (
+    <span className="settings-control">
+      <ChevronRight size={16} aria-hidden className="settings-row-chevron" />
+    </span>
   );
 }
 

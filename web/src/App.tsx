@@ -1,4 +1,4 @@
-import { lazy, useCallback, useEffect, type ReactNode } from 'react';
+import { lazy, useCallback, useEffect, useLayoutEffect, type ReactNode } from 'react';
 import { Route, Routes, useLocation, useNavigate } from 'react-router';
 import { ChunkBoundary } from './components/ChunkBoundary';
 import { AppLayout } from './layout/AppLayout';
@@ -68,8 +68,11 @@ export function App() {
   }, [check]);
 
   // A24: what this app remembers is the signed-in account's, not the browser's,
-  // so two people who share one browser keep their own choices.
-  useEffect(() => {
+  // so two people who share one browser keep their own choices. It is read
+  // before the browser paints the commit that changed the account, so the first
+  // frame an account is drawn in already has its own settings rather than the
+  // previous ones or the defaults.
+  useLayoutEffect(() => {
     readSettingsFor(username);
   }, [username]);
 
@@ -126,7 +129,9 @@ export function App() {
         <Route path="/devices/:deviceId" element={<DevicePage />} />
         <Route path="/pair" element={<PairPage />} />
         <Route path="/sessions" element={<SessionsPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
+        {/* General, Voice and Account, each at `/settings/<section>`
+            (`features/settings/SettingsPage.tsx`). */}
+        <Route path="/settings/*" element={<SettingsPage />} />
         <Route path="/users" element={<UsersPage />} />
       </Route>
       <Route path="/" element={<Landing />} />

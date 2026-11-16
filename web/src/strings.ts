@@ -339,6 +339,11 @@ export const en = {
     searchPlaceholder: 'Search',
     sidebarFooter: (devices: number, waiting: number) =>
       `${devices} ${devices === 1 ? 'device' : 'devices'} · ${waiting} waiting`,
+    /** The sidebar's own toggle, the same button open and folded to its rail. */
+    closeSidebar: 'Close sidebar',
+    openSidebar: 'Open sidebar',
+    /** The folded toggle's name and tooltip while sessions wait, the count its dot stands for. */
+    openSidebarWaiting: (waiting: number) => `Open sidebar, ${waiting} waiting`,
     todos: (done: number, total: number) => `Todos ${done}/${total}`,
     todosTitle: 'Todos',
     stop: 'Stop',
@@ -444,6 +449,18 @@ export const en = {
     turnLimitResets: (when: string) => `Ended at the usage limit · resets ${when}`,
   },
 
+  /**
+   * The account button at the foot of the chat sidebar and in the top bar, and
+   * the menu it opens. Its other words are the ones Settings already uses:
+   * Settings and Sign out.
+   */
+  accountMenu: {
+    /** The button's name where it draws the initials alone. */
+    button: (name: string) => `Account: ${name}`,
+    /** Under the name at the head of the menu: the role, then the gateway's host. */
+    roleAtHost: (role: string, host: string) => `${role} · ${host}`,
+  },
+
   status: {
     working: (agent: string) => `${agent} is working`,
     workingQueued: (agent: string) => `${agent} is working · your message will be queued`,
@@ -537,16 +554,25 @@ export const en = {
   },
 
   /**
-   * `docs/DESIGN.md` § "The Settings screen": four groups, and every row a
-   * title with one sentence under it. A row whose state has something to say
+   * `docs/DESIGN.md` § "The Settings screen": sections of groups, and every row
+   * a title with one sentence under it. A row whose state has something to say
    * says it in place of that sentence, so none of these is a footnote.
    */
   settings: {
     title: 'Settings',
+    /** The sections' names. */
+    general: 'General',
     account: 'Account',
-    whileAway: "While you're away",
     voice: 'Voice',
+    /** Each section's sentence in the narrow list of sections. */
+    generalNote: 'Language, detail and notifications.',
+    voiceNote: 'Dictation and AI polish.',
+    accountNote: 'Who is signed in, and signing out.',
+    /** General's two groups. */
+    whileAway: "While you're away",
     reading: 'Reading',
+    /** The Account section's group: how the account signs in. */
+    signInGroup: 'Sign-in',
 
     usersNote: 'Accounts on this gateway, and whether anyone can create one.',
     changePassword: 'Change password',
@@ -592,7 +618,7 @@ export const en = {
     timelineDetailNote:
       'Simple shows only what is written to you. Detailed adds thinking, tool calls and the task list.',
 
-    /** The caption that closes the screen. The numbers come from the running code. */
+    /** The footer caption: the versions, whose numbers come from the running code. */
     versions: (gateway: string, protocol: string) =>
       `Gateway ${gateway} · Protocol ${protocol}`,
     /** The header dot's word, which is read aloud and shown on hover, never printed. */

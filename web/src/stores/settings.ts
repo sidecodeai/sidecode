@@ -4,9 +4,10 @@
  * timeline detail — and for those this store is the cache of what the gateway
  * holds: `hello` and every `preferences.updated` frame land here, and a change
  * made here goes up at once. The rest is this browser's alone: which device
- * groups a list has folded, and which Archives are open. The account's
- * dictation language is not here at all: since A44 it is what an iPhone's own
- * recogniser listens for, and the web only ever transcribes on the gateway.
+ * groups a list has folded, which Archives are open, and whether the chat
+ * sidebar is folded to its rail. The account's dictation language is not here
+ * at all: since A44 it is what an iPhone's own recogniser listens for, and the
+ * web only ever transcribes on the gateway.
  *
  * Persisted in localStorage when available, under the signed-in account's key,
  * so the moments before `hello` read what this browser last saw rather than
@@ -34,6 +35,12 @@ interface SettingsState extends SyncedSettings {
   collapsedDevices: string[];
   /** Devices whose Archive sub-group is open. Collapsed by default. */
   archiveExpanded: string[];
+  /**
+   * Whether the chat sidebar is folded to its rail, which only a wide window
+   * draws (`features/chat/useSidebarFold.ts`). Open by default, and open for a
+   * stored state from before the rail, which has no such field.
+   */
+  sidebarCollapsed: boolean;
   setLanguage: (language: InterfaceLanguage) => void;
   setPolishEnabled: (enabled: boolean) => void;
   setPolishModel: (model: string) => void;
@@ -41,6 +48,7 @@ interface SettingsState extends SyncedSettings {
   setTimelineDetail: (detail: TimelineDetail) => void;
   toggleDeviceCollapsed: (deviceId: string) => void;
   toggleArchiveExpanded: (deviceId: string) => void;
+  setSidebarCollapsed: (collapsed: boolean) => void;
   /**
    * A41: what `hello` carried, which is nothing at all on a gateway older than
    * A35. The fields it names win here, and the ones it leaves out are this
@@ -105,6 +113,7 @@ const defaults = (): Pick<
   | 'timelineDetail'
   | 'collapsedDevices'
   | 'archiveExpanded'
+  | 'sidebarCollapsed'
 > => ({
   language: 'en',
   polishEnabled: false,
@@ -113,6 +122,7 @@ const defaults = (): Pick<
   timelineDetail: 'simple',
   collapsedDevices: [],
   archiveExpanded: [],
+  sidebarCollapsed: false,
 });
 
 export const useSettings = create<SettingsState>()(
@@ -146,6 +156,7 @@ export const useSettings = create<SettingsState>()(
         set((s) => ({ collapsedDevices: toggle(s.collapsedDevices, deviceId) })),
       toggleArchiveExpanded: (deviceId) =>
         set((s) => ({ archiveExpanded: toggle(s.archiveExpanded, deviceId) })),
+      setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
       fromHello: (preferences) => {
         setPreferencesHeld(preferences !== undefined);
         if (preferences === undefined) return;

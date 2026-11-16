@@ -286,6 +286,9 @@ export const zhHans: StringTable = {
     newSession: '新建会话',
     searchPlaceholder: '搜索',
     sidebarFooter: (devices: number, waiting: number) => `${devices} 台设备 · ${waiting} 个等待`,
+    closeSidebar: '收起侧边栏',
+    openSidebar: '展开侧边栏',
+    openSidebarWaiting: (waiting: number) => `展开侧边栏，${waiting} 个等待`,
     todos: (done: number, total: number) => `待办 ${done}/${total}`,
     todosTitle: '待办',
     stop: '停止',
@@ -373,6 +376,11 @@ export const zhHans: StringTable = {
     turnLimitResets: (when: string) => `本轮因用量限额结束 · ${when} 恢复`,
   },
 
+  accountMenu: {
+    button: (name: string) => `账户：${name}`,
+    roleAtHost: (role: string, host: string) => `${role} · ${host}`,
+  },
+
   status: {
     working: (agent: string) => `${agent} 正在工作`,
     workingQueued: (agent: string) => `${agent} 正在工作 · 消息将排队`,
@@ -452,10 +460,15 @@ export const zhHans: StringTable = {
 
   settings: {
     title: '设置',
+    general: '通用',
     account: '账户',
-    whileAway: '你不在时',
     voice: '语音',
+    generalNote: '语言、详细程度和通知。',
+    voiceNote: '听写与 AI 润色。',
+    accountNote: '当前登录的账户与退出登录。',
+    whileAway: '你不在时',
     reading: '阅读',
+    signInGroup: '登录方式',
 
     usersNote: '此网关上的账户，以及是否开放注册。',
     changePassword: '修改密码',

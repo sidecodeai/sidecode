@@ -143,8 +143,43 @@ the same one line any denied permission gets — "Allow camera access in Setting
 with a button that opens iOS Settings, in place of the viewfinder. The scanner never pretends to
 scan over a black frame, and "Hold steady" is said only while a camera is actually looking.
 
-Below 1024 px the web sidebar collapses into the Sessions page and the chat runs full width, which
-is the layout iOS uses natively.
+### The chat sidebar
+
+Below 1024 px the web sidebar is not drawn: it collapses into the Sessions page and the chat runs
+full width, which is the layout iOS uses natively. From 1024 px it is open by default, and the
+person can fold it by hand to a 52 px rail and open it again, as on Claude and ChatGPT. The toggle
+sits at the top left, in the same place open and folded — lucide's `PanelLeftClose` and
+`PanelLeftOpen`, "Close sidebar" and "Open sidebar" — so the same button undoes what it did, and ⌘.
+on an Apple system or Ctrl+. elsewhere does the same while the chat page is open, except during an
+input method's composition and while a dialog or a menu is open; a held key folds once. Focus on
+anything a fold takes away goes to the toggle rather than to the page. Open, the header reads the
+toggle, the brand, then New session at its trailing edge. The rail holds the toggle, New session,
+Search, which opens the sidebar with the caret in its search field, and the account's initials at
+its foot; nothing else of the sidebar is in the page while it is folded. While any session waits for
+the person, the folded toggle carries a dot in the attention colour and says the count in its name
+and its tooltip, as the footer would have. A fold pushes the conversation over and never covers it,
+and there is no hover-to-peek. The column slides in 200 ms on the one easing curve, not at all under
+reduced motion, and only for a fold the person asked for: an account's stored choice lands at once.
+The choice is the account's, kept in this browser with the folded device groups. The header's and
+the rail's icon buttons show their name, and the toggle its shortcut, in a small tooltip once the
+pointer rests on them or at once on keyboard focus, never for a touch; the tooltip says what the
+button's accessible name says and is not read out a second time.
+
+**A row's More.** A sidebar row with a menu — Rename, while the device can rename the session
+(A55) — also has a More button (⋯) at its trailing edge, beside the row's own button and not inside
+it. It is drawn while the pointer or the keyboard is on the row, always on the selected row and
+wherever nothing hovers, and it opens the menu a right-click opens. The title and the sub-line fade
+out under it rather than moving, and the red dot in the gutter stays. Its accessible name is the
+app's "Open menu" for every row menu, never the title, which the row already says.
+
+**The account button.** The sidebar's foot — a bar under the list, parted from it by a hairline,
+since the list scrolls above it — keeps the count of devices and waiting sessions and then says who
+is signed in: the initials in a 32 px circle, the username, and under it the gateway's host. Folded,
+the initials alone. On the pages under the top bar the initials there are the same button. It opens
+a menu, up from the sidebar's foot and down from the top bar: the name over the role and the host,
+as a heading that is no item; Settings; and, set apart, Sign out, which asks first exactly as the
+Settings row does. The menu is a menu to the keyboard: its first item takes focus, the arrow keys
+move, and Escape, Tab and a chosen item close it with focus back on the button.
 
 ### The device row
 
@@ -208,35 +243,69 @@ now three lines, on both apps:
 
 ### The Settings screen
 
-Settings is drawn to the rules the device and session rows
-arrived at — few edges, spacing instead of lines, one rhythm — and reads in a screen and a half
-rather than three. The same shape on both apps.
+Settings is drawn to the rules the device and session rows arrived at — few edges, spacing instead
+of lines, one rhythm — and reads in a screen and a half rather than three. Its rows are drawn as
+sections, each holding some of the groups below (**Sections**, below). The web draws them as a page
+with a nav beside the section on a wide window and as a list of sections on a narrow one; the phone
+draws the list at every width.
 
-**A header says who and where.** The screen opens with an identity header on the canvas, not a
-card: a 44 px circle in the ink carrying the username's initials in the inverse ink, the username
-beside it in the title weight, and one meta line under it, `role · host` — "Admin · rc.example.com"
-— with the connection's dot before the host. The host is the gateway origin without its scheme,
-truncated in the middle; the demo says "Demo". The dot takes the state palette: green while
-connected, pulsing amber while connecting, syncing or reconnecting, grey while the link is down,
-red when the gateway refused it (expired, forbidden, superseded, incompatible); the word for it —
-Connected, Connecting, Offline, Refused — is the accessibility label and the web's tooltip, never
-printed. The header replaces the rows Gateway, Signed in as, Connection and Gateway version.
+**A header says who and where.** The Account section opens with an identity header on the canvas,
+not a card: a 44 px circle in the ink carrying the username's initials in the inverse ink, the
+username beside it in the title weight, and one meta line under it, `role · host` — "Admin ·
+rc.example.com" — with the connection's dot before the host. The host is the gateway origin without
+its scheme, truncated in the middle; the demo says "Demo". The dot takes the state palette: green
+while connected, pulsing amber while connecting, syncing or reconnecting, grey while the link is
+down, red when the gateway refused it (expired, forbidden, superseded, incompatible); the word for
+it — Connected, Connecting, Offline, Refused — is the accessibility label and the web's tooltip,
+never printed. The header replaces the rows Gateway, Signed in as, Connection and Gateway version.
+Every list of sections starts with it as a row on its own surface, with a chevron, leading to
+Account.
 
-**Four groups, each named for the question it answers**, in this order, then the versions:
+**Groups, each named for the question it answers.** The sections (below) hold these groups. A group
+whose section's title already names it, Voice, and the surfaces Account sets apart carry no
+caption:
 
 | Group | Rows (title, then the sentence under it) |
 | --- | --- |
-| **Account** | **Users** (admin role) — "Accounts on this gateway, and whether anyone can create one." · **Change password** (every account but the built-in `admin`) — "The current password and the new one." · **Sign out** — "Cached sessions and drafts leave this device. Nothing changes on your machines." |
+| **Account** (its section's rows) | **Users** (admin role) — "Accounts on this gateway, and whether anyone can create one." · **Change password** (every account but the built-in `admin`) — "The current password and the new one." · **Sign out** — "Cached sessions and drafts leave this device. Nothing changes on your machines." |
 | **While you're away** | **Notify me** — "Which device and session needs you, and nothing else." · **Resume after the limit resets** (A35) — "When Claude Code or Codex stops at a usage limit, the device continues the session a minute after the limit resets." |
 | **Voice** | **Transcribe** — on the phone a menu, On this iPhone or Gateway, with the chosen backend's own sentence ("Audio is streamed to your gateway, which recognises the language itself." for Gateway); on the web, which only transcribes on the gateway, the word Gateway and "Your gateway transcribes and recognises the language itself.", or "This gateway has no transcription service configured." · **Dictation language** (the phone, only while it recognises speech itself, A44) — "The language you speak. The recogniser on this iPhone listens for one at a time." · **Polish dictation with AI** — "Sends what you dictated and the last few messages to this gateway's model. Nothing is sent while it is off." · while it is on, **Model** — "From the list this gateway serves." and **Strength** — "Moderate cleans up. Strong also restructures and resolves references." |
 | **Reading** | **Language** — "The app's own words only; what the agent wrote stays as written." · **Detail** — "Simple shows only what is written to you. Detailed adds thinking, tool calls and the task list." |
 
-The versions close the screen as one caption line in the tertiary ink, centred, and not a group:
-`SideCode 1.5.1 · Gateway 1.5.0 · Protocol v1` on the phone, `Gateway 1.5.0 · Protocol v1`
-on the web (the browser has no version of its own), with **Diagnostics** as a text button beside
-it on the phone. There is no About group. In 中文 the group captions read 账户 · 你不在时 · 语音 ·
-阅读 · 安全, the versions line reads `随码 1.5.1 · 网关 1.5.0 · 协议 v1`, and only the numbers stay
-as they are.
+The versions close the caption that closes Settings (below), in the tertiary ink, and are not a
+group: `SideCode 1.5.1 · Gateway 1.5.0 · Protocol v1` on the phone, which is installed apart from
+the gateway, with **Diagnostics** as a text button beside it, and `Gateway 1.5.0 · Protocol v1` on
+the web, which has no version of its own. There is no About group. In 中文 the sections read 通用 ·
+语音 · 账户, the group captions 阅读 · 你不在时 · 安全 · 登录方式, the versions line reads
+`随码 1.5.1 · 网关 1.5.0 · 协议 v1`, and only the numbers stay as they are.
+
+**Sections.** Settings is General, Voice and Account — 通用 · 语音 · 账户 — in that order. On the
+web each section is at `/settings/<section>`, and an address that names no section leads to
+`/settings`.
+
+- **General**: **Reading** (Language, Detail), then **While you're away** (Notify me, Resume after
+  the limit resets).
+- **Voice**: the Voice rows on one surface under no caption, since the section's title says Voice.
+- **Account**: the identity header, then **Sign-in** (登录方式), which holds how the account signs
+  in and nothing else: **Change password**, the only one in Settings, for every account but the
+  built-in `admin`, which therefore has no Sign-in. Then a surface with no caption: **Users** for
+  the admin role, and **Sign out**. A caption names every row under it.
+
+**On a wide screen** (wider than 760 px, the top bar's own breakpoint) the page is two columns: a
+nav of about 200 px — each section a glyph and its name, tinted under the pointer, the one on
+show tinted a step more and marked current — that stays in view while the section scrolls, and the
+section in a column of up to 680 px. `/settings` shows General, marked current. The nav says which
+section is on show, so the section's title is kept for assistive technology alone. Under the nav,
+the **footer caption** in the tertiary ink: the versions line. It breaks only between its parts,
+`Gateway 1.5.0` and `Protocol v1`, each kept whole, and no line starts or ends on the dot between
+them.
+
+**On a narrow screen** there is no room for both, so `/settings` is the list of sections: the
+identity header as a row on its own surface, leading to Account, then a row per section — its
+glyph, its name, one sentence, and a chevron — then the footer caption, centred. A section stands
+alone: "‹ Settings" back to the list and the section's title take the page heading's place, with no
+nav and no caption. On the web, which of the two shapes a screen gets is the stylesheet's alone, and
+nothing measures the window.
 
 **A row is two lines and no rule.** Every row is a title in the label weight with one sentence
 under it in the secondary ink at 12–13 px, and the control at the trailing edge, vertically
@@ -318,11 +387,13 @@ in instead" beneath. Creating an account signs it in. The username rules are the
 (lower-case letters, digits, `.`, `_`, `-`; 3 to 32 characters) and the form says so only when a
 name is refused; a password is 8 characters or more.
 
-**Account, in Settings.** The header at the top of Settings says who is signed in and as what —
-the username, then `role · host`, Admin or Member — and the Account group under it holds the rows
-the account has: **Users** for the admin role (the accounts screen), **Change password** for every
-account but the built-in `admin` (the current password and the new one, in a modal on the web and a
-sheet on the phone), then **Sign out**, which asks first on both apps (§ "The Settings screen").
+**Account, in Settings.** The header says who is signed in and as what — the username, then
+`role · host`, Admin or Member — at the top of the Account section, and the rows under it are the
+ones the account has: **Users** for the admin role (the accounts screen), **Change password** for
+every account but the built-in `admin` (the current password and the new one, in a modal on the web
+and a sheet on the phone), then **Sign out**, which asks first on both apps. Change password makes
+the Account section's Sign-in group, and Users and Sign out the group under it, with no caption
+(§ "The Settings screen").
 
 **Users** is the admin's screen and nobody else's; a member never sees the row, and typing the
 web address lands on Sessions. At the top is one switch, **Registration**, with the caption
@@ -535,10 +606,10 @@ The app is one canvas, not a stack of boxes. These rules hold on every screen in
   and the pointer resting on a row tints it one step off the surface (`--hover`, below); the selected
   row holds a slightly stronger tint. Settings rows follow the same rule (§ "The Settings screen");
   a hairline is a bar's edge, never a line between two rows.
-- **Settings** read like the lists: a caption above each group, one soft surface with two-line rows
-  inside — a title, one sentence under it in the secondary ink, the control at the trailing edge —
-  no hairline between the rows and no footnote under the group. No fieldsets, no card inside a
-  card. § "The Settings screen" has the groups, the rows and their words.
+- **Settings** read like the lists: a caption above each group that needs one, one soft surface with
+  two-line rows inside — a title, one sentence under it in the secondary ink, the control at the
+  trailing edge — no hairline between the rows and no footnote under the group. No fieldsets, no
+  card inside a card. § "The Settings screen" has the groups, the rows and their words.
 - **Chips and badges** are text-only or tinted pills. Nothing is outlined. Status is an 8 px dot plus
   a word, coloured from the state palette below.
 - **Type carries the hierarchy.** Row and section titles are 15–17 px semibold, meta is 12–13 px in
@@ -1408,7 +1479,7 @@ dark, but the design was not reviewed in dark mode.
 | Canvas | `#F5F5F4` | The page |
 | Surface | `#FFFFFF` | Cards, sheets, rows |
 | Line | `#E6E5E1` | Field and modal edges |
-| Hairline | `rgba(17,17,17,.08)` | A bar's edge — the chat header, a page's section break — never a line between two rows |
+| Hairline | `rgba(17,17,17,.08)` | A bar's edge — the chat header, the chat sidebar's foot, a page's section break — never a line between two rows |
 | Hover | `rgba(17,17,17,.04)` | A list row under the pointer; the selected row uses `.07` |
 | Ink | `#111111` | Primary text, and the primary button fill |
 | Ink secondary | `#6B6B6B` | Metadata |

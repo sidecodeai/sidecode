@@ -62,6 +62,34 @@ export function placementFor(
   };
 }
 
+/** Where a tooltip goes beside its trigger: to its right or under it. */
+export type TooltipSide = 'right' | 'bottom';
+
+/**
+ * Puts a tooltip beside its trigger, centred on it across that side — to its
+ * right, or under it — and slid back inside the viewport where it would leave
+ * it, which a tooltip under a button at the window's edge would.
+ */
+export function placementBeside(
+  trigger: DOMRect,
+  tip: { width: number; height: number },
+  viewport: Viewport,
+  side: TooltipSide,
+): { left: number; top: number } {
+  const keep = (start: number, size: number, room: number): number =>
+    Math.min(Math.max(start, EDGE), Math.max(EDGE, room - size - EDGE));
+  if (side === 'right') {
+    return {
+      left: Math.round(keep(trigger.right + GAP, tip.width, viewport.width)),
+      top: Math.round(keep(trigger.top + (trigger.height - tip.height) / 2, tip.height, viewport.height)),
+    };
+  }
+  return {
+    left: Math.round(keep(trigger.left + (trigger.width - tip.width) / 2, tip.width, viewport.width)),
+    top: Math.round(keep(trigger.bottom + GAP, tip.height, viewport.height)),
+  };
+}
+
 /**
  * Opens a context menu's corner at `point`, as a native one does: below it and
  * to its right, flipping above only when the space below cannot hold the panel

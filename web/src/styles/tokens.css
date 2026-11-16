@@ -19,8 +19,9 @@
   /* lines */
   --line: #e6e5e1;
   --line-strong: #d6d5d0;
-  /* A bar's edge — the chat header, a page's section break — and never a line
-     between two rows: every list, Settings included, is parted by spacing. */
+  /* A bar's edge — the chat header, the chat sidebar's foot, a page's section
+     break — and never a line between two rows: every list, Settings included,
+     is parted by spacing. */
   --hairline: rgba(17, 17, 17, 0.08);
 
   /* A list row under the pointer, and the stronger step the selected row holds. */
@@ -119,6 +120,8 @@
 
   /* layout */
   --sidebar-w: 264px;
+  /* The chat sidebar folded by hand: a column of icons, each centred in it. */
+  --sidebar-rail-w: 52px;
   --header-h: 60px;
   --content-max: 1080px;
 }

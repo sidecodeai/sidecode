@@ -1,0 +1,270 @@
+/*
+ * The chat sidebar (`Sidebar.tsx`, docs/DESIGN.md § "The chat sidebar"). From
+ * 1024 px it is the chat's first column, open at --sidebar-w or folded by hand
+ * to a rail at --sidebar-rail-w, and its own width is the column's. The content
+ * keeps the width of the state it is in while the column slides, so the slide
+ * clips it rather than reflowing it: no label wraps or spills on the way.
+ */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  width: var(--sidebar-w);
+  min-height: 0;
+  overflow: hidden;
+  overflow: clip;
+  /* The list sits on the canvas; the white timeline beside it is the edge. */
+  background: var(--canvas);
+}
+
+.sidebar.collapsed {
+  width: var(--sidebar-rail-w);
+}
+
+/* A fold the person asked for slides; a stored one read on load lands at once. */
+.sidebar.moving {
+  transition: width var(--dur) var(--ease);
+}
+
+.sidebar-inner {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  width: var(--sidebar-w);
+  min-height: 0;
+}
+
+.sidebar.collapsed .sidebar-inner {
+  width: var(--sidebar-rail-w);
+}
+
+/*
+ * The toggle first, then the brand and, at the trailing edge, New session.
+ * Folded, the head is the top of the rail, one button under another; the
+ * toggle is where it was, and each icon is centred in the rail.
+ */
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-3) var(--sp-2) var(--sp-2);
+}
+
+.sidebar.collapsed .sidebar-head {
+  flex-direction: column;
+}
+
+.sidebar-head .sidebar-brand {
+  margin-right: auto;
+  padding-left: var(--sp-1);
+  text-decoration: none;
+  font-size: var(--fs-15);
+}
+
+/* The head's icon buttons and the rail's: 36 px to hit, holding 20 px icons. */
+.sidebar-action {
+  flex: none;
+  width: 36px;
+  height: 36px;
+}
+
+.sidebar-toggle {
+  position: relative;
+}
+
+/* Folded while anything waits for the person: the footer's count, as one dot. */
+.sidebar-toggle-dot {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: var(--status-dot);
+  height: var(--status-dot);
+  border-radius: 50%;
+  background: var(--attention);
+  box-shadow: 0 0 0 2px var(--canvas);
+}
+
+.sidebar-search {
+  flex: none;
+  margin: 0 var(--sp-3) var(--sp-3);
+  max-width: none;
+  height: 32px;
+}
+
+.sidebar-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-1) var(--sp-2) var(--sp-3);
+}
+
+.sidebar-list section + section {
+  margin-top: var(--sp-5);
+}
+
+.sidebar-list .group-head {
+  margin-bottom: var(--sp-1);
+  padding-left: var(--sp-2);
+}
+
+.sidebar-list .archive-head {
+  margin-top: var(--sp-2);
+  padding-left: var(--sp-4);
+}
+
+.sidebar-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* A row: its button, and More beside it where the row has a menu. */
+.sidebar-row {
+  position: relative;
+}
+
+/* Rows are parted by their own fixed height, never by a rule between them.
+   The leading padding is the gutter a red dot sits in (A47), kept by every
+   row so the dot moves nothing when it comes or goes. */
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  height: 48px;
+  padding: 0 var(--sp-2) 0 var(--sp-5);
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.sidebar-item:hover {
+  background: var(--hover);
+}
+
+/* The selected row is one step further into the ink, not a card of its own. */
+.sidebar-item.active {
+  background: var(--hover-selected);
+}
+
+.sidebar-item-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* The title's line, which a red dot is placed from: back past the gap and the
+   status dot to the middle of the gutter. */
+.sidebar-title-line {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  --unseen-reach: calc(var(--sp-5) / 2 + var(--status-dot) + var(--sp-2));
+}
+
+.sidebar-title {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-14);
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-sub {
+  font-size: var(--fs-12);
+  line-height: 1.45;
+  color: var(--ink-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * More, at the row's trailing edge: drawn while the pointer or the keyboard is
+ * on the row, on the selected row, while the row's menu is open (`menu-open`:
+ * the pointer and focus are in the menu's portal then), and always where
+ * nothing hovers. Wherever it is drawn, the title and the sub-line fade out
+ * under it rather than moving. Each is masked on its own, full-width box: a
+ * mask hides whatever lies outside the box it is set on, and the red dot sits
+ * outside the text, in the gutter.
+ */
+.sidebar-more {
+  position: absolute;
+  top: 50%;
+  right: var(--sp-2);
+  transform: translateY(-50%);
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.sidebar-row:hover .sidebar-more,
+.sidebar-row:focus-within .sidebar-more,
+.sidebar-row.active .sidebar-more,
+.sidebar-row.menu-open .sidebar-more {
+  opacity: 1;
+}
+
+.sidebar-row.has-more:hover .sidebar-title,
+.sidebar-row.has-more:hover .sidebar-sub,
+.sidebar-row.has-more:focus-within .sidebar-title,
+.sidebar-row.has-more:focus-within .sidebar-sub,
+.sidebar-row.has-more.active .sidebar-title,
+.sidebar-row.has-more.active .sidebar-sub,
+.sidebar-row.has-more.menu-open .sidebar-title,
+.sidebar-row.has-more.menu-open .sidebar-sub {
+  -webkit-mask-image: linear-gradient(to left, transparent 28px, #000 44px);
+  mask-image: linear-gradient(to left, transparent 28px, #000 44px);
+}
+
+@media (hover: none) {
+  .sidebar-more {
+    opacity: 1;
+  }
+
+  .sidebar-row.has-more .sidebar-title,
+  .sidebar-row.has-more .sidebar-sub {
+    -webkit-mask-image: linear-gradient(to left, transparent 28px, #000 44px);
+    mask-image: linear-gradient(to left, transparent 28px, #000 44px);
+  }
+}
+
+/*
+ * The count, then the account. The list scrolls above it, so the foot is a
+ * bar and its top edge a hairline, which is what a hairline is for: a row cut
+ * off by the end of the list then meets an edge rather than the count. The
+ * account button's initials are centred on the rail's centre line, open or
+ * folded; folded, the foot ends the rail, with nothing above it to part from.
+ */
+.sidebar-foot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-3) 6px;
+  border-top: 1px solid var(--hairline);
+}
+
+.sidebar.collapsed .sidebar-foot {
+  margin-top: auto;
+  border-top: none;
+}
+
+.sidebar-count {
+  padding: 0 var(--sp-1);
+  font-size: var(--fs-12);
+  color: var(--ink-tertiary);
+}
+
+@media (max-width: 1023px) {
+  .sidebar {
+    display: none;
+  }
+}

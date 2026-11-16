@@ -5,6 +5,8 @@
  * and the device is online — terminal-held rows and rows in the Archive
  * included — and the row's own Close control is left as it was.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -334,11 +336,113 @@ describe('the chat sidebar', () => {
 
   it('opens from the keyboard on the focused item', async () => {
     sidebar();
-    within(itemFor('iOS push tokens')).getByRole('button').focus();
+    within(itemFor('iOS push tokens')).getByRole('button', { name: /iOS push tokens/ }).focus();
 
     await userEvent.keyboard('{ContextMenu}');
 
     expect(screen.getByRole('menuitem', { name: 'Rename' })).toHaveFocus();
+  });
+
+  describe('its More button', () => {
+    const more = (title: string): HTMLElement =>
+      within(itemFor(title)).getByRole('button', { name: strings.a11y.openMenu });
+
+    it('sits beside the row’s own button, not inside it, and is named apart from the title', () => {
+      sidebar();
+      const item = itemFor('iOS push tokens');
+      const row = within(item).getByRole('button', { name: /iOS push tokens/ });
+
+      expect(more('iOS push tokens')).toHaveAttribute('aria-haspopup', 'menu');
+      expect(more('iOS push tokens')).toHaveAttribute('aria-expanded', 'false');
+      expect(row.contains(more('iOS push tokens'))).toBe(false);
+      expect(more('iOS push tokens').parentElement).toBe(item);
+      expect(more('iOS push tokens')).not.toHaveAccessibleName(/iOS push tokens/);
+    });
+
+    it('is drawn on every item that has the menu, and on no other', () => {
+      sidebar();
+
+      expect(more('Nightly perf sweep')).toBeInTheDocument();
+      expect(
+        within(itemFor('Profile the wheel build')).queryByRole('button', {
+          name: strings.a11y.openMenu,
+        }),
+      ).toBeNull();
+    });
+
+    it('opens the menu a right-click opens, and Rename from it', async () => {
+      sidebar();
+
+      await userEvent.click(more('iOS push tokens'));
+
+      const open = screen.getByRole('menu', { name: 'iOS push tokens' });
+      expect(within(open).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+        'Rename',
+      ]);
+      expect(more('iOS push tokens')).toHaveAttribute('aria-expanded', 'true');
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
+      expect(field()).toHaveValue('iOS push tokens');
+    });
+
+    it('opens from the keyboard and takes focus back when Escape closes the menu', async () => {
+      sidebar();
+      more('iOS push tokens').focus();
+
+      await userEvent.keyboard('{Enter}');
+      expect(screen.getByRole('menuitem', { name: 'Rename' })).toHaveFocus();
+      await userEvent.keyboard('{Escape}');
+
+      expect(menu()).toBeNull();
+      expect(more('iOS push tokens')).toHaveFocus();
+    });
+
+    it('closes its menu on a second press, rather than opening it again', async () => {
+      sidebar();
+
+      await userEvent.click(more('iOS push tokens'));
+      expect(menu()).not.toBeNull();
+      await userEvent.click(more('iOS push tokens'));
+
+      expect(menu()).toBeNull();
+    });
+
+    /**
+     * While the menu is up, the pointer and focus are in its portal, not on the
+     * row: the row says so itself, and More stays drawn over faded text.
+     */
+    it('marks its row while the menu is open, whether More or a right-click opened it', async () => {
+      sidebar();
+      const item = itemFor('iOS push tokens');
+      expect(item).not.toHaveClass('menu-open');
+
+      await userEvent.click(more('iOS push tokens'));
+      expect(item).toHaveClass('menu-open');
+      await userEvent.keyboard('{Escape}');
+      expect(item).not.toHaveClass('menu-open');
+
+      fireEvent.contextMenu(item, { clientX: 60, clientY: 200 });
+      expect(item).toHaveClass('menu-open');
+      expect(more('iOS push tokens')).toHaveAttribute('aria-expanded', 'true');
+    });
+
+    it('is drawn, with the title and the sub-line faded under it, while the row’s menu is open', () => {
+      const sidebarCss = readFileSync(
+        join(process.cwd(), 'src', 'features', 'chat', 'sidebar.css'),
+        'utf8',
+      ).replace(/\/\*[\s\S]*?\*\//g, '');
+      const selectorsWith = (declaration: string): string[] =>
+        [...sidebarCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+          .filter((rule) => (rule[2] ?? '').includes(declaration))
+          .flatMap((rule) => (rule[1] ?? '').split(',').map((selector) => selector.trim()));
+
+      expect(selectorsWith('opacity: 1')).toContain('.sidebar-row.menu-open .sidebar-more');
+      expect(selectorsWith('mask-image')).toEqual(
+        expect.arrayContaining([
+          '.sidebar-row.has-more.menu-open .sidebar-title',
+          '.sidebar-row.has-more.menu-open .sidebar-sub',
+        ]),
+      );
+    });
   });
 });
 

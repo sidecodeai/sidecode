@@ -1,7 +1,8 @@
 import { NavLink, Outlet } from 'react-router';
+import { AccountButton } from '../features/account-menu/AccountButton';
 import { LiveEntry } from '../features/live/LiveEntry';
 import { cx } from '../lib/cx';
-import { gatewayHost, initials } from '../lib/identity';
+import { gatewayHost } from '../lib/identity';
 import { strings } from '../strings';
 import { useAuth } from '../stores/auth';
 import { useConnection } from '../stores/connection';
@@ -19,7 +20,6 @@ function tabs(): { to: string; label: string }[] {
 
 export function AppLayout() {
   const config = useAuth((s) => s.config);
-  const username = useAuth((s) => s.username);
   const status = useConnection((s) => s.status);
   const origin = config?.public_origin ?? window.location.host;
 
@@ -53,9 +53,7 @@ export function AppLayout() {
             <span className="origin mono" title={origin}>
               {gatewayHost(origin)}
             </span>
-            <span className="avatar" aria-hidden>
-              {initials(username ?? '?')}
-            </span>
+            <AccountButton place="topbar" />
           </div>
         </div>
       </header>

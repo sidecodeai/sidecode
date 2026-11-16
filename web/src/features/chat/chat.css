@@ -1,132 +1,10 @@
+/* The sidebar's own width is its column's, open or folded (`sidebar.css`). */
 .chat-layout {
   display: grid;
-  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
   height: 100vh;
   height: 100dvh;
   background: var(--canvas);
-}
-
-/* --- sidebar ---------------------------------------------------------- */
-
-.sidebar {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  /* The list sits on the canvas; the white timeline beside it is the edge. */
-  background: var(--canvas);
-}
-
-.sidebar-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-2);
-  padding: var(--sp-4) var(--sp-3) var(--sp-3) var(--sp-4);
-}
-
-.sidebar-brand {
-  text-decoration: none;
-  font-size: var(--fs-15);
-}
-
-.sidebar-search {
-  flex: none;
-  margin: 0 var(--sp-3) var(--sp-3);
-  max-width: none;
-  height: 32px;
-}
-
-.sidebar-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--sp-1) var(--sp-2) var(--sp-3);
-}
-
-.sidebar-list section + section {
-  margin-top: var(--sp-5);
-}
-
-.sidebar-list .group-head {
-  margin-bottom: var(--sp-1);
-  padding-left: var(--sp-2);
-}
-
-.sidebar-list .archive-head {
-  margin-top: var(--sp-2);
-  padding-left: var(--sp-4);
-}
-
-.sidebar-list ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-/* Rows are parted by their own fixed height, never by a rule between them.
-   The leading padding is the gutter a red dot sits in (A47), kept by every
-   row so the dot moves nothing when it comes or goes. */
-.sidebar-item {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  width: 100%;
-  height: 48px;
-  padding: 0 var(--sp-2) 0 var(--sp-5);
-  border: none;
-  border-radius: 10px;
-  background: transparent;
-  text-align: left;
-  transition: background var(--dur-fast) var(--ease);
-}
-
-.sidebar-item:hover {
-  background: var(--hover);
-}
-
-/* The selected row is one step further into the ink, not a card of its own. */
-.sidebar-item.active {
-  background: var(--hover-selected);
-}
-
-.sidebar-item-text {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-/* The title's line, which a red dot is placed from: back past the gap and the
-   status dot to the middle of the gutter. */
-.sidebar-title-line {
-  position: relative;
-  display: flex;
-  min-width: 0;
-  --unseen-reach: calc(var(--sp-5) / 2 + var(--status-dot) + var(--sp-2));
-}
-
-.sidebar-title {
-  font-size: var(--fs-14);
-  font-weight: 600;
-  line-height: 1.4;
-  letter-spacing: -0.01em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sidebar-sub {
-  font-size: var(--fs-12);
-  line-height: 1.45;
-  color: var(--ink-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sidebar-foot {
-  padding: var(--sp-3) var(--sp-4);
-  font-size: var(--fs-12);
-  color: var(--ink-tertiary);
 }
 
 /* --- main column ------------------------------------------------------ */
@@ -1591,12 +1469,9 @@
 /* --- responsive ------------------------------------------------------- */
 
 @media (max-width: 1023px) {
+  /* The sidebar is not drawn here (`sidebar.css`), folded or not. */
   .chat-layout {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .sidebar {
-    display: none;
   }
 
   .chat-back {

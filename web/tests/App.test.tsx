@@ -1,3 +1,4 @@
+import { useLayoutEffect } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
@@ -5,10 +6,13 @@ import { App } from '../src/App';
 import { useAuth } from '../src/stores/auth';
 import { useDevices } from '../src/stores/devices';
 import { useSessions } from '../src/stores/sessions';
+import { readSettingsFor, useSettings } from '../src/stores/settings';
 import { strings } from '../src/strings';
 import { devices as deviceFixtures } from '../mock/fixtures';
 
 let requested: string[] = [];
+/** What `GET /api/config` answers; nothing, unless a test draws a screen that reads it. */
+let gatewayConfig: unknown = {};
 
 function stubFetch(sessionStatus: number) {
   requested = [];
@@ -17,6 +21,12 @@ function stubFetch(sessionStatus: number) {
     vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://gateway.test');
       requested.push(url.pathname);
+      if (url.pathname === '/api/config') {
+        return new Response(JSON.stringify(gatewayConfig), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
       if (url.pathname === '/api/session') {
         return sessionStatus === 200
           ? new Response(JSON.stringify({ ok: true, user: { username: 'admin' }, exp: 0 }), {
@@ -44,6 +54,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  gatewayConfig = {};
 });
 
 describe('App routing', () => {
@@ -179,5 +190,58 @@ describe('the landing rule', () => {
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: strings.devices.title })).toBeInTheDocument(),
     );
+  });
+});
+
+/**
+ * A24: what this browser keeps for an account — here the timeline detail it
+ * chose — is read before the first frame that account is drawn in, so nothing
+ * flashes the previous account's or the default choice first. The layout
+ * effects of a part drawn after the app run once the app's own have, before
+ * the browser paints; whatever the store holds by then is what the first frame
+ * draws.
+ */
+describe('the settings this browser keeps for an account', () => {
+  const KEY = 'rc.settings.admin';
+  /** Where the settings store keeps what it remembers: memory, in a browser with no storage. */
+  const storage = () => useSettings.persist.getOptions().storage;
+
+  afterEach(() => {
+    readSettingsFor(null);
+    void storage()?.removeItem(KEY);
+  });
+
+  it('are in place before the first frame the account is drawn in', async () => {
+    // A tab that has read nobody's settings yet, as a page that has just loaded.
+    readSettingsFor(null);
+    void storage()?.setItem(KEY, { state: { timelineDetail: 'detailed' }, version: 1 });
+    gatewayConfig = {
+      public_origin: 'https://rc.example.com',
+      stt: { enabled: false, languages: ['auto'] },
+      push: { web_enabled: true, apns_enabled: false },
+      version: '1.18.6',
+    };
+    stubFetch(200);
+    useAuth.setState({ status: 'signed-in', username: 'admin' });
+    useSessions.setState({ loaded: true, sessions: {} });
+    useDevices.setState({ devices: [], loaded: true });
+    let beforePaint: string | undefined;
+
+    function Frame() {
+      useLayoutEffect(() => {
+        beforePaint = useSettings.getState().timelineDetail;
+      }, []);
+      return null;
+    }
+
+    render(
+      <MemoryRouter initialEntries={['/settings/general']}>
+        <App />
+        <Frame />
+      </MemoryRouter>,
+    );
+
+    expect(beforePaint).toBe('detailed');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Detailed' })).toHaveAttribute('aria-pressed', 'true'));
   });
 });
