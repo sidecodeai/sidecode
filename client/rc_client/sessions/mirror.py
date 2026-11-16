@@ -601,7 +601,7 @@ class MirrorService:
                 continue
             else:
                 owned = bool(writers.of(mirror.tailer.path))
-            await self._set_control(entry, "terminal" if owned else "none", mirror.tailer.running)
+            await self.hub.terminal_holds(entry, owned, mirror.tailer.running)
 
     @staticmethod
     def _adoptable(entry: SessionEntry) -> bool:
@@ -694,7 +694,7 @@ class MirrorService:
             if holder is not None:
                 entry.holder_pid = holder.pid
                 entry.holder_identity = holder.identity
-                await self._set_control(entry, "terminal", running)
+                await self.hub.terminal_holds(entry, True, running)
             else:
                 entry.holder_pid = None
                 entry.holder_identity = None
@@ -702,7 +702,7 @@ class MirrorService:
                     # The CLI is gone, and so is everything it was running.
                     mirror.tailer.awaiting_reply = False
                     mirror.working = False
-                await self._set_control(entry, "none", False)
+                await self.hub.terminal_holds(entry, False)
 
     async def _refresh_codex_control(self) -> None:
         """A rollout some Codex process writes is a terminal's; one nobody writes is nobody's.
@@ -730,7 +730,7 @@ class MirrorService:
                 continue
             procs = writers.of(mirror.tailer.path)
             self._note_writer(entry, procs)
-            await self._set_control(entry, "terminal" if procs else "none", mirror.tailer.running)
+            await self.hub.terminal_holds(entry, bool(procs), mirror.tailer.running)
 
     @staticmethod
     def _note_writer(entry: SessionEntry, procs: tuple[Proc, ...]) -> None:
@@ -738,22 +738,6 @@ class MirrorService:
         only = procs[0] if len(procs) == 1 else None
         entry.holder_pid = only.pid if only is not None else None
         entry.holder_identity = only.identity if only is not None else None
-
-    async def _set_control(self, entry: SessionEntry, control: str, running: bool) -> None:
-        """Amendment A7: `readonly` only while the terminal holds an idle session."""
-        changed = entry.session.control != control
-        if changed:
-            entry.session.control = control  # type: ignore[assignment]
-            await entry.channel.emit("meta", control=control)
-        if control == "terminal":
-            await entry.channel.set_state("running" if running else "readonly")
-        else:
-            # An archived session nothing has revived reads back as `stopped`
-            # (`hub.load`), and a scan that finds no terminal has learnt nothing
-            # that would change that.
-            await entry.channel.set_state("stopped" if entry.session.archived else "idle")
-        if changed:
-            await entry.channel.publish_summary()
 
     # ----------------------------------------------------------------- tails
 

@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from .. import attachments, procscan
+from .. import attachments, exits, procscan
 from ..agents.base import AttachmentSteering, SessionRunner
 from ..agents.claude import live, transcripts
 from ..agents.claude.holders import Holder
@@ -27,6 +27,7 @@ from ..models import (
     UNSET,
     AgentInfo,
     Choice,
+    Control,
     Session,
     SpeedSetting,
     title_from_message,
@@ -62,6 +63,9 @@ BRIDGE_WAIT = 5.0
 BRIDGE_POLL = 0.05
 BRIDGE_PENDING = "the terminal for this session has not reconnected yet; try again in a moment"
 SCAN_FAILED = "could not tell whether a terminal holds this session; try again in a moment"
+# How long the device watches a CLI whose bridge has gone for the CLI to end as well: a CLI
+# that quits writes its last rows and runs its own hooks after its bridge has closed.
+EXIT_WATCH = 10.0
 
 
 def _as_int(value: Any, field: str) -> int | None:
@@ -143,6 +147,8 @@ class SessionHub:
         # When a CLI started, which tells it from a later process given its pid. Replaceable so
         # a test can name a process that is not there.
         self.process_start = procscan.process_start
+        # Whether a CLI ends within a time, as the kernel reports it; replaceable likewise.
+        self.process_ended: Callable[[int, float], Awaitable[bool]] = exits.ended
         # Removals the device made on its own initiative, and the link each
         # went out on. A frame published while the link is down is dropped, so
         # each one is said again on the next link.
@@ -161,6 +167,8 @@ class SessionHub:
         # The sessions whose queue changed while the link was down, until the gateway has been
         # told what it holds now (`republish_queues`).
         self._unsaid_queues: set[str] = set()
+        # The CLIs whose bridge closed while they lived on, watched for their end, by pid.
+        self._exit_watches: dict[int, asyncio.Task[None]] = {}
 
     # ------------------------------------------------------------- accessors
 
@@ -291,6 +299,8 @@ class SessionHub:
 
     async def close(self) -> None:
         self._closed = True
+        for watch in list(self._exit_watches.values()):
+            watch.cancel()
         for entry in list(self.entries.values()):
             await self._cancel_drain(entry)
             # The queue lives in memory, so its messages end with the daemon,
@@ -1351,21 +1361,25 @@ class SessionHub:
     async def attach_closed(self, attachment: Attachment) -> None:
         """The bridge went away: back to the terminal if the CLI is still alive.
 
-        Not while the daemon is stopping: every bridge goes with it, and a turn the CLI is still
-        running is not ended, nor the session handed back, nor its queue let go.
+        The CLI the bridge registered is watched for its end, which the kernel reports the moment
+        it happens; one that is still there after `EXIT_SETTLE` is looked for in the process
+        table as before, and one that is, is watched on for `EXIT_WATCH` more. Not while the
+        daemon is stopping: every bridge goes with it, and a turn the CLI is still running is not
+        ended, nor the session handed back, nor its queue let go.
         """
         entry = self.entries.get(attachment.session_id)
         if entry is None or entry.shared is None:
             return
+        gone = False
         if not self._closed:
-            await asyncio.sleep(EXIT_SETTLE)
+            gone = await self._cli_ended(attachment.pid, EXIT_SETTLE)
         if self._closed:
             # Before the settle or during it: the daemon is stopping, and that is why this bridge
             # went, or the one that went was about to be taken down with the rest.
             async with entry.lock:
                 await self.shared.stopped(entry, attachment)
             return
-        control = await self._holder_control(entry)
+        control = "none" if gone else await self._holder_control(entry)
         if control == "none":
             # The CLI is gone, and what its hook said went with it: a later process may be given
             # its pid. A bridge that closes while its CLI lives, as one reconnecting does, leaves
@@ -1375,6 +1389,62 @@ class SessionHub:
             await self.shared.closed(entry, attachment, control)
         if control == "none" and self._is_ghost(entry):
             await self.withdraw(entry)
+        elif control == "terminal":
+            self._watch_exit(entry, attachment.pid)
+
+    async def _cli_ended(self, pid: int, timeout: float) -> bool:
+        """Whether the CLI with this pid ends within `timeout`; an unknown one is waited for."""
+        if pid <= 0:
+            await asyncio.sleep(timeout)
+            return False
+        return await self.process_ended(pid, timeout)
+
+    def _watch_exit(self, entry: SessionEntry, pid: int) -> None:
+        """Let the session go the moment the CLI still holding it ends, within `EXIT_WATCH`."""
+        if pid <= 0 or pid in self._exit_watches or self._closed:
+            return
+        task = asyncio.get_running_loop().create_task(
+            self._await_exit(entry, pid), name="cli-exit-watch"
+        )
+        self._exit_watches[pid] = task
+        task.add_done_callback(lambda _: self._exit_watches.pop(pid, None))
+
+    async def _await_exit(self, entry: SessionEntry, pid: int) -> None:
+        if not await self.process_ended(pid, EXIT_WATCH):
+            return
+        session = entry.session
+        if self.entries.get(session.session_id) is not entry or self._closed:
+            return
+        if entry.shared is not None or entry.runner is not None:
+            return
+        if session.control != "terminal" or entry.holder_pid != pid:
+            return
+        log.info("a terminal CLI ended after its bridge closed")
+        entry.holder_pid = None
+        entry.holder_identity = None
+        self.bindings.forget(pid)
+        await self.terminal_holds(entry, False)
+        if self._is_ghost(entry):
+            await self.withdraw(entry)
+
+    async def terminal_holds(self, entry: SessionEntry, holds: bool, running: bool = False) -> None:
+        """Say what a scan, or a watched process, found about a session the device does not drive.
+
+        A terminal holding it makes it `terminal`, `readonly` while idle (A7); nothing holding it
+        hands it back. An archived session nothing has revived reads back as `stopped`
+        (`load`), and finding no terminal has taught nothing that would change that.
+        """
+        control: Control = "terminal" if holds else "none"
+        changed = entry.session.control != control
+        if changed:
+            entry.session.control = control
+            await entry.channel.emit("meta", control=control)
+        if holds:
+            await entry.channel.set_state("running" if running else "readonly")
+        else:
+            await entry.channel.set_state("stopped" if entry.session.archived else "idle")
+        if changed:
+            await entry.channel.publish_summary()
 
     # --------------------------------------------------- the session behind it
 
@@ -1496,6 +1566,7 @@ class SessionHub:
 
         scan = await scan_holders()
         if not scan.complete:
+            log.warning("the terminal holder scan was incomplete; the terminal keeps the session")
             return "terminal"
         session_id = entry.session.session_id
         ref = SessionRef(session_id, pid=entry.holder_pid, identity=entry.holder_identity)

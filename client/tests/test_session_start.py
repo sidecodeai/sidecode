@@ -8,6 +8,7 @@ is the only account of those the device gets.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,13 @@ def agents() -> list[AgentInfo]:
     ]
 
 
+async def still_running(pid: int, timeout: float) -> bool:
+    """The CLIs these tests name are no real processes: they never end by the kernel's account,
+    and the process table each test fakes decides who holds what."""
+    await asyncio.sleep(min(timeout, 1.0))
+    return False
+
+
 class Harness:
     """A hub, the frames it published, and the terminals attached to it."""
 
@@ -72,6 +80,7 @@ class Harness:
             self.frames.append(frame)
 
         self.hub = SessionHub(self.registry, publish, "dev-1", agents)
+        self.hub.process_ended = still_running
 
     async def attach(self, session_id: str, pid: int = TERMINAL_PID) -> FakeAttachment:
         attachment = FakeAttachment(session_id, pid=pid)
