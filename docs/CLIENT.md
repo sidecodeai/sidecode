@@ -342,7 +342,7 @@ What each agent advertises:
 | Permission modes | `default` (Ask before edits), `acceptEdits` (Auto-accept edits), `plan` (Plan mode), `bypassPermissions` (Bypass permissions) | `untrusted` (Ask for everything), `on-request` (Ask when needed), `never` (Never ask) | `default` (Ask when needed), `acceptEdits` (Auto-accept edits), `auto` (Auto mode), `dontAsk` (Deny unless allowed), `plan` (Plan mode), `bypassPermissions` (Bypass permissions) | `untrusted` (Ask for everything), `on-request` (Ask when needed, the default), `never` (Never ask). pi has none of its own; these are the device's, enforced by the extension it loads into every pi session (A26) |
 | Efforts | `low`, `medium`, `high`, `xhigh`, `max` | Whatever the catalogue reports, clamped per model, from `minimal` to `ultra` | The union of the models' `reasoning_efforts`, weakest first, clamped per model when a session runs | pi's thinking levels: `off`, `low`, `medium`, `high`. `minimal`, `xhigh` and `max` exist too, but pi only says which of them a model exposes once a session is running, so they are advertised only when one of them is the person's own saved default |
 | Speeds | none | The `serviceTiers` the catalogue lists, in catalogue order and with their own labels: `priority` ("Fast") today. `AgentInfo.speeds` is the union over every model; a model that lists none can run at no tier | none | none |
-| Capabilities | `takeover`, `interrupt`, `queue`, `attachments`, `effort`, `history`, `worktree`, `commands` | `interrupt`, `queue`, `steer`, `history`, `worktree`, `attachments`, `effort`, `commands` | `worktree`, `interrupt`, `queue`, `attachments`, `effort`, `history`, `commands`. `attachments` although Grok takes no image in a prompt: the files are written to disk and the prompt names them (A49) | `worktree`, `interrupt`, `queue`, `steer`, `attachments`, `effort`, `history`, `commands`. `attachments` is images alone: pi takes them as base64 content on the prompt and refuses everything else |
+| Capabilities | `takeover`, `interrupt`, `queue`, `attachments`, `effort`, `history`, `worktree`, `commands`, `rename`, `close_terminal` | `interrupt`, `queue`, `steer`, `history`, `worktree`, `attachments`, `effort`, `commands`, `rename`, `close_terminal` | `worktree`, `interrupt`, `queue`, `attachments`, `effort`, `history`, `commands`, and `rename` and `close_terminal` only while leader mode is ready, because both go through the leader (A55, A61). `attachments` although Grok takes no image in a prompt: the files are written to disk and the prompt names them (A49) | `worktree`, `interrupt`, `queue`, `steer`, `attachments`, `effort`, `history`, `commands`, `rename`, `close_terminal`. `attachments` is images alone: pi takes them as base64 content on the prompt and refuses everything else |
 | Attachment | `attach: "channel"`, `attach_ready` when the shim is installed and first on `PATH`; `shared_interrupt` and `shared_settings` follow `attach_ready`, because the device stops a turn and changes `model` and `effort` (`shared_settings_keys`) by typing into the terminal through the shim (A40, A42); `shared_attachments` follows it too, because the channel the shim loads carries the paths of a message's files (A49); `shared_steer` follows it for Claude Code 2.1.291 and later, which runs the `PostToolBatch` hook (A51) | `attach: "daemon"`, `attach_ready` from a real handshake on the daemon socket, `shared_interrupt`, `shared_settings` and `shared_attachments` all true | `attach: "leader"`, `attach_ready` when Grok's own configuration has `[cli] use_leader` on and no sandbox (`rc-client grok setup` turns it on), so the next `grok` joins the machine's leader (A28); `shared_interrupt`, `shared_settings` and `shared_attachments` all true: a prompt names its files on the leader as anywhere else (A49) | `attach: "extension"`, `attach_ready` when the device's extension is installed in pi's global extension directory at this build, `shared_interrupt`, `shared_settings` and `shared_attachments` all true: the extension runs inside the pi process and can do all three |
 
 Defaults follow the person's own configuration where there is one: pi's `default_model` and
@@ -637,7 +637,15 @@ empty, with the same `recent` the picker already had — so the app stands in it
 choose action picks it. The daemon runs it off the loop like `device.dirs`, with the same recents.
 
 `session.history` pages backwards with `before_seq` and forwards with `after_seq`; the second form
-is how the gateway backfills events produced while its link to the device was down.
+is how the gateway backfills events produced while its link to the device was down. With
+`brief: true` (A60) the hub passes the page through `events.brief_event`, which leaves every event
+but a `tool_call` as it is. A tool call keeps what draws its row; its `input` is cut by
+`bound_object` to 1 KiB of JSON (`BRIEF_INPUT_BYTES`) with `input_truncated` when that cut it, and
+its `output` and its diff's `patch` are dropped, with `output_truncated` and `patch_truncated` when
+they were not empty. Only the page is cut: the registry keeps every event whole, so `session.block`
+still returns the whole block. A `brief` that is not a boolean is `bad_request`, and a page asked
+for without it is what it always was. The apps ask for every page they draw a transcript from this
+way, and a client from before A60 ignores the field.
 
 An archived session is one the user folded away, not a different kind of session. The daemon reads
 one back after a restart as `stopped` and leaves it there, but it clears `archived` and republishes
@@ -645,20 +653,23 @@ the summary the moment the session comes back to life (amendment A15): a turn st
 app or from a terminal; a `session.send` arrives, including one that only joins the queue; or a
 terminal attaches to it, through the Claude channel or by opening its Codex thread. The control a
 revived session reports is the one the path that revived it gives it — `remote` when an app resumed
-it, `shared` when a terminal attached — so it never comes back still claiming that nothing holds it.
+it, which also makes the device hold it until it is closed (A58, "Held until Close" below), `shared`
+when a terminal attached — so it never comes back still claiming that nothing holds it.
 Archiving closes a running agent, so archiving and then sending again is a restart of the CLI, not a
 handover to a process that was still there.
 
 **Closing a session the device drives (A39).** `session.archive {archived: true}` on a session with
-a runner is a close, and `hub.archive` does it in one motion: it marks the channel `closing` first,
-so `revive()` — the A15 path a turn ending or a status changing would otherwise take — returns at
-once; interrupts the runner when it is busy; calls the runner's `shutdown()`; and only then writes
-`archived: true`, `control: "none"`, `state: "stopped"`, clears the turn and the detail, publishes
-the summary once and answers. The whole close is bounded (8 s); an agent that will not die is let
-go of anyway, because the person asked for the session to end and a request that never answers
-helps nobody. Messages held for the session are discarded, never sent: while the channel is
-`closing` the end of the interrupted turn drains nothing, a drain already under way is stopped
-before the agent is asked anything, and the close empties
+a runner, or on one the device holds with no runner (A58), is a close; on a session a terminal
+holds it is the close of "Closing a session a terminal holds" below (A61), which ends the CLI
+first. `hub.archive` does the close of a session the device drives in one motion: it marks the
+channel `closing` first, so `revive()` — the A15 path a turn ending or a status changing would
+otherwise take — returns at once; interrupts the runner when it is busy; calls the runner's
+`shutdown()`; and only then writes `archived: true`, `control: "none"`, `state: "stopped"`, clears
+the turn and the detail, publishes the summary once and answers. The whole close is bounded (8 s);
+an agent that will not die is let go of anyway, because the person asked for the session to end and
+a request that never answers helps nobody. Messages held for the session are discarded, never
+sent: while the channel is `closing` the end of the interrupted turn drains nothing, a drain
+already under way is stopped before the agent is asked anything, and the close empties
 the queue, deletes the folders of their attachments and publishes the empty `queue` before the
 summary. A stopped drain deletes the files it was still writing, and those of a message whose
 bubble it had already shown but whose prompt the agent never got: the turn that message opened
@@ -671,9 +682,9 @@ before it read your message"). Files already named to the agent are left to the 
 | --- | --- |
 | Claude (`ClaudeRunner`) | `close`: the SDK's disconnect ends the CLI — stdin EOF, then terminate, then kill |
 | pi (`PiRunner`, and its terminal session) | `close`: the process is killed |
-| Codex on the shared daemon (`CodexDaemonSession`) | tells the service the thread is closing, `turn/interrupt` when busy (waits up to 5 s for the turn to settle), `thread/archive {threadId}`, then `close` (`thread/unsubscribe`) |
+| Codex on the shared daemon (`CodexDaemonSession`) | tells the service the thread is closing, `turn/interrupt` when busy (waits up to 5 s for the turn to settle), `thread/archive {threadId}` for a thread the device created, then `close` (`thread/unsubscribe`). A thread a terminal started is not archived in Codex (A58): that would take it out of `codex resume`, where the person who started it looks for it |
 | Codex standalone (`CodexRunner`) | `close`: its own app-server child is terminated |
-| Grok on the leader (`GrokRunner`) | when no terminal is in the session (`control` is `remote`): `session/cancel` when busy (up to 5 s), then `session/close {sessionId}` — the one place that sends it, because it unloads the session for every client of the leader (A28) — then `detach`; a `shared` or `terminal` session only detaches |
+| Grok on the leader (`GrokRunner`) | when no terminal is in the session (`control` is `remote`, or already `none` because a close ended the terminal's TUI, A61): `session/cancel` when busy (up to 5 s), then `session/close {sessionId}` — the one place that sends it, because it unloads the session for every client of the leader (A28) — then `detach`; a `shared` or `terminal` session only detaches |
 | Grok private child | `close`: closing the child ends the agent |
 
 **What Codex does on `thread/archive`, verified against Codex 0.154.0 in an isolated `CODEX_HOME`:**
@@ -690,6 +701,112 @@ counts a live subscription as loaded, so a session reopened this way reads `remo
 scan rather than `none`. End to end on the real hub: close → the row is archived, unowned and stopped
 and the thread is unloaded; send again → unarchive, resume, a second turn completes, `control` back
 to `remote`.
+
+### Held until Close (A58)
+
+A session an app sent a message to went back to the Archive as soon as nothing else held it: the
+Codex daemon and the Grok leader returned a thread nobody else was in to `none` when the device's
+turn ended, and every restart, an update's included, restored every session as `none`. A session
+an app launches or continues is now the device's until the person closes it. `Session.held` says
+so: `hub.create` sets it on a session an app launches, and a `session.send` sets it
+(`SessionHub._hold`) on a session whose `control` is `none`, archived or not, before it resumes the
+session; `session.command` and `session.takeover` do not. The flag is stored with the session
+(`Session.record`, the registry's JSON) and is never on the wire: `to_dict` leaves it out.
+`archived` keeps A15's meaning.
+
+`SessionHub.holds` is the flag on a session that is not archived, and `released_control` is what a
+session becomes once no terminal holds it: `remote` when the device holds it, `none` otherwise.
+Every path that hands a session back asks `released_control` — a bridge that closes
+(`attach_closed`), a `SessionStart` hook that moves a bridge away, a scan or a watched exit that
+finds no holder (`terminal_holds`, which the mirror calls too), a pi extension that leaves — so a
+held session goes back to `remote` and `idle`, not `none`. The Codex and Grok tables (`codex/daemon/threads.resolve`,
+`grok/control.resolve`) take `held` and `closed` (`archived`) beside what they knew: a held thread
+or session with no terminal in it is `remote`, loaded or joined or not; one the device created
+before A58 keeps the old rule, `remote` while loaded or joined; a closed one is `none`. The change
+is published at once (`_settle_control`): through the table for a Codex thread on the daemon or a
+Grok session on the leader, `remote` outright for a process of the device's own as it starts. A
+Grok runner also tells its service when a turn of the device's starts (`on_turn_start`), so
+`control` says so before the next tick.
+
+`hub.load` restores a held session that is not archived as `remote` and `idle`, with no runner;
+the next message starts the process. Every other session comes back `none`, `stopped` when it is
+archived. A session launched or continued before A58 carries no flag, so it comes back `none` and
+goes to the Archive when nothing holds it, as it always did. The store says nothing reliable about
+which sessions were `remote` when the previous daemon stopped — the last `control` it kept can be
+weeks old — so the restart that installs A58 restores none of them as `remote`, and the next message
+holds such a session. That is a decision, not something the code could not do: restoring every
+session the device ever launched would fill the apps' active list with old launches that were only
+in the Archive because the restart before set everything `none`.
+
+A held session's process need not run all the time. `sessions/idle.py` looks every 60 s
+(`CHECK_EVERY`) at the sessions whose Claude or pi process the device holds (`own_process`) and
+stops one unused for 30 minutes (`IDLE_RELEASE`): no turn running or starting, state `idle`,
+nothing queued, no request in progress (the session's gate) and a runner that is not busy, which
+for Claude includes subagents holding the turn open. Used means a request arriving, a process
+starting or a turn ending, each of which sets `SessionEntry.active_at`. `release_process` closes
+the runner under the session's lock and leaves the row `remote` and `idle`; the next message
+resumes the process. Codex threads and Grok sessions live in a daemon or a leader the device does
+not own, and are never released.
+
+A terminal that takes a session the device runs an idle process for gets it alone, because two
+processes writing one transcript would interleave two conversations. A Claude bridge that
+registers, or a `SessionStart` hook that moves one into the session, first calls `_make_way`, which
+stops the device's own process when nothing is going on in it; a busy one is left, and refuses the
+attachment as before. The holder scan does the same for a plain `claude --resume`
+(`MirrorService._yield_to_terminals`): a CLI that names the session, by its argv or Claude Code's
+own record and never by its directory, stops the device's idle process, and the session becomes
+`terminal` with that CLI as its holder. A pi TUI whose extension says `hello` for a session the
+device's own pi runs closes that pi, turn and all (`PiExtensionService._give_way`), and the TUI's
+attachment takes over.
+
+Close closes a held session with no runner as it closes one with a runner, and clears `held` with
+the rest of A39's record; a Codex thread a terminal started is no longer archived in Codex (the
+table above), and Grok's `shutdown` sends `session/close` for a held session as for any other no
+terminal is in.
+
+### Closing a session a terminal holds (A61)
+
+`session.archive {archived: true}` on a session a terminal holds — an attachment on it, or `control`
+`terminal` or `shared` (`ending.holds_terminal`) — used to archive the row while the CLI went on in
+its terminal, and archived a shared Codex thread in Codex under its TUI. It now goes to
+`sessions/ending.py` before A39's close is considered, and ends the CLI first or changes nothing.
+The agent must list `close_terminal`, or the answer is `unsupported`. Under the session's lock, so
+nothing is injected or typed meanwhile, the hub sets `SessionEntry.ending` and the channel's
+`closing` and calls the agent plugin's `close_terminal(spec)` hook with a `CloseSpec`: the entry,
+the shared control, a deadline 10 s away (`CLOSE_WAIT`) on the loop's clock, the hub's
+`process_ended`, and the Codex daemon and Grok leader services. The hook ends the CLI and says
+whether it was gone by the deadline, or raises `unsupported`, having done nothing, for a CLI it
+cannot name precisely. Gone in time, the session is filed: the attachment's prompts expire and the
+attachment is dropped quietly (`SharedControl.ended`); a runner the device kept on somebody else's
+process ends as A39 ends one, a Codex thread the device created archived in Codex and a
+terminal's let go of, a Grok session closed on the leader now that no terminal is in it; `held` is
+cleared, `archived`, `none` and `stopped` set, the queue emptied with its files and an empty `queue`
+published, and then the summary, once. Not gone: `conflict` ("the terminal did not quit in time;
+try again in a moment"), and nothing is published. While `ending` is set, what the CLI's going away
+would say of the session — `attach_closed`, the exit watch, `terminal_holds` from a scan, the pi
+extension's goodbye, the Codex and Grok `publish_control` — returns without a word, so the one
+publish is the whole story.
+
+Every process is checked the same way before anything is sent to it (`ending.the_process`). Its
+pid comes from what the device knows of that session — the bridge's registration, the holder scan,
+the rollout's one writer, Grok's registry, the pi extension's `hello`, or, on the Codex daemon, the
+one TUI in the thread's directory (the table below) — and it must be in a process table that could
+be read whole (one that could not is `conflict`, "the process table could not be read"), on a
+terminal, this user's, and running the agent's program (`looks_like_claude`, `looks_like_a_tui` for
+a Codex TUI on the daemon, otherwise `runs_one_of` the agent's programs: `codex`; `grok` and
+`agent`; `pi`). One that is gone by then counts as ended. `procscan.terminate` checks the identity
+(pid and start time), the owner and the program once more right before it sends SIGTERM, and never
+sends SIGKILL; the wait for the end is the kernel's (`exits.ended`, below).
+
+| Agent | How the CLI is ended |
+| --- | --- |
+| Claude Code (`agents/claude/ending.py`) | The pid the bridge registered, or for a `terminal` session the holder the scan paired with it. A CLI with no terminal, or whose Claude Code record (`~/.claude/sessions/<pid>.json`, verified for that process) names an `entrypoint` other than `cli`, is one an IDE runs: `unsupported`. Attached through the shim's pseudo-terminal, a CLI that is idle — no turn, no dialog — with an empty prompt box gets `/exit` typed (`Typist.exit`) and is waited for; any other gets Escape for a running turn (`Typist.interrupt`, A42; a dialog on screen is not escaped) and then SIGTERM |
+| Codex (`agents/codex/ending.py`) | On the shared daemon: the Codex TUI whose command line resumes the thread by its id (`codex resume <id>`), wherever it runs; else the one Codex TUI running in the thread's real directory (`TerminalScan.only`), unless its command line resumes another thread; none, several, or two naming the thread is `unsupported`. A running turn is interrupted first (`turn/interrupt`, up to 3 s), because it runs in the daemon and ending the TUI would not stop it; then SIGTERM. A TUI with its own app-server: the one process writing the rollout, which the mirror's writer scan remembered with its start time (below); several writers, none, or a process that is no longer the one remembered is `unsupported` |
+| Grok Build (`agents/grok/ending.py`) | The pid `~/.grok/active_sessions.json` names for the session, when it names exactly one. A running turn on the leader gets `session/cancel` (up to 3 s), then the TUI gets SIGTERM; once it is gone, the leader runner's `shutdown` sends `session/close` |
+| pi (`agents/pi/ending.py`) | The extension's `shutdown` command, which answers and then calls `ctx.abort()` and `ctx.shutdown()`; the device waits for the pid the `hello` gave. An extension from before A61 answers `unknown command shutdown`, or nothing within 3 s, and the device sends SIGTERM to that pid; a link that drops while it asks counts as pi going. A session pi runs that is not a terminal's is `unsupported` |
+
+The apps offer this Close only where the agent lists the capability: Claude Code, Codex and pi
+always, Grok Build while its leader mode is ready, as `rename`.
 
 ### Working means all of it
 
@@ -940,7 +1057,7 @@ agent does not.
 | attached to a terminal the device types into | types `/rename <name>` under A40's gate and waits up to eight seconds for the CLI's `custom-title` row | the CLI's own routine, and a hidden note for the model |
 | attached, the name has an `@` or ends in `\` | types nothing and writes the row itself, even while the terminal is busy | `custom-title` only |
 | attached, but not through the shim's terminal proxy, or open in a terminal nothing is attached to | refuses with `unsupported` | nothing |
-| held by nothing (`control: none`) | writes the rows | `custom-title`, then `agent-name`, in one write |
+| held by nothing (`control: none`), or held by the device with no process running (`control: remote`, A58) | writes the rows | `custom-title`, then `agent-name`, in one write |
 
 The **driven** route sends `{"subtype": "rename_session", "title": …, "source": "host", "session_id":
 …}` through `ClaudeSDKClient._query._send_control_request`, which the Python SDK does not expose, so
@@ -1050,17 +1167,17 @@ time fires on waking.
 | The switch goes off | every pending resume `cancelled`, on every session |
 
 A resume is not asked for again by anybody, and just after a daemon restart every session reads as
-held by nobody until the scan finds its CLI and its bridge dials back, then as the terminal's, then
-as shared. So three outcomes are a restart's wait and not an answer, and are put off a minute at a
-time, up to three times, before the resume is dropped: a session scheduled as `shared` that reads
-as `control: "none"`, a send refused with `conflict`, which is what a session the scan shows as the
-terminal's, or a CLI the shim did not start, answers (see "A send never resumes a session a terminal
-holds"), and the guard's own `timeout`, a bridge that has not reconnected or a process table that
-could not be read. The tries are counted apart from the limit attempts above and are kept in
-memory, so a restart in the middle of them starts the count again. Everything else drops the resume
-at once, as before: a Claude that cannot start, a request the device cannot read. A terminal that
-really was closed therefore costs three minutes of rows, `rescheduled` each time, before the
-`dropped` that it always got.
+held by nobody, or as `remote` with no process when the device holds it (A58), until the scan finds
+its CLI and its bridge dials back, then as the terminal's, then as shared. So three outcomes are a
+restart's wait and not an answer, and are put off a minute at a time, up to three times, before the
+resume is dropped: a session scheduled as `shared` that reads as `control: "none"`, a send refused
+with `conflict`, which is what a session the scan shows as the terminal's, or a CLI the shim did
+not start, answers (see "A send never resumes a session a terminal holds"), and the guard's own
+`timeout`, a bridge that has not reconnected or a process table that could not be read. The tries
+are counted apart from the limit attempts above and are kept in memory, so a restart in the middle
+of them starts the count again. Everything else drops the resume at once, as before: a Claude that
+cannot start, a request the device cannot read. A terminal that really was closed therefore costs
+three minutes of rows, `rescheduled` each time, before the `dropped` that it always got.
 
 The prompt is one constant, `RESUME_PROMPT`, verbatim from PROTOCOL 7.2 and never edited per
 session; it is the one message the device writes for the person, so it never names the session
@@ -1078,24 +1195,43 @@ Every ten seconds the daemon scans for agent sessions it did not create:
   without appending a byte.
 - **Codex** — rollout files under `~/.codex/sessions`, identified by the `session_meta` record that
   starts each one. That record also says whose thread it is, and only this device's own threads and
-  a terminal's are mirrored: see "Work another application owns" below.
+  a terminal's are mirrored, never a `codex exec` run's: see "Work another application owns" below.
 - **Grok Build** — update logs under `~/.grok/sessions`, for a `grok` the leader does not hold: see
   "Terminal sessions outside the leader" below.
 
 pi needs no scan: its terminal sessions reach the device through the extension that
 `rc-client pi setup` installs (see "pi").
 
+**What a scan costs.** The targets are a scan that completes in seconds however long the machine's
+history is, a Claude CLI's start or exit in the apps' list within about two seconds, and any other
+agent's terminal within about ten. A scan once took minutes on a machine with a long Codex history,
+because the rollout mirror only ever grew and asked `lsof` about every rollout it held, one helper
+process per file per scan. A rollout or Grok update log that has left the discovery window — the newest
+files the scan lists, 50 from the last 14 days unless configured otherwise — is no longer read or
+asked about unless a terminal holds its session (`control: "terminal"`); a terminal that takes the
+session up again writes the file, which brings it back into the window and has it adopted again.
+The writers of every rollout come from one look at the Codex processes (`procscan.file_writers`:
+one `lsof -p <pids>` on macOS, `/proc/<pid>/fd` and `fdinfo` on Linux), and those of the Grok logs
+that Grok's registry does not answer for from one look at the Grok processes; a rollout exactly one
+process writes remembers that process and its start time, which is the process a Close from an app
+ends (A61). The shared Codex daemon and the Grok leader are ticked on loops of their own, every ten
+seconds as well and never inside the scan, so a daemon that answers slowly holds back nothing
+the scan says about the other agents' terminals. Each scan ends with one log line naming its phases
+in milliseconds (`terminal scan was slow` at info when it took two seconds or more, `terminal scan`
+at debug otherwise), and a holder or writer scan that could not be completed logs a warning and
+leaves control as it was.
+
 The first scan does not wait for the interval. It starts with the daemon, before the link dials, and
 the first `hello` of a run waits for it, at most three seconds (`FIRST_SCAN_WAIT`). The hub
-restores every persisted session as held by nothing (`control: "none"`), and the gateway shows no
-unseen mark (A47) for a session nothing holds, so a `hello` that said so after a restart, an
-update's included, would hide the mark of every terminal still running. That first pass settles who
-holds what, Claude's terminals first because they need nothing from the Codex daemon or the Grok
-leader, whose ticks wait on those processes, and leaves the settings reads, a whole transcript per
-session, for the one after it. A scan that is not done when the wait ends is not waited for again:
-the `hello` goes as the hub restored the sessions, one warning line says so (`first hello sent
-before the first terminal scan settled`), and what the scan finds afterwards is published like any
-change. A reconnect in the same run never waits.
+restores every persisted session it does not hold as held by nothing (`control: "none"`) — one it
+holds comes back `remote` (A58, "Held until Close") — and the gateway shows no unseen mark (A47) for
+a session nothing holds, so a `hello` that said so after a restart, an update's included, would hide
+the mark of every terminal still running. That first pass settles who holds what, Claude's
+terminals first, and leaves the settings reads, a whole transcript per session, for the one after
+it; the Codex daemon's and the Grok leader's ticks are not part of it. A scan that is not done when
+the wait ends is not waited for again: the `hello` goes as the hub restored the sessions, one
+warning line says so (`first hello sent before the first terminal scan settled`), and what the scan
+finds afterwards is published like any change. A reconnect in the same run never waits.
 
 The channel socket and the pi socket open before any of that, before the daemon adopts Codex's
 threads and joins Grok's leader, which takes seconds. The bridges and terminal proxies of the CLIs
@@ -1128,8 +1264,8 @@ transcript:
 | --- | --- | --- |
 | `terminal` | A live CLI process owns the session | Composer disabled, "Controlled by the terminal · Take over" |
 | `shared` | A live CLI process owns it **and the device is attached** | Composer and approvals as for `remote`; see "Attached terminal sessions" |
-| `none` | No process holds it; the session is resumable | Sending resumes it and control moves to `remote` |
-| `remote` | This daemon is driving it | Normal |
+| `none` | No process holds it and the device does not hold it; the session is resumable | Sending resumes it, control moves to `remote`, and the device holds it until it is closed (A58) |
+| `remote` | This daemon is driving it, or holds it with no process running yet (A58) | Normal |
 
 Ownership is worked out for the whole scan round at once, and a process is credited to one session
 only. A CLI started with `--resume` or `--session-id` names its session in its own command line, and
@@ -1147,7 +1283,8 @@ exact process it identified, confirms the release, and resumes the session itsel
 terminal turn it refuses. Codex advertises no `takeover` and needs none: a Codex session started as
 a bare `codex` is `shared` rather than `terminal`, and the apps drive it in place. Only a Codex
 started with configuration overrides falls back to `terminal`, and then quitting the CLI is the only
-way to release it.
+way to release it: in the terminal, or with Close from an app, which ends the CLI and files the
+session (A61, "Closing a session a terminal holds").
 
 Two environment notes. A `claude` started from inside another Claude Code session inherits
 `CLAUDE_CODE_CHILD_SESSION`, which turns transcript saving off, and the transcript is the only thing
@@ -1555,6 +1692,7 @@ This table is the Claude channel. Codex on the shared daemon does more; see the 
 | Rename | Yes since A55, typed into the terminal as `/rename <name>` and confirmed by the CLI's `custom-title` row; `conflict` while the terminal is busy or may still hold the text of an earlier rename nobody confirmed, `timeout` when no row comes or the proxy goes quiet; a name with an `@` or a trailing backslash is written as that row instead and never typed; `unsupported` when the session is not attached through the shim's terminal proxy or the terminal is gone |
 | Take over | No, `conflict`: the session is already attached |
 | Attachments | Yes since A49: the device writes the files and the words it injects end with their paths, which the CLI opens with `Read`; the bubble names the files and shows no path |
+| Close | Yes since A61: `/exit` typed into the terminal when the CLI is idle with nothing in its prompt box, otherwise Escape for a running turn and SIGTERM to the CLI the bridge registered; the session is filed once the CLI is gone. `unsupported` for a CLI an IDE runs, `conflict` when it has not quit within 10 s; see "Closing a session a terminal holds" |
 
 Whoever answers a permission prompt first wins. When the terminal answers, the device sees the tool
 run or be refused in the transcript and closes the block with `decision.by: "terminal"`; a later
@@ -1596,10 +1734,21 @@ still outranks it, because an approval blocks the very work the question was ask
 message an app sends meanwhile is never injected, because the dialog owns the prompt: it is steered
 or held as during any turn. When the attachment drops, or another CLI process registers for the
 session and takes it over, pending approvals and a pending question become `expired`; on a drop
-the session moves to `terminal` if the CLI process is still alive or to `none` if it exited.
+the session moves to `terminal` if the CLI process is still alive or, if it exited, to `none`, or to
+`remote` and `idle` when the device holds the session (A58).
 Messages still held in the queue stay there and go out through the ordinary resume path, and so do
 messages steered into the turn and not yet handed over (A51); their files are deleted now and
 written again by whatever delivers them (A49).
+
+Whether the CLI exited is the kernel's answer, not one look at the process table. A CLI that
+quits flushes its transcript and runs its own hooks after its bridge has gone, so one look a second
+later found it still there, the session became the terminal's, and only the next scan let it go.
+When a bridge closes, the device now watches the pid the bridge registered (`exits.ended`: kqueue's
+`NOTE_EXIT` on macOS, a pidfd on Linux, a look at the pid every 100 ms elsewhere, all from the
+event loop): a CLI that ends within the one-second settle is let go at once, without a holder scan,
+and one the scan still finds is watched for ten seconds more (`EXIT_WATCH`) and let go the moment
+it ends. The session is then handed back through the same hub method a scan uses
+(`terminal_holds`).
 
 **A daemon that is stopping is neither a CLI exiting nor a bridge dropping.** Stopping it closes
 every bridge, and until this was told apart an update, which restarts the daemon, ended the turn
@@ -1810,6 +1959,7 @@ A shared Codex session can do everything a remote one can, which is more than a 
 | Attachments | Yes, steered messages included. Images become image inputs; other files are written to disk and named in the prompt |
 | Run a slash command | Yes, for the nine the device maps to app-server methods; see "Slash commands" below |
 | Take over | No, `conflict`: the session is already attached |
+| Close | Yes since A61, when the device can name the TUI: the one resuming the thread by its id, or else the one Codex TUI in the thread's directory that names no other thread. The turn is interrupted, then that TUI gets SIGTERM, and the thread stays in `codex resume` unless the device created it. Otherwise `unsupported`; see "Closing a session a terminal holds" |
 
 ### The speed tier
 
@@ -1987,6 +2137,15 @@ carries `originator: "codex-tui"` and `source: "vscode"`. On top of the connecti
   milliseconds when it reads a thread, as every timestamp in the protocol is. Threads marked
   `ephemeral` are dropped: Codex spawns one per turn just to generate a title, and so is every
   thread another application on this machine owns (below).
+- Both are asked every ten seconds by the daemon service's own tick, on a loop the mirror starts
+  beside its terminal scan and never inside it: a machine with a long history kept
+  `thread/list` busy for a minute, and the scan that waited for it held back what it said about
+  every other terminal. `thread/list`, `thread/loaded/list` and `thread/read` each have 10 s
+  (`LIST_TIMEOUT`). A `thread/list` that fails or times out is not asked again for 30 s, twice as
+  long after each further failure up to ten minutes, while `thread/loaded/list` is still asked on
+  every tick; one that succeeds ends the wait. No lock is held while the daemon answers, so no
+  notification and no request an app sent waits behind a listing, and a thread several
+  notifications name at once is read once (`_adopt_by_id`), the others waiting for that read.
 - A session whose thread is missing from that page and is not loaded is forgotten only if it cannot
   have fallen off the end of it. An answer that ends with no `nextCursor` is the whole history, and
   the session goes however long ago the thread was used. Otherwise only a thread the daemon last
@@ -1994,12 +2153,15 @@ carries `originator: "codex-tui"` and `source: "vscode"`. On top of the connecti
   absence proves deletion; the session record's own `updated_at` is never compared, because it
   moves to now whenever the device publishes the session. An empty page, or an answer that failed,
   forgets nothing, and neither does a refresh whose list of loaded threads failed: a thread the
-  device is driving may have no rollout to list yet, and that list is all that says it exists.
+  device is driving may have no rollout to list yet, and that list is all that says it exists. A
+  list of loaded threads that failed also leaves the set of loaded threads the service knows as it
+  was, and a listing never calls a thread deleted that the service first learnt of after the listing
+  began, since it could not have named it.
 - A loaded thread is subscribed with `thread/resume {excludeTurns: true}` and backfilled from
   `thread/items/list`, so the block timeline comes from the daemon rather than from a rollout file.
   Rollout mirroring stays only for the threads the daemon does not know about.
-- `origin` and `control` follow the table in PROTOCOL.md 4.4. An unloaded thread is `none` and the
-  next `session.send` resumes it.
+- `origin` and `control` follow the table in PROTOCOL.md 4.4. An unloaded thread is `none` unless
+  the device holds it (A58, "Held until Close"), and the next `session.send` resumes it.
 - The daemon says nothing at all when a TUI exits, and a thread it once loaded stays loaded for as
   long as the daemon lives, so the TUI process is the only signal there is. **Being loaded therefore
   proves nothing**: a directory somebody works in holds one loaded thread for every `codex` ever
@@ -2012,14 +2174,16 @@ carries `originator: "codex-tui"` and `source: "vscode"`. On top of the connecti
   first and then to whichever the daemon saw used most recently. A thread this device started is
   never handed a claim that way — it is not a thread a terminal opened — until somebody has been
   seen typing in it, after which a `codex resume` on it is as ordinary as any other terminal. A
-  thread with no claim becomes `remote` while a turn this device started is running and `none` when
-  it is idle; `origin` never changes, the subscription is kept, and the next message typed in that
-  terminal makes it `shared` again. Evidence gathered since the last scan outranks the scan, so a
-  TUI resumed from a different directory is not written off while it is being used, and a scan that
-  cannot be completed changes nothing. The process test is by what the process holds, never by its
-  flags: a `codex` on a terminal with no helper subcommand (`app-server`, `exec`, `mcp`,
-  `mcp-server`, `proto`, `daemon`), minus any that is holding a rollout under `$CODEX_HOME/sessions`
-  open, which is how a TUI running its own embedded app-server gives itself away.
+  thread with no claim becomes `remote` when the device holds it (A58), and so does one the device
+  created before A58 while it is loaded; any other becomes `remote` while a turn this device started
+  is running and `none` when it is idle. `origin` never changes, the subscription is kept, and the
+  next message typed in that terminal makes it `shared` again. Evidence gathered since the last scan
+  outranks the scan, so a TUI resumed from a different directory is not written off while it is
+  being used, and a scan that cannot be completed changes nothing. The process test is by what the
+  process holds, never by its flags: a `codex` on a terminal with no helper subcommand
+  (`app-server`, `exec`, `mcp`, `mcp-server`, `proto`, `daemon`), minus any that is holding a
+  rollout under `$CODEX_HOME/sessions` open, which is how a TUI running its own embedded app-server
+  gives itself away.
 - **A thread with nothing in it is not a session yet.** A TUI opens a thread the moment it starts,
   before anything is typed into it, and that thread has no name, no preview and no rollout to
   resume. Publishing it would put an untitled row in every app the moment a terminal window opens,
@@ -2079,7 +2243,7 @@ the device allows are the whole limit, and the name Codex holds is the one asked
 | The thread is | The call goes to |
 | --- | --- |
 | held by a daemon session (`control: remote` or `shared`) | the shared daemon |
-| held by nothing (`control: none`), or open in a terminal the device is not in | the shared daemon, which names a cold thread without loading it |
+| held by nothing (`control: none`), held by the device with no session on the daemon yet (`control: remote`, A58), or open in a terminal the device is not in | the shared daemon, which names a cold thread without loading it |
 | held by a runner built while the daemon was not up (`CodexRunner`, its own app-server child) | that child, while it runs; once it has exited, the shared daemon |
 
 Refusals, in the device's words rather than Codex's, because Codex's own words name the thread and, for a
@@ -2137,11 +2301,12 @@ Two fields describe a thread's provenance, and both the index entry and the roll
 entry point — `cli` for older TUIs, `exec` for `codex exec`, `vscode` for an app-server client,
 an object for a subagent. A terminal TUI inspected on Codex 0.160.0 reports `codex-tui` with
 `vscode`, so `vscode` alone does not identify a desktop or IDE thread. A thread is the device's to
-publish when its `source` is a plain string **and** one of three conditions holds: its `originator`
-is one of the names this device connects under (`remote-control` on the shared daemon, `rc-client`
-on the app-server it spawns for itself); its `source` is `cli` or `exec`; or its `originator` is
-exactly `codex-tui` and its `source` is exactly `vscode`. The last pair is accepted together:
-another application's `vscode` thread is still foreign. A subagent carries its parent's
+publish when its `source` is a plain string, it is not a `codex exec` run (below), **and** one of
+three conditions holds: its `originator` is one of the names this device connects under
+(`remote-control` on the shared daemon, `rc-client` on the app-server it spawns for itself); its
+`source` is `cli`; or its `originator` is exactly `codex-tui` and its `source` is exactly `vscode`.
+The last pair is accepted together: another application's `vscode` thread is still foreign. A
+subagent carries its parent's
 `originator`, so the `source` object tells the two apart: a thread another thread spawned is never
 a session, not even one spawned by a thread of ours. Everything else belongs to the application
 that started it: never published, never mirrored from its rollout,
@@ -2153,10 +2318,25 @@ cost of guessing wrong is a row nobody here can open. Nothing ever changes a thr
 so the answer is remembered: a foreign thread being worked on elsewhere costs one `thread/read`
 for the whole run, not one per event it sends.
 
-Removing what was published before the rule needs the daemon, because `thread/read` is where the
-answer comes from: a device on the fallback path (no daemon, rollout mirroring) still shows a
-foreign session it stored earlier, and drops it the first time a daemon answers a handshake. New
-foreign work never appears on either path.
+**A `codex exec` run is not a session either (A59).** `codex exec` does a script's or an
+automation's work, which nobody sits in and nobody continues, and until A59 every run was published
+as a terminal's thread, because the rule above accepted a `source` of `exec`. Provenance now
+refuses a thread whose `originator` is `codex_exec` (`EXEC_ORIGINATOR`) or whose `source` is `exec`
+(`EXEC_SOURCE`), before anything else is looked at, so neither the daemon's index nor rollout
+discovery adopts one, and an exec rollout is never mirrored or tailed.
+
+Removing what was published before a rule takes one pass. The answer is in each thread's own
+rollout, which is named after the thread, so `rollouts.owned_on_disk` walks the history once for
+all the stored sessions it is asked about, reads the `session_meta` each rollout opens with, and
+judges it by the same predicate; a thread whose rollout is not on disk, or cannot be read, is left
+out. With the daemon connected its service makes the pass each time it connects
+(`CodexDaemonService.prune_foreign`) and asks `thread/read` only about the threads the rollouts said
+nothing of, so it no longer makes one call per stored session; without the daemon the mirror makes
+it once at start, from the rollouts alone (`MirrorService._prune_foreign_codex`), and a thread with
+no rollout waits for a daemon. Only stored terminal sessions are looked at — never one the device
+created, nor one in the middle of a turn it drives — and each one dropped goes with
+`session.removed`, which the hub says again on the next link. New foreign work and new exec runs
+never appear on either path.
 
 ### When there is no daemon
 
@@ -2173,7 +2353,8 @@ with npm (no standalone, so `daemon start` exits 1 and `codex setup` never left 
 machine that upgraded Codex (the upgrade leaves no daemon running), and a machine enrolled under npm
 and later switched to the curl build (the standalone appeared, but nothing looked again).
 
-So the device does it itself, on the same ten-second scan that reconciles the thread index:
+So the device does it itself, on the same ten-second tick that reconciles the thread index, which
+runs on a loop of its own beside the terminal scan:
 
 - Socket absent, or present and not answering, and the standalone build is there: run
   `codex app-server daemon start` and connect. It is idempotent, returns `alreadyRunning` when the
@@ -2363,27 +2544,40 @@ joins the leader itself.
 
 Who is in a session is Grok's own registry, `~/.grok/active_sessions.json` — `[{session_id, pid, cwd,
 opened_at}]`, written by every TUI while it runs and by nothing else — because the leader announces
-nothing when a TUI exits and offers no way to ask who is attached. On every ten second scan
-(`GrokLeaderService.tick`, driven from the mirror's scan) the service reads it. A live entry it does
-not yet hold gets one question, `_x.ai/session/info {sessionId}`, which answers a full object for a
-session the leader has loaded and `{}` for one it has not: loaded means a leader-mode TUI is in it,
-so the service takes the session — adopting it if the mirror never saw it, taking over the mirrored
-entry otherwise, at which point the mirror drops its tail (`_grok_is_leaders`) — and joins it with
-`session/load`, publishes `control: "shared"`, the holder pid, and the model and effort the load
-result's `configOptions` name; `{}` means a `grok` running its own agent, and the mirror keeps it as
-`terminal`. Titles come from `_x.ai/sessions/changed` (`upserted[].title`), from the leader's
-`_x.ai/session/list`, or from `summary.json`'s `generated_title`, and each says whether a person chose it:
-`titleIsManual` in the two leader messages, `title_is_manual` in the file. A manual one is the user's,
-anything else is Grok's own summary.
+nothing when a TUI exits and offers no way to ask who is attached. Every ten seconds
+(`GrokLeaderService.tick`, on a loop of its own that the mirror starts beside its terminal scan and
+never runs inside it) the service reads it; joining the leader or loading a session in it can
+take its time, and the ticks follow one another, so nothing in a tick is locked. A live entry it
+does not yet hold gets one question, `_x.ai/session/info {sessionId}`, which answers a full object
+for a session the leader has loaded and `{}` for one it has not: loaded means a leader-mode TUI is
+in it, so the service takes the session — adopting it if the mirror never saw it, taking over the
+mirrored entry otherwise, at which point the mirror drops its tail (`_grok_is_leaders`) — and joins
+it with `session/load`, publishes `control: "shared"`, the holder pid, and the model and effort the
+load result's `configOptions` name; `{}` means a `grok` running its own agent, and the mirror
+keeps it as `terminal`. Titles come from `_x.ai/sessions/changed` (`upserted[].title`), from the
+leader's `_x.ai/session/list`, or from `summary.json`'s `generated_title`, and each says whether a
+person chose it: `titleIsManual` in the two leader messages, `title_is_manual` in the file. A manual
+one is the user's, anything else is Grok's own summary.
 
-`agents/grok/control.py` is the A28 table of PROTOCOL.md 4.4 as one pure function: registered and
-held here → `shared`; registered and not held → `terminal`; not registered and held → `remote`
-while a turn this device started is running, `none` otherwise; not held → `none`. A session a TUI
-leaves is therefore still the device's to drive, because the leader still holds it, and the next
-`session.send` goes straight to the runner already attached. Two things never happen: the runner
-never sends `session/close`, which unloads a session for every client of the leader including the
-terminal that is in it (verified: it broke the TUI's session), and a private child is never spawned
-for a session the leader holds.
+`agents/grok/control.py` is the A28 table of PROTOCOL.md 4.4 as one pure function, "joined" being
+the device's runner on the leader: registered and joined → `shared`; registered and not joined →
+`terminal`; otherwise closed (archived) → `none`; held by the device (A58) → `remote`, joined or
+not; created by the device before A58 → `remote` while joined; joined → `remote` while a turn this
+device started is running, `none` otherwise; not joined → `none`. A session a TUI leaves is
+therefore still the device's to drive, because the leader still holds it, and the next
+`session.send` goes straight to the runner already attached. The runner also tells the service
+when a turn of the device's starts (`on_turn_start`), which publishes `control` at once rather than
+at the next tick (A58). Two things never happen: the runner never sends `session/close` while a
+terminal is in the session, since it unloads a session for every client of the leader including
+the terminal that is in it (verified: it broke the TUI's session), and a private child is never
+spawned for a session the leader holds. `shutdown` sends it on Close, and only for a session no
+terminal is in: a `remote` one (A39, A58), or one whose TUI the close has just ended (A61).
+
+Close from an app ends a Grok TUI too (A61): `session/cancel` for a running turn on the leader, up
+to 3 s, then SIGTERM to the one pid Grok's registry names for the session, and `session/close` once
+that process is gone; a registry that names none, or several, is `unsupported`. The capability,
+`close_terminal`, is listed only while leader mode is ready, as `rename` is, because both go
+through the leader. See "Closing a session a terminal holds".
 
 `session/load` replays the whole conversation, every conversation row carrying
 `_meta.isReplay: true` and `_meta.eventId` `<sessionId>-<n>`, the same counter `updates.jsonl`
@@ -2549,7 +2743,9 @@ apps' hint saying what to run.
   it, and filtering against the maximum would drop the agent's reply.
 - Whether a terminal holds the session comes from `~/.grok/active_sessions.json`. The old fallback,
   the processes holding `updates.jsonl` open, never fires: nothing holds that file open in either
-  mode (a standalone TUI holds `events.jsonl`; on the leader, the leader does).
+  mode (a standalone TUI holds `events.jsonl`; on the leader, the leader does). It is asked, for
+  every log the registry does not answer for, in one look at the `grok` and `agent` processes, not
+  one helper process per file.
 - A session this device drives is never ingested from disk: it is `origin: "remote"` in the hub, which
   is the same rule that keeps Claude and Codex from doubling their own events.
 
@@ -2615,7 +2811,8 @@ the device's own — pi's `--session-id` creates the session when it does not ex
 when it does, so starting and resuming take the same path and nothing is rekeyed. `--no-approve`
 is deliberate: it stops pi trusting the working directory's own `.pi` settings, resources and
 extensions, so a remote session never starts running code that happens to be checked into the
-repository.
+repository. The child of a session the device holds is stopped after 30 minutes unused and started
+again by the next message (A58, "Held until Close"); a pi TUI that loads the session closes it.
 
 Framing is strict: LF is the *only* record delimiter, because U+2028 and U+2029 are valid inside
 pi's JSON strings. The device reads the stream as bytes, where `readline` splits on 0x0A alone and
@@ -2650,7 +2847,7 @@ JSONL, LF only, one object per line. Both ends are ours, so the vocabulary is cl
 
 | From the extension | Carries |
 | --- | --- |
-| `hello` | the opening frame: pi's session id, session file, cwd, pid, `ctx.mode` (`tui` or `rpc`), model, thinking level, session name, and the branch the session already holds. Re-sent on every reconnect, with the branch as it stands then |
+| `hello` | the opening frame: pi's session id, session file, cwd, pid, `ctx.mode` (`tui` or `rpc`), model, thinking level, session name, and `first_prompt`, the first thing the person said, at most 500 characters, which titles the session. Never the branch: the device reads that from the session file the first time it meets a session. An older extension sends the branch as `entries` instead, which still works. Re-sent on every reconnect |
 | `event` | one of pi's agent events, verbatim, so the same translator serves terminal and RPC sessions. `agent_end` and `turn_end` are trimmed to their stop reason, because both otherwise repeat the whole run's messages |
 | `input` | a prompt pi accepted: `source` `interactive` (the keyboard), `extension` (one this device injected, with the app's own `block_id`) or `rpc` |
 | `ask` | a tool call the extension has stopped, waiting for a decision |
@@ -2668,11 +2865,24 @@ JSONL, LF only, one object per line. Both ends are ours, so the vocabulary is cl
 | `command` `commands` | `pi.getCommands()`: the extension commands, prompt templates and skills this session offers (A27) |
 | `command` `compact` | `ctx.compact()`, answered when the compaction finishes or when pi refuses it (A27) |
 | `command` `stats` | the session's totals, summed from the branch, in the shape `get_session_stats` returns |
+| `command` `shutdown` | answered first, then `ctx.abort()` and `ctx.shutdown()`: an app closed the session (A61). An extension without it answers `unknown command shutdown`, and the device ends that pi with SIGTERM instead |
 | `answer` | an app's decision on an `ask` |
 
 The reading of that socket and the handling of it are separate tasks. A handler sends commands of
 its own — a turn's totals when it ends — and only the reader can deliver the reply, so handling a
 frame on the reading task would make it wait for itself.
+
+A line may be as long as `frames.MAX_FRAME_BYTES`, 32 MiB, and a longer one is skipped with a
+warning instead of ending the connection. With asyncio's default of 64 KiB, the `hello` of a
+long session, which carried the whole branch, raised an error nothing caught, the link closed, and
+the extension dialled again a second later with the same `hello`, for as long as pi ran. The
+`hello` now names the session file instead, and the device reads the branch from it once, the first
+time it meets the session (`session_file.branch`): only the session's own file, under pi's sessions
+directory and headed by the session's id, from its last entry back through `parentId`, which is
+what `getBranch()` returns; a file it cannot read is an empty branch, and the session is shown from
+its next word on. The extension's wait between redials starts over only once the device has sent
+`welcome`, so a device that keeps hanging up is dialled less and less often, not once a second for
+ever.
 
 ### Approvals
 
@@ -2736,20 +2946,26 @@ resumed session would not have them.
 ### Terminal sessions
 
 A `hello` from a `tui` process creates or revives a session keyed by pi's own session id, with
-`control: "shared"`, the cwd, model and thinking level the frame carries, and the branch replayed
-once as history in the entries' own timestamps — so an app opening a conversation somebody started
-an hour ago reads it from the beginning. Everything an app can do on a Codex shared session works
-here: send, steer, stop, model, thinking level, permission mode, images and approvals, all of it
-through the socket. A message an app sends gets its bubble when pi's own `input` event comes back,
-which is where the terminal shows it too and under the id the app already drew; a steered one waits
-for pi to take it off the steering queue, as amendment A14 requires.
+`control: "shared"`, the cwd, model and thinking level the frame carries, and the branch, read from
+the session file the frame names, replayed once as history in the entries' own timestamps — so
+an app opening a conversation somebody started an hour ago reads it from the beginning. Everything
+an app can do on a Codex shared session works here: send, steer, stop, model, thinking level,
+permission mode, images and approvals, all of it through the socket. A message an app sends gets its
+bubble when pi's own `input` event comes back, which is where the terminal shows it too and under
+the id the app already drew; a steered one waits for pi to take it off the steering queue, as
+amendment A14 requires. A `hello` for a session the device's own pi child is running closes that
+child, turn and all, before the TUI's attachment takes over: two processes writing one session file
+would branch it behind each other's backs (A58).
 
-`session_shutdown`, or the socket closing, drops the session to `control: "none"` — pi has exited,
-and the next `session.send` resumes it with `pi --mode rpc --session-id <id>` in the same working
-directory, which reopens the same conversation with its history intact. `/new`, `/resume` and
-`/fork` in the TUI are a `session_shutdown` and then a `hello` under another id: two sessions, not a
-rename. A terminal pi started before the daemon came up still appears, because the extension retries
-the socket with backoff and sends its `hello` when it connects.
+`session_shutdown`, or the socket closing, drops the session to `control: "none"`, or to `remote`
+and `idle` when the device holds it (A58) — pi has exited, and the next `session.send` resumes it
+with `pi --mode rpc --session-id <id>` in the same working directory, which reopens the same
+conversation with its history intact. Close from an app ends such a pi through the extension's
+`shutdown` command, or with SIGTERM to the pid its `hello` gave when the extension predates it, and
+files the session once the process is gone (A61, "Closing a session a terminal holds"). `/new`,
+`/resume` and `/fork` in the TUI are a `session_shutdown` and then a `hello` under another id: two
+sessions, not a rename. A terminal pi started before the daemon came up still appears, because the
+extension retries the socket with backoff and sends its `hello` when it connects.
 
 ### Renaming a session (A55)
 
@@ -2761,7 +2977,7 @@ pi names a session with a `session_info` entry in its file and tells its extensi
 | --- | --- |
 | an RPC child it started (`control: remote`, the child running) | sends `{"type": "set_session_name", "name"}`, which pi answers once the entry is appended |
 | a pi in a terminal, attached through the extension (`control: shared`) | sends the extension the command `set_name`, which calls `pi.setSessionName(name)`, the call `/name` ends in, and answers with the name the session now holds |
-| held by nothing (`control: none`), or an RPC child that has exited | appends a `session_info` entry to the session's file |
+| held by nothing (`control: none`), held by the device with no child running (`control: remote`, A58), or an RPC child that has exited | appends a `session_info` entry to the session's file |
 | `control: terminal`, a terminal the device cannot reach (a state the device does not produce for pi today) | refuses with `unsupported`, "rename it in the terminal", and writes nothing |
 
 **`set_name`** is a command of the socket (see the table of commands under "The socket", and the header of
@@ -3028,6 +3244,12 @@ events it numbered, so a batch lost to a kill takes its events and its counter t
 is ever reused. Pruning a session's history no longer counts its rows first; it deletes below a
 watermark the index finds by skipping to it.
 
+A session's delta flusher, which coalesces streaming text into at most one flush per 80 ms per
+block, runs only while deltas are pending: it starts with the first one and ends once a flush
+leaves nothing pending, and the next delta starts it again. Every session the device knew, mirrored
+ones included, used to keep a task that woke every 80 ms for as long as the daemon ran, whether or
+not anything ever streamed in it.
+
 A probe task asks only to be woken every second and logs `event loop stalled` with how late it was
 when the answer takes more than five seconds. A device that goes quiet is either a bad network or a
 stalled loop, and the two are fixed in different places.
@@ -3149,6 +3371,16 @@ and Codex out of step.
   other, so which of that directory's threads each one is credited with is a guess, ordered by what
   the daemon last saw used. The count is what bounds the damage: one terminal speaks for one thread,
   never for the whole directory.
+- Close from an app (A61) answers `unsupported`, and the person closes the CLI in its terminal, for
+  a Codex TUI on the shared daemon that shares the thread's directory with another Codex TUI, a
+  Codex rollout several processes write, a Grok session the registry names no single pid for, and a
+  Claude Code an IDE runs. On the shared daemon a TUI is known by the thread id on its command
+  line, or else by its directory, as above. A TUI that came into the thread without its id on the
+  command line (`codex resume` through the picker, or `/resume` inside a TUI) is known only by its
+  directory: one that runs in another directory is not found (`unsupported`), and a lone TUI in
+  the thread's directory that is in another thread of it, with no id on its command line, would be
+  ended in its place. On Linux no Claude Code record is believed
+  (below), so an IDE's CLI is known only by its having no terminal.
 - Whether the daemon would unload a thread once its last subscriber leaves is unverified: this
   device subscribes to every loaded thread, so there is no moment without one, and answering it
   would mean stopping the user's own client.

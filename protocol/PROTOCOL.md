@@ -103,13 +103,14 @@ The gateway forwards an app request to the owning device unchanged, except that 
 The device echoes `id` and `from` in its `reply`; the gateway delivers that reply only to the
 originating connection and strips `from` before doing so. If the device is offline the gateway
 answers `device_offline` itself. If no reply arrives within 60 s the gateway answers `timeout`.
-`session.create` and `session.history` may use the full 60 s; every other request SHOULD reply in
-under 5 s. A request that was written to a device link that a newer connection of the same device
-has since replaced is answered `timeout` when the newer connection has not answered it within 10 s
-of its `hello_ack`, instead of after 60 s (A56): a device that kept running may still answer it on
-the new link, and the gateway delivers that answer. A connection that is replaced in its turn
-hands the request on, and the next has its own 10 s. Only a `session.send` is safe to send again
-(2.4).
+`session.create` and `session.history` may use the full 60 s; a `session.archive` that ends the CLI
+in a terminal waits up to 10 s for it to quit (A61), and a rename typed into a terminal up to 8 s
+for the transcript to confirm it (A55); every other request SHOULD reply in under 5 s. A request
+that was written to a device link that a newer connection of the same device has since replaced is
+answered `timeout` when the newer connection has not answered it within 10 s of its `hello_ack`,
+instead of after 60 s (A56): a device that kept running may still answer it on the new link, and
+the gateway delivers that answer. A connection that is replaced in its turn hands the request on,
+and the next has its own 10 s. Only a `session.send` is safe to send again (2.4).
 
 ### 2.4 Idempotency
 
@@ -163,6 +164,7 @@ authoritative and clear stored credentials before returning to login.
 | `session.send` text | 64 KiB |
 | `session.send` attachments | 8 attachments, 6 MiB each decoded |
 | `session.history` limit | 200 by default, 1000 maximum |
+| `tool_call` in a `session.history` page with `brief: true` | `input` 1 KiB of JSON, then `input_truncated: true`; no `output`, with `output_truncated: true` when there was any; no `diff.patch`, with `patch_truncated: true` when there was one (A60) |
 | Gateway replay buffer | 2 000 events or 4 MiB per session, whichever is smaller |
 | Streaming delta flush | at most one flush per 80 ms per block |
 | Speech-to-text utterance | 120 s of audio, 4 MiB total |
@@ -832,7 +834,7 @@ The agent and option arrays are shortened here; the fixture holds the full objec
 | `efforts` | `LabeledId[]` | yes | Empty array when the agent has no effort levels |
 | `default_effort` | string \| null | yes | |
 | `speeds` | `LabeledId[]` | no | Speed tiers the agent can run a session at beyond its standard speed, for example Codex's `priority` ("Fast"); empty or absent when it has none (amendment A21) |
-| `capabilities` | string[] | yes | Subset of `worktree`, `takeover`, `interrupt`, `queue`, `steer`, `attachments`, `effort`, `history`, `commands`, `rename`. `commands` means the agent's sessions can list and run slash commands from an app through `session.commands` and `session.command` (A27); Codex, Grok Build and pi carry it, Claude does not. `rename` means the device can rename the agent's sessions in the agent itself through `session.set` with `title` (A55); Claude Code, Codex and pi carry it, Grok Build only while its leader mode is ready (`attach_ready`, A28) |
+| `capabilities` | string[] | yes | Subset of `worktree`, `takeover`, `interrupt`, `queue`, `steer`, `attachments`, `effort`, `history`, `commands`, `rename`, `close_terminal`. `commands` means the agent's sessions can list and run slash commands from an app through `session.commands` and `session.command` (A27); Codex, Grok Build and pi carry it, Claude does not. `rename` means the device can rename the agent's sessions in the agent itself through `session.set` with `title` (A55); Claude Code, Codex and pi carry it, Grok Build only while its leader mode is ready (`attach_ready`, A28). `close_terminal` means the device can end the agent's CLI in the terminal that holds one of its sessions (`control` `terminal` or `shared`), which is what Close on such a row asks for (6.3, A61); Claude Code, Codex and pi carry it, Grok Build only while its leader mode is ready, as `rename` |
 | `attach` | `channel` \| `daemon` \| `extension` \| `leader` \| null | no | How this agent's terminal sessions can be attached. `channel` is the Claude channel shim, `daemon` the Codex shared app-server, `extension` an extension of the device's own that the agent loads into every one of its processes (pi, A26), `leader` Grok Build's leader process — one shared backend per machine that its TUI joins when `[cli] use_leader` is on and that the device joins as another ACP client (A28). Null or absent means terminal sessions can only be taken over or resumed. |
 | `attach_ready` | boolean | no | Whether the device is prepared to attach: for Claude the `claude` shim is installed and on `PATH`, for Codex a handshake on the shared daemon socket succeeds, for pi the device's extension is installed in pi's global extension directory at the current build, for Grok Build the person's own `~/.grok/config.toml` turns `[cli] use_leader` on and requests no sandbox profile, so the next `grok` started on that machine joins the leader (A28). Apps use it only to word the hint on a `terminal` session. |
 | `shared_interrupt` | boolean | no | Whether the attachment can interrupt a running turn. `session.stop` on a `shared` session needs this **and** capability `interrupt`. False when absent. |
@@ -888,7 +890,8 @@ account with no plan, on a device with Grok's leader mode off and so with no win
 Capabilities gate the UI. `steer` decides whether a message sent during a running turn is steered or
 queued; `takeover` decides whether a terminal-controlled session offers "Take over"; `history`
 decides whether the app can page backwards; `rename` decides whether it offers Rename for a session
-of that agent, while the device is online (A55). On a `shared` session `shared_steer` decides
+of that agent, while the device is online (A55); `close_terminal` decides whether a row a terminal
+holds offers Close, while the device is online (A61). On a `shared` session `shared_steer` decides
 steering as well: an app treats a running session as steering when the agent's `capabilities` has
 `steer`, or when the session is `shared` and the agent reports `shared_steer: true`, and as
 queueing otherwise (A51).
@@ -998,25 +1001,66 @@ when the device reports it.
 
 | Value | Meaning |
 | --- | --- |
-| `remote` | The device daemon runs the agent process for this session: one created with origin `remote`, or a terminal session that was resumed or taken over. |
+| `remote` | The device daemon runs the agent process for this session — one created with origin `remote`, or a terminal session that was resumed or taken over — or holds the session (A58, below) with no process running; the next `session.send` starts one. |
 | `terminal` | A live CLI process owns the session and the device has **no** way in. The composer is disabled; "Take over" is offered only when the agent has capability `takeover`. |
 | `shared` | A live CLI process owns the session **and the device is attached to it**: for Claude through a channel the CLI loads, for Codex through the shared app-server. Apps enable the composer and approvals exactly as for `remote`, hide "Take over", and hide Stop unless the agent lists capability `interrupt` **and** reports `shared_interrupt: true` (4.2). Codex can through the daemon; Claude can since A42 through the pseudo-terminal its shim owns (Escape). |
-| `none` | No process owns the session; the next `session.send` resumes it under device control. |
+| `none` | No process owns the session and the device does not hold it; the next `session.send` resumes it under device control, and the device holds it from then on (A58). |
 
 Control moves `terminal → shared` when the attachment registers, `shared → terminal` when the
-attachment drops while the CLI process is still alive, and `shared → none` when the CLI exits. Each
-transition travels the way every other `control` change does: a `meta` event carrying `control`
-(5.11), a `status` event when the state changes with it (5.10), and a republished session summary.
+attachment drops while the CLI process is still alive, and `shared → none` when the CLI exits, or
+`shared → remote` for a session the device holds (A58). Each transition travels the way every other
+`control` change does: a `meta` event carrying `control` (5.11), a `status` event when the state
+changes with it (5.10), and a republished session summary.
 
 An attachment follows the CLI process, not the id the process was started with (amendment A16). A
 Claude CLI that resumes another session inside the TUI, or clears to a fresh one, keeps its channel;
 the device learns the new id from the CLI's own `SessionStart` hook and moves the attachment there:
-the session the terminal is now in becomes `shared`, and the one it left becomes `none` by the
-transition above. A session that never held a message and has no transcript on disk — the id a CLI
-was started with and then left by `/resume` or by quitting — is not kept: the device removes it with
-`session.removed` (7) as soon as the terminal leaves it, and on its next scan for any it missed.
-`session.removed` is therefore not only the answer to a `session.delete`; an app drops the row
-whenever the frame arrives.
+the session the terminal is now in becomes `shared`, and the one it left becomes `none`, or `remote`
+when the device holds it, by the transition above. A session that never held a message and has no
+transcript on disk — the id a CLI was started with and then left by `/resume` or by quitting — is
+not kept: the device removes it with `session.removed` (7) as soon as the terminal leaves it, and on
+its next scan for any it missed. `session.removed` is therefore not only the answer to a
+`session.delete`; an app drops the row whenever the frame arrives.
+
+#### A session the device holds (A58)
+
+A session an app launches with `session.create`, and one an app's message reaches while nothing
+holds it — a `session.send`, in any `mode`, to a session with `control: "none"`, archived or not —
+is the device's until the person closes it: the device **holds** it. `session.command` and
+`session.takeover` hold nothing. The hold is the device's own, stored with the session and never
+sent, and `archived` keeps A15's meaning. The message that takes a session has the device publish
+`control: "remote"` at once, before the turn's first output: a Codex thread on the shared daemon and
+a Grok session on the leader through their tables below, any other session as its process starts.
+
+A held session that is not archived stays `remote`, or `terminal` or `shared` while a terminal is
+in it, until it is closed (6.3):
+
+- when its turn ends, and across a restart or an update, which restore it as `remote` and `idle`
+  with no process running; the next message starts one. Every session the device does not hold
+  comes back `none`, `stopped` when it is archived.
+- when the device stops its Claude or pi process after 30 minutes unused — no turn running or
+  starting, nothing queued, no request in progress, no subagent holding the turn open. The row
+  stays `remote` and `idle`, and the next message starts the process again. A Codex or Grok session
+  lives in a daemon or a leader the device does not own, and nothing of it is stopped.
+- when a terminal that took it leaves — a Claude CLI that exits, whether its bridge, a scan or the
+  device's watch on the process says so, a pi extension that says goodbye, a Codex TUI or a Grok
+  registry entry that is gone, a mirrored file whose writer is gone. The session goes back to
+  `remote` and `idle`, not to `none`.
+
+A terminal that takes a held session the device runs an idle process for gets it alone, because two
+processes writing one conversation would interleave two. A Claude bridge that registers in the
+session, or a `SessionStart` hook that moves a bridge into it, stops the device's process first and
+the attachment is accepted; a busy device process still refuses the attachment, as before. A plain
+`claude --resume` the holder scan finds naming the session, by its command line or Claude Code's own
+record and never by its directory, stops the device's process, and the session becomes `terminal`.
+A pi TUI that loads the session closes the device's own pi, and the TUI's attachment takes over.
+
+Only what is launched or continued from A58 on is held. A session from before carries no hold: it
+comes back `none` and goes to the Archive when nothing holds it, as before, and a Codex thread or a
+Grok session the device created before A58 is `remote` only while the daemon has it loaded or the
+leader has it joined. The device's store does not say which sessions were `remote` when the previous
+daemon stopped — the last `control` it kept can be weeks old — so the restart that installs A58
+restores none of them as `remote`, and the next message holds such a session.
 
 #### What a terminal-held session reports about itself
 
@@ -1039,20 +1083,26 @@ this.
 
 | Situation | `origin` | `control` |
 | --- | --- | --- |
-| The device created the thread and no message typed in a terminal has been seen on it | `remote` | `remote` |
-| The thread was already loaded in the daemon when the device found it, or any message on it was typed in a terminal | `terminal` when the device did not create the thread, otherwise unchanged | `shared` |
-| The thread is known from the daemon's history but is not loaded | unchanged | `none`, and the next `session.send` resumes it |
+| A terminal is in the loaded thread: it was already loaded in the daemon when the device found it, or a message on it was typed in a terminal | `terminal` when the device did not create the thread, otherwise unchanged | `shared` |
+| No terminal is in it and it is closed (archived) | unchanged | `none` |
+| No terminal is in it and the device holds it (A58): an app launched it, or an app's message took it | unchanged | `remote`, loaded or not; the next `session.send` resumes it when it is not loaded |
+| No terminal is in it and the device created it before A58, so does not hold it | `remote` | `remote` while it is loaded, `none` otherwise |
+| Any other thread | unchanged | `remote` while a turn the device started is running, `none` otherwise; the next `session.send` resumes it, and the device holds it from then on |
 | The rollout is held by a Codex process that is not the daemon, which is what a TUI started with configuration overrides does | `terminal` | `terminal`, because there is nothing to attach to |
 
 The daemon reports nothing at all when a TUI exits and offers no way to ask who is attached, so the
 device takes the TUI process itself as the signal: a Codex thread stays `shared` while a live bare
-`codex` process is running in that thread's `cwd`, which the device checks on its ten second scan,
-and a message typed in a terminal since the last scan always counts as a terminal being there. Once
-the terminal is gone the thread keeps its `origin` and becomes `remote` while a turn the device
-started is still running, `none` otherwise; `none` is resumable, so the next `session.send` drives
-the same loaded thread. A later message typed in a terminal makes it `shared` again, and a process
-scan that cannot be completed changes nothing. Apps need no Codex-specific logic here; they read
-`control` and the agent's attachment fields (4.2) and nothing else.
+`codex` process is running in that thread's `cwd`, which the device checks every ten seconds, and a
+message typed in a terminal since the last check always counts as a terminal being there. Once the
+terminal is gone the thread keeps its `origin` and becomes what the rows above say: `remote` when
+the device holds it, otherwise `remote` while a turn the device started is still running and `none`
+when not; `none` is resumable, so the next `session.send` drives the same loaded thread. A later
+message typed in a terminal makes it `shared` again, and a process scan that cannot be completed
+changes nothing. A Close from an app ends the TUI of a `shared` thread only when the device can name
+it (6.3, A61): the TUI whose command line resumes the thread by its id, or else the one such process
+in the thread's directory when it names no other thread; with several there it cannot tell which
+one is in the thread. Apps need no Codex-specific logic here; they read `control` and the agent's
+attachment fields (4.2) and nothing else.
 
 Not every thread the daemon's history lists is a session. Codex keeps one history for the whole
 machine, and the desktop app's chats and scheduled automations, an IDE extension's threads and the
@@ -1060,13 +1110,18 @@ subagents a thread spawned all land in it beside the terminal's. The device publ
 thread only when it is the device's to show (amendments A18 and A48): its `source` is a plain string — a
 subagent's `source` is an object naming its parent, and a subagent is never a session of its own —
 and either the thread's `originator` is the name the device itself connects to Codex under, its
-`source` is `cli` or `exec`, or its `originator` is `codex-tui` and its `source` is `vscode`.
+`source` is `cli`, or its `originator` is `codex-tui` and its `source` is `vscode`.
 The last combination is a terminal TUI using an app-server, as observed in Codex 0.160.0;
 `vscode` alone does not identify a terminal, and any other application's `vscode` threads stay
-foreign. Any other thread belongs to the application, or the parent thread, that started it:
-the device never publishes it, never mirrors its rollout, and sends `session.removed` for any
-it published before this rule, repeating the frame on the next link as A16 does. The apps need
-nothing for this; a session they never receive is a row they never draw.
+foreign. A `codex exec` run — `originator` `codex_exec` or `source` `exec`, whatever else it says —
+is a script's or an automation's work, which nobody sits in and nobody continues, and is never a
+session (A59). Any other thread belongs to the application, or the parent thread, that started it:
+the device never publishes it, never mirrors or tails its rollout, and sends `session.removed` for
+any it published before this rule, repeating the frame on the next link as A16 does. To find those
+it reads each stored terminal session's own rollout, whose `session_meta` names both fields, and
+asks the daemon with `thread/read` only about a thread with no rollout on disk, when it connects to
+the daemon; without the daemon it reads the rollouts once at start (A59). The apps need nothing for
+this; a session they never receive is a row they never draw.
 
 #### `origin` and `control` for Grok Build sessions on the leader
 
@@ -1080,23 +1135,28 @@ derives `origin` and `control` for a Grok session like this.
 
 | Situation | `origin` | `control` |
 | --- | --- | --- |
-| The device created the session and no terminal has registered it | `remote` | `remote` |
 | Grok's own session registry (`~/.grok/active_sessions.json`, written by every TUI while it runs) names the session with a live process **and** the leader reports it loaded, which is what a TUI inside the leader looks like | `terminal` when the device did not create the session, otherwise unchanged | `shared` |
 | The registry names it with a live process but the leader does not have it loaded: a `grok` started with `use_leader` off, or under a sandbox profile, which runs its own agent | `terminal` | `terminal`, mirrored from the update log as before; `attach_ready` words the hint |
-| No terminal has registered it and the device holds it in the leader | unchanged | `remote` while a turn the device started is running, `none` otherwise |
-| Known only from disk | unchanged | `none`; the next `session.send` loads it through the leader |
+| No terminal has registered it and it is closed (archived) | unchanged | `none` |
+| No terminal has registered it and the device holds it (A58): an app launched it, or an app's message took it | unchanged | `remote`, joined in the leader or not; the next `session.send` loads it through the leader when it is not |
+| No terminal has registered it and the device created it before A58, so does not hold it | `remote` | `remote` while it is joined in the leader, `none` otherwise |
+| No terminal has registered it and the device has it joined in the leader | unchanged | `remote` while a turn the device started is running, `none` otherwise |
+| Known only from disk | unchanged | `none`; the next `session.send` loads it through the leader, and the device holds it from then on |
 
 The leader says nothing when a TUI exits and offers no way to ask who is attached, so the registry,
-read on the device's ten second scan, is the whole signal, and a session leaves `shared` the way a
-Codex thread does: to `remote` while a device turn runs, to `none` otherwise, resumable in place
-because the leader still holds it. `session/close` unloads a session for **every** client of the
-leader, the terminal included, so the device never sends it for a session a terminal has registered
-and never for one it did not create. `session/load` replays the whole conversation with
-`_meta.isReplay`; the device publishes only the rows whose `eventId` counter is above the one it
-already applied — from the mirror or an earlier attachment — so history is neither doubled nor
-lost. Permission prompts fan out to every client; the device offers the leader's own options except
-the one that switches the session into always-approve mode, which is a permission policy and so a
-`session.set` matter, and an approval another client answered ends as
+read every ten seconds, is the whole signal, and a session leaves `shared` the way a Codex thread
+does: to `remote` when the device holds it, otherwise to `remote` while a device turn runs and to
+`none` when not, resumable in place because the leader still holds it. The device also publishes
+`control` the moment a turn of its own starts, not only when it reads the registry (A58).
+`session/close` unloads a session for **every** client of the leader, the terminal included, so the
+device never sends it while a terminal has the session registered: it sends it only on Close (6.3),
+for a session no terminal is in (A39, A58) or one whose TUI the close has just ended, once that TUI
+is gone (A61). `session/load` replays the whole conversation with `_meta.isReplay`; the device
+publishes only the rows whose `eventId` counter is above the one it already applied — from the
+mirror or an earlier attachment — so history is neither doubled nor lost. Permission prompts fan
+out to every client; the device offers the leader's own options except the one that switches the
+session into always-approve mode, which is a permission policy and so a `session.set` matter, and an
+approval another client answered ends as
 `decision: {option_id: "elsewhere", by: "terminal"}` exactly as a Codex one does. Grok's questions
 fan out the same way and are raised as `question` blocks (A52): an app answers one through
 `session.answer`, one another client answered first resolves `by: "terminal"`, and one nobody
@@ -2721,7 +2781,7 @@ The gateway forwards these to the owning device and returns the device's reply.
 | `session.approve` | `session_id`, `request_id`, `option_id`, `message?` | `{}` |
 | `session.answer` | `session_id`, `request_id`, `answers` | `{}` |
 | `session.set` | `session_id`, `model?`, `permission_mode?`, `effort?`, `speed?`, `title?` | `{session}` — with `title`, the reply's `session.title` is the name the agent now holds, which can differ from the one sent; `bad_request` for an empty or over-long name, `conflict` while the terminal is busy, `unsupported` where the agent, or this state of it, cannot be renamed from here (A55) |
-| `session.history` | `session_id`, `before_seq?`, `after_seq?`, `limit?` | `{events, has_more}` |
+| `session.history` | `session_id`, `before_seq?`, `after_seq?`, `limit?`, `brief?` | `{events, has_more}` — with `brief: true` every `tool_call` in the page is cut short, for an app drawing a transcript (6.4, A60) |
 | `session.block` | `session_id`, `block_id` | `{event}` |
 | `session.commands` | `session_id` | `{commands}` — the slash commands the session offers now (A27) |
 | `session.command` | `session_id`, `name`, `argument?` | `{}` — runs one; the echo and the outcome arrive as events (A27) |
@@ -2729,7 +2789,7 @@ The gateway forwards these to the owning device and returns the device's reply.
 | `session.resume_set` | `session_id`, `at` | `{session}` — schedules the resume of 7.2 for `at`, or moves the pending one there; `bad_request` unless `at` is at least a minute ahead and within eight days, `conflict` while a turn runs or while the terminal controls the session (A35) |
 | `session.resume_cancel` | `session_id` | `{session}` — removes the pending resume; idempotent (A35) |
 | `session.takeover` | `session_id` | `{session}` |
-| `session.archive` | `session_id`, `archived` | `{session}` |
+| `session.archive` | `session_id`, `archived` | `{session}` — with `archived: true` it closes the session (below, A39, A58), on a session a terminal holds by ending the CLI there first: `unsupported` when the device cannot, `conflict` when the CLI has not quit within 10 s, either leaving the session as it was (A61) |
 | `session.delete` | `session_id` | `{}` |
 | `device.dirs` | `device_id`, `path?` | `{path, parent, entries, recent}` |
 | `device.git` | `device_id`, `path` | `{is_repo, branch?, dirty?, ahead?, behind?}` |
@@ -2842,7 +2902,14 @@ kept, and a device from before A55 still treats it so.
 - `session.send` to a session with `control: "terminal"` is refused with `conflict`
   ("controlled by terminal; take over first").
 - `session.send` to a session with `control: "none"` makes the device resume the session first
-  (Claude `resume`, Codex `thread/resume`) and then send.
+  (Claude `resume`, Codex `thread/resume`) and then send, and hold the session until it is closed
+  (4.4, A58): the device publishes `control: "remote"` before the turn's first output, and the
+  session stays `remote` when nothing else holds it. `session.command` resumes such a session too
+  and holds nothing.
+- `session.archive {archived: true}` closes a session the device holds even with no process
+  running, and ends the hold (A58). On a session a terminal holds it never archives the session
+  while the CLI runs: the device ends the CLI first, or answers `unsupported` or `conflict` and
+  changes nothing (A61).
 - A `session.send` or `session.command` a person sends to a session with a pending resume (7.2)
   cancels the resume: the person got there first (A35).
 - `session.set` with `effort` on Claude may need the SDK connection restarted before the next turn.
@@ -2867,11 +2934,12 @@ it: `/` is then ordinary text.
 `session.commands {session_id}` returns `{commands: Command[]}` (4.11): what the session's agent
 offers **now**. For a session with a live process the device asks the agent — Grok Build advertises
 its list over ACP when a session opens, pi answers `get_commands`; Codex has no such call, so the
-device ships a fixed table. For a session with no live process (`control: "none"`) the device answers
-from what it knows without starting one: Codex's table, pi's prompt templates and skills on disk,
-the list Grok last advertised on this device. That may be `[]`, and an app that receives `[]` draws
-nothing until it asks again. Apps ask when a conversation opens and again when `/` is typed if the
-last answer is older than a minute or was empty. `unsupported` for an agent without the capability.
+device ships a fixed table. For a session with no live process (`control: "none"`, or `remote` for
+one the device holds with none running, A58) the device answers from what it knows without starting
+one: Codex's table, pi's prompt templates and skills on disk, the list Grok last advertised on this
+device. That may be `[]`, and an app that receives `[]` draws nothing until it asks again. Apps ask
+when a conversation opens and again when `/` is typed if the last answer is older than a minute or
+was empty. `unsupported` for an agent without the capability.
 
 `session.command {session_id, name, argument?}` runs one. The device echoes it as a `user_message`
 under the request's `id` with text `/name argument` and `source: "remote"` — A12 applies, the app
@@ -2885,8 +2953,9 @@ information a terminal would have printed: `tool_kind: "other"`, `tool` and `tit
 `status: "succeeded"`, `output` the text — `fixtures/events/tool_call.command.json`. The result is `{}`;
 the effects are in the stream. Refusals: `not_found` for a name the session does not offer,
 `conflict` while a turn is running ("wait for the turn to finish") or on a `control: "terminal"`
-session (as `session.send`), `unsupported` for an agent without the capability. A `none` session is
-resumed first, exactly as `session.send` does. On a `shared` session the request works exactly where
+session (as `session.send`), `unsupported` for an agent without the capability. A session with no
+live process is resumed first, exactly as `session.send` does, though a command does not make the
+device hold it (A58). On a `shared` session the request works exactly where
 `session.send` does — Codex on the daemon, pi through its extension.
 
 Commands are not settings and not lifecycle. `/model`, `/permissions`, `/fast`, `/thinking`,
@@ -2905,6 +2974,7 @@ an app never draws two controls for one thing. Terminal ergonomics — `/vim`, `
 | `session.stop` | `unsupported` unless the agent lists capability `interrupt` **and** reports `shared_interrupt: true`. Message: "stop it in the terminal". Claude reports it since A42: the device types Escape into the CLI's terminal while a turn runs; with an approval or a question on screen it answers `conflict` ("answer the prompt first"), and with no turn running it returns `{}` and types nothing. |
 | `session.set` | `unsupported` for `model`, `permission_mode`, `effort` and `speed` ("change it in the terminal"). `title` renames the session (A55): the device types `/rename` into the terminal under the same gates as A40, answers `conflict` while the terminal is busy, and replies once the transcript shows the new name, or `timeout` when it does not within 8 s; an unconfirmed rename may leave its text in the prompt box, and the device then answers `conflict` to every further typed request until a person uses the terminal, a turn starts or the attachment ends. |
 | `session.takeover` | `conflict` ("already attached"). |
+| `session.archive` | With `archived: true`, a close (A61): when the agent lists `close_terminal` the device interrupts a running turn, ends the CLI in its terminal, waits at most 10 s for it to exit, and then replies `{session}` and publishes it once archived, `none` and `stopped`, as the close after `fixtures/app/session.takeover.json` below says; `unsupported` for an agent without the capability or a CLI the device cannot end precisely, and `conflict` when the CLI is still there at the deadline, both leaving the session as it was. `archived: false` only clears the flag. |
 
 The table above describes what an attachment can do at its narrowest, which is what a Claude channel
 can do. An agent whose attachment can do more says so in its `AgentInfo` (4.2), and the rows below
@@ -3122,6 +3192,24 @@ The first queued message of `fixtures/events/queue.json`, edited and sent back t
 }
 ```
 
+`brief: true` asks for the page an app draws a transcript from (A60): every `tool_call` in it keeps
+what draws its row and loses what the row draws collapsed — its `input` cut to 1 KiB of JSON, no
+`output`, no `diff.patch`, each cut flagged — and every other event is what it would be without the
+field (6.4). `brief` defaults to `false`, and one that is not a boolean is `bad_request`. A device
+from before A60 ignores it and returns the full page.
+
+`fixtures/app/session.history.brief.json`
+
+```json
+{
+  "type": "session.history",
+  "id": "5b0e7c1a-9d24-4f6b-8e3a-2c7f1d9b4a60",
+  "session_id": "ad2c9abb-4a1e-470a-835c-228778fc17f0",
+  "limit": 200,
+  "brief": true
+}
+```
+
 `fixtures/app/session.block.json`
 
 ```json
@@ -3154,17 +3242,56 @@ The first queued message of `fixtures/events/queue.json`, edited and sent back t
 }
 ```
 
-`session.archive` with `archived: true` **closes** a session the device is driving (amendment A39):
-the device interrupts the turn if one is running, ends what it holds for the agent — Claude's CLI
-process, pi's process, the Codex thread (archived in Codex as well), the Grok leader session — and
-only then records the choice, so the reply and the publish carry `archived: true`, `control:
-"none"` and `state: "stopped"` together, and nothing of the session runs on the machine afterwards.
-A message the agent still sends while it is being closed does not revive it. Messages held for the
-session (5.12) are discarded, never sent: the device publishes an empty `queue` with the close. The
-device clears `archived` on its own the moment the session comes back to life — a turn starts in it,
-from an app or from a terminal, or a terminal attaches to it again — and publishes the session with
-`archived: false` (amendment A15). An archived session therefore never runs, and apps need no rule
-of their own for it: the row moves out of the Archive when the device's `session.updated` arrives.
+`session.archive` with `archived: true` **closes** a session the device is driving or holds
+(amendments A39, A58): the device interrupts the turn if one is running, ends what it holds for the
+agent — Claude's CLI process, pi's process, the Codex thread, the Grok leader session
+(`session/close`) — and only then records the choice, so the reply and the publish carry
+`archived: true`, `control: "none"` and `state: "stopped"` together, and nothing of the session
+runs on the machine afterwards. A Codex thread the device created is archived in Codex as well; one
+a terminal started is only interrupted and let go of, so it stays in `codex resume` (A58). A
+session the device holds with no process running — restored after a restart, or stopped while idle
+— is closed the same way, and the close ends the hold (4.4). A message the agent still sends while
+it is being closed does not revive it. Messages held for the session (5.12) are discarded, never
+sent: the device publishes an empty `queue` with the close. The device clears `archived` on its own
+the moment the session comes back to life — a turn starts in it, from an app or from a terminal, or
+a terminal attaches to it again — and publishes the session with `archived: false` (amendment A15).
+An archived session therefore never runs, and apps need no rule of their own for it: the row moves
+out of the Archive when the device's `session.updated` arrives.
+
+On a session a terminal holds, `control` `terminal` or `shared`, the close ends the agent's CLI in
+that terminal first, and never archives the session while the CLI runs (A61). The device answers
+`unsupported` and changes nothing when the agent does not list `close_terminal` (4.2), or when it
+cannot end that CLI precisely: a process it cannot tell from another, one an IDE runs, another
+user's. Otherwise it interrupts a running turn, ends the CLI, waits at most 10 s for the process to
+exit, and then publishes the session once with `archived: true`, `control: "none"` and `state:
+"stopped"` and replies `{session}`; pending prompts expire, and held messages are discarded as
+above. A CLI still there at the deadline is `conflict`, as is a process table the device could not
+read, and nothing is published. The device sends SIGTERM and never SIGKILL, only to a process whose
+pid and start time, owner (this user), program (the agent's) and controlling terminal it has just
+checked, and holds back what the CLI's going away would say of the session meanwhile — a bridge
+closing, a scan that finds no holder, the pi extension's goodbye, the Codex or Grok table — so that
+the one publish is the whole story. Each agent's CLI is ended its own way:
+
+- **Claude Code.** A `shared` CLI that is idle with an empty prompt box gets `/exit` typed into the
+  terminal the shim owns; any other gets Escape for a running turn (A42) and SIGTERM to the pid its
+  bridge registered. A `terminal` CLI gets SIGTERM to the holder the scan found, as Take over does.
+  A CLI an IDE runs — no controlling terminal, or Claude Code's own record of the process naming an
+  `entrypoint` other than `cli` — is `unsupported`.
+- **Codex.** A `terminal` thread's TUI, which runs its own app-server, gets SIGTERM when it is the
+  one process writing the rollout; several writers, or none known, is `unsupported`. On the shared
+  daemon the device ends the Codex TUI whose command line resumes the thread by its id (`codex
+  resume <id>`), wherever it runs, or else the one Codex TUI in the thread's directory when that
+  names no other thread; with none, several, or a lone one resuming another thread there it answers
+  `unsupported`. It first interrupts the turn, which runs in the daemon (at most 3 s), and archives
+  in Codex only a thread it created, as above.
+- **Grok Build.** `session/cancel` for a running turn, SIGTERM to the one pid Grok's registry names
+  for the session (none, or several, is `unsupported`), and, once that process is gone,
+  `session/close` on the leader for a session the device has joined there.
+- **pi.** The extension's `shutdown` command, which answers and then aborts the turn and shuts pi
+  down; an extension without it answers that it does not know the command, and the device sends
+  SIGTERM to the pid its `hello` gave.
+
+The reply to such a close may take about 10 s (2.3).
 
 `fixtures/app/session.archive.json`
 
@@ -3374,6 +3501,20 @@ a gap in its timeline: it asks from its last contiguous `seq` and merges what co
 `scripts/validate_fixtures.py` enforces every rule above on it. Contrast it with
 `fixtures/replay/subscribe.reply.json`, which is a replay-buffer answer and therefore does contain
 deltas and `status` events.
+
+`brief: true` (A60) changes what a page's tool calls carry and nothing else: the same events in the
+same order, under the same cursors, `limit` and `has_more`. Every `tool_call` keeps its row —
+`title`, `tool`, `tool_kind`, `status`, its ids, `block_id`, `seq`, `first_seq`, `summary`, and a
+diff's `path`, `additions` and `deletions` — with `input` cut to at most 1 KiB of JSON
+(`input_truncated: true` when it was cut), no `output` (`output_truncated: true` when there was
+any) and no `diff.patch` (`patch_truncated: true` when there was one). Every other event is
+unchanged. `session.block` still returns the whole block, and an app fetches it when the person
+expands a tool row whose content was cut and that it does not hold whole. An app sends
+`brief: true` on every `session.history` it draws a transcript from — opening a session, older
+pages, a gap or a `resync` — and draws the full page a device from before A60 returns the same way.
+Live events are never brief, and neither is the gateway's own backfill (7.1).
+`fixtures/history/page.brief.json` is `page.json` asked for brief: the same events, its tool calls
+without their outputs and patches, each flagged.
 
 ---
 
@@ -3886,15 +4027,31 @@ one app connection that asked. The gateway relays bytes and never reads them.
     carries a key bar above the keyboard — Esc, Tab, a sticky Ctrl, the arrows, Ctrl-C, Ctrl-D and
     the characters a shell needs — and a way to paste, copy a selection and change the type size.
 21. **Closing a session the device drives, then the Archive.** On a row whose `control` is
-    `remote` and that is not archived, the app's action is **Close**, not Archive: `session.archive
-    {archived: true}` asks the device to end the session — interrupt a running turn, end what it
-    holds for the agent (Claude's CLI, pi's process, the Codex thread, the Grok leader session) —
-    and only then to mark it `archived: true`, `control: "none"`, `state: "stopped"`, in one reply
-    and one publish. Nothing the agent says while it is being closed revives it. While the session
-    is working the app asks first ("Close this session?"); an idle one closes on the tap. A row a
-    terminal holds offers no Close, a row already in the Archive offers none, and writing to a
-    closed session brings it back as before (A15). Rename (A55) is a separate action and stays on
-    those rows while their agent lists `rename`.
+    `remote` and that is not archived — one the device holds with no process running included
+    (A58) — the app's action is **Close**, not Archive: `session.archive {archived: true}` asks the
+    device to end the session — interrupt a running turn, end what it holds for the agent (Claude's
+    CLI, pi's process, the Codex thread, the Grok leader session) — and only then to mark it
+    `archived: true`, `control: "none"`, `state: "stopped"`, in one reply and one publish. Nothing
+    the agent says while it is being closed revives it. While the session is working the app asks
+    first ("Close this session?"); an idle one closes on the tap. A row a terminal holds
+    (`terminal` or `shared`) and that is not archived offers Close exactly when its agent, on that
+    device, lists `close_terminal` (4.2) and the device is online, in the same places — the web
+    row's button, the phone's swipe and context menu, the desktop row and its context menu — and the
+    app decides from the capability, never from a version (A61). The request is the same, and the
+    device ends the agent's CLI in that terminal first (6.3). There the app always asks first:
+    the title "Close this session?" / "关闭此会话？"; the body "This also quits {agent} in its
+    terminal on {device}. Anything typed there and not sent is lost." / "{agent} 在 {device}
+    终端里的进程也会退出，终端里尚未发送的内容会丢失。", followed while the session is `running` or
+    `starting` by A39's sentence "The agent is still working; what it has not finished is lost." /
+    "Agent 仍在工作，未完成的部分会丢失。"; and the buttons Close and Cancel (关闭 / 取消).
+    `{agent}` is the agent's display name as the app shows it — Claude Code, Codex, Grok Build, pi
+    — and `{device}` the device's name as the gateway reports it. The app words two refusals itself:
+    `unsupported` as "This session can't be closed from here. Close it in its terminal." /
+    "这个会话无法从这里关闭，请在它的终端里关闭。", and `conflict` as A55's "The session is busy.
+    Try again later." / "会话正忙，请稍后再试。"; any other code as it already words that code. A
+    row that closes moves to the Archive, as every session with `archived: true` does. A row already
+    in the Archive offers no Close, and writing to a closed session brings it back as before (A15).
+    Rename (A55) is a separate action and stays on those rows while their agent lists `rename`.
 22. **A session that stopped working and waits for you is marked until someone looks.** A session
     whose `unseen` is true (4.4) carries a red dot on its row in every list that draws the row, and
     the number of such sessions that are open and held is the app's icon badge where the platform
@@ -4012,6 +4169,11 @@ one app connection that asked. The gateway relays bytes and never reads them.
       `stt.partial`, transcribes a whole-recording backend's utterance once, on `stt.stop`, and
       drops the `realtime` vendor's partial words; treats no parameter, or any other value, as
       before (A57).
+- [ ] Forwards a `session.history` with its `brief` untouched, sends none of its own backfill
+      requests brief, and logs one line for each forwarded `session.history` reply,
+      `history forwarded`, with the device and session ids, `brief`, `ok`, the event count, the
+      length of the reply's text as the device sent it and the milliseconds it took, never its
+      content (A60).
 
 ### 9.2 Device
 
@@ -4037,16 +4199,28 @@ one app connection that asked. The gateway relays bytes and never reads them.
 - [ ] Treats a repeated `session.send` id within a session as a duplicate and replays the original
       result.
 - [ ] Refuses `session.send` on a `control: "terminal"` session with `conflict`, and resumes a
-      `control: "none"` session before sending.
+      `control: "none"` session before sending, holding it from then on (A58).
 - [ ] Echoes `id` and `from` in every `reply`.
 - [ ] Returns `session.history` exactly as 6.4 describes: latest event per block, ascending `seq`, no
       deltas, no `status`, no `meta`, no `queue`.
 - [ ] Honours `after_seq` as well as `before_seq`, rejects a request carrying both with
       `bad_request`, and caps either form at `limit` with an accurate `has_more`.
+- [ ] With `brief: true`, cuts every `tool_call` in the page as 6.4 says — `input` to 1 KiB of JSON
+      with `input_truncated` when cut, no `output` or `diff.patch`, with `output_truncated` or
+      `patch_truncated` when there was one — leaves every other event as it is, keeps the stored
+      block whole for `session.block`, and refuses a `brief` that is not a boolean with
+      `bad_request` (A60).
 - [ ] Reports accurate `capabilities` per agent, and never advertises `steer` or `takeover` it
       cannot perform.
 - [ ] Reports `control: "shared"` only while the attachment is live, and moves the session to
-      `terminal` or `none` as soon as it drops.
+      `terminal`, or to `none` (`remote` for a session it holds, A58), as soon as it drops.
+- [ ] Holds a session an app launches, and one a `session.send` reaches while its `control` is
+      `none`, until it is closed, in a flag it stores and never sends; publishes `control: "remote"`
+      before the turn's first output; keeps a held session `remote` when its turn ends, across a
+      restart (`idle`, no process), when it stops a Claude or pi process left unused for 30 minutes,
+      and when a terminal that took it leaves; stops its own idle process for a terminal that takes
+      a held session, and closes its own pi for a pi TUI that loads one; restores every session it
+      does not hold as `none`, and holds no session launched or continued before A58 (A58).
 - [ ] On a `shared` session injects only while the CLI's own turn is idle, never waiting on its
       subagents; steers a `mode: "auto"` message into a running turn through the turn hooks when it
       reports `shared_steer`; holds everything else as a `queue` entry with no `user_message`,
@@ -4105,17 +4279,19 @@ one app connection that asked. The gateway relays bytes and never reads them.
 - [ ] Sets `attach_ready` for Codex from a successful handshake on the shared daemon socket, not
       from the socket file existing, and falls back to a per-session app-server with
       `attach_ready: false` when there is no daemon.
-- [ ] Derives Codex `origin` and `control` as 4.4 describes, keeps a thread `shared` until it is
-      unloaded, and reports `terminal` for a rollout held by a Codex process that is not the daemon.
+- [ ] Derives Codex `origin` and `control` as 4.4 describes, keeps a thread `shared` while a
+      terminal is in it and one it holds `remote` otherwise, loaded or not (A58), and reports
+      `terminal` for a rollout held by a Codex process that is not the daemon.
 - [ ] Resolves a Codex approval it did not answer with `decision: {option_id: "elsewhere",
       by: "terminal"}`.
 - [ ] Sets `attach_ready` for Grok Build from the person's configuration (`[cli] use_leader` on and
       no sandbox profile), joins a registered leader-mode terminal session with `session/load` and
       reports it `shared`, and leaves a session a terminal holds outside the leader as `terminal`
       (A28).
-- [ ] Derives Grok `origin` and `control` as 4.4 describes, never sends `session/close` for a
-      session a terminal registered or one it did not create, and publishes a replay only above
-      the `eventId` it already applied (A28).
+- [ ] Derives Grok `origin` and `control` as 4.4 describes, publishes `control` as a turn of its
+      own starts (A58), never sends `session/close` while a terminal has the session registered and
+      sends it only on Close (A39, A58, A61), and publishes a replay only above the `eventId` it
+      already applied (A28).
 - [ ] Offers the leader's approval options except the one enabling always-approve mode, and resolves
       an approval another client answered with `decision: {option_id: "elsewhere", by: "terminal"}`
       (A28).
@@ -4144,9 +4320,12 @@ one app connection that asked. The gateway relays bytes and never reads them.
 - [ ] Reports `model`, `permission_mode` and `effort` for a mirrored Claude session from its
       transcript and publishes each change as `meta` (A17).
 - [ ] Publishes a Codex thread only when its `source` is a string and either its `originator` is
-      the device's own, its `source` is `cli` or `exec`, or its `originator` is `codex-tui` and its
-      `source` is `vscode`; other applications' `vscode` threads and every subagent stay foreign.
-      Removes with `session.removed` any other thread it published before (A18, A48).
+      the device's own, its `source` is `cli`, or its `originator` is `codex-tui` and its
+      `source` is `vscode`; other applications' `vscode` threads and every subagent stay foreign,
+      and a `codex exec` run (`originator` `codex_exec` or `source` `exec`) is never published,
+      mirrored or tailed. Removes with `session.removed` any other thread it published before,
+      reading each stored thread's own rollout first and asking the daemon `thread/read` only about
+      one with no rollout on disk (A18, A48, A59).
 
 - [ ] Ends a turn the usage limit stopped with `stop_reason: "error"` and `limit`, read from the
       agent's own signal — Claude's 429 result, Codex's `usageLimitExceeded` — never from words,
@@ -4158,12 +4337,25 @@ one app connection that asked. The gateway relays bytes and never reads them.
       reschedules up to three times when the resumed turn hits the limit again, publishes each step
       as a `resume` event, and answers `session.resume_set` and `session.resume_cancel` (A35).
 
-- [ ] Closes a `remote` session on `session.archive {archived: true}`: interrupts a running turn,
-      ends what it holds for the agent — the Claude CLI process, the pi process, the Codex thread
-      (`turn/interrupt`, then `thread/archive`), the Grok leader session (`session/cancel`, then
-      `session/close`, safe because no terminal is in a `remote` session) — and replies and
-      publishes only when that is done, with `archived: true`, `control: "none"`, `state:
-      "stopped"`; nothing the agent says while the close is in progress revives the session (A39).
+- [ ] Closes a `remote` session on `session.archive {archived: true}`, one it holds with no process
+      running included (A58): interrupts a running turn, ends what it holds for the agent — the
+      Claude CLI process, the pi process, the Codex thread (`turn/interrupt`, then `thread/archive`
+      for a thread it created; a thread a terminal started is only let go of, A58), the Grok leader
+      session (`session/cancel`, then `session/close`, safe because no terminal is in a `remote`
+      session) — and replies and publishes only when that is done, with `archived: true`, `control:
+      "none"`, `state: "stopped"`, ending any hold; nothing the agent says while the close is in
+      progress revives the session (A39).
+- [ ] Lists capability `close_terminal` for Claude Code, Codex and pi, and for Grok Build only
+      while its leader mode is ready. On `session.archive {archived: true}` for a `terminal` or
+      `shared` session, ends the CLI in that terminal first, as 6.3 says for each agent: interrupts
+      a running turn, signals only SIGTERM, never SIGKILL, and only a process whose pid and start
+      time, owner, program and controlling terminal it has checked; waits at most 10 s for the
+      process to exit; then publishes once `archived: true`, `control: "none"`, `state: "stopped"`,
+      expiring pending prompts and discarding held messages, and replies `{session}`. Answers
+      `unsupported`, changing nothing, for an agent without the capability or a CLI it cannot end
+      precisely, and `conflict`, publishing nothing, when the CLI is still there at the deadline;
+      holds back what the CLI's going away says of the session meanwhile; never archives in Codex a
+      thread a terminal started (A61).
 - [ ] On a `shared` Claude session, applies `session.set` for `model` and `effort`, and
       `session.command` for `compact`, by typing into the CLI's terminal; types only when the
       terminal is idle and nobody is typing there, answers `conflict` otherwise and queues nothing;
@@ -4230,6 +4422,10 @@ one app connection that asked. The gateway relays bytes and never reads them.
 - [ ] Applies events by `block_id` with the replacement and streaming rules of 5.1, orders blocks
       by `first_seq ?? seq`, and drops events whose `seq` is not newer than the last applied one.
 - [ ] Follows the reconnect order of 8.6 and treats 60 s of silence as a dead connection.
+- [ ] Sends `brief: true` on every `session.history` it draws a transcript from — opening a session,
+      older pages, a gap or a `resync` — fetches `session.block` when the person expands a tool row
+      whose content was cut and that it does not hold whole, and draws a full page from a device
+      that ignores `brief` the same way (A60).
 - [ ] Applies `todos` and `queue` snapshots from replayed events, from history and from the
       `queue` field of a `session.subscribe` reply, not only from the live stream.
 - [ ] Renders exactly the approval and question options it was given, keyed by id, and disables them
@@ -4305,8 +4501,15 @@ one app connection that asked. The gateway relays bytes and never reads them.
       message in the person's bubble with its caption, and treats `trigger: "resume"` like
       `remote` in the status line (A35).
 - [ ] Offers **Close** — not Archive — on a row whose `control` is `remote` and that is not
-      archived, asks first only while the session is working, and offers no Close on a row a
-      terminal holds or a row already in the Archive (A39).
+      archived, asks first only while the session is working, offers Close on a row a terminal
+      holds only as the next item says, and none on a row already in the Archive (A39).
+- [ ] Offers **Close** on a `terminal` or `shared` row that is not archived exactly when its agent,
+      on that device, lists `close_terminal` and the device is online, where A39's Close is offered,
+      and never decides from a version; always asks first, with the title, body and buttons of rule
+      21 and A39's sentence after the body while the session is `running` or `starting`; sends
+      `session.archive {archived: true}`; words `unsupported` and `conflict` itself as rule 21 says
+      and every other code as it already does; and lets the row move to the Archive by
+      `archived: true` (A61).
 - [ ] Reads `shared_settings_keys`: on a `shared` session the settings it names are pickers and the
       others are the values the terminal set (A17), never a control that fails when tapped; a
       `conflict` from `session.set` or `session.command` is shown in the reply's words (A40).
@@ -4335,7 +4538,7 @@ one app connection that asked. The gateway relays bytes and never reads them.
 | --- | --- |
 | `fixtures/app/` | One frame per app-socket type, in both directions, plus typed replies |
 | `fixtures/device/` | One frame per device-socket type |
-| `fixtures/device/forwarded/` | All seventeen forwarded requests as the device receives them, plus the A9 backfill, A43 re-queue and A55 rename variants |
+| `fixtures/device/forwarded/` | All seventeen forwarded requests as the device receives them, plus the A9 backfill, A43 re-queue, A55 rename and A60 brief history variants |
 | `fixtures/events/` | One event per kind, and one `tool_call` per `tool_kind` |
 | `fixtures/objects/` | Bare `Session` and `AgentInfo` objects that no frame fixture carries, including the two attachable agents and the shared sessions |
 | `fixtures/http/` | One body per HTTP request and response |
@@ -4343,6 +4546,7 @@ one app connection that asked. The gateway relays bytes and never reads them.
 | `fixtures/timelines/claude.json` | A complete Claude Code turn, 41 events |
 | `fixtures/timelines/codex.json` | A Codex CLI session with steering and a queued message, 37 events |
 | `fixtures/history/page.json` | A `session.history` reply that obeys 6.4 |
+| `fixtures/history/page.brief.json` | The same page asked for with `brief: true` (A60) |
 | `fixtures/replay/subscribe.reply.json` | A `session.subscribe` reply served from the replay buffer |
 | `fixtures/replay/subscribe.codex.reply.json` | The same, mid-turn, carrying a `queue` snapshot |
 | `fixtures_invalid/` | Frames that must be rejected, used to self-test the validator |
@@ -5110,3 +5314,90 @@ exactly when it received `streaming: false` and dictates through the gateway, an
 transcript whole when the dictation ends; an app that receives no `streaming` is talking to an
 older gateway and keeps the live partial text, as does recognition on the phone itself. See 3.2,
 3.5, 3.8, 6.1 and 9.
+
+**2026-11-16 A58 — a session an app continues is the device's until Close.** A session an app's
+message brought back went to the Archive again as soon as nothing else held it: the Codex daemon and
+the Grok leader returned a thread nobody else was in to `none` when the device's turn ended, and
+every restart or update restored every session as `none`. Nothing changes on the wire, and the apps
+change nothing. A `session.send`, in any `mode`, to a session with `control: "none"`, archived or
+not, makes the device hold it, and a session an app launches with `session.create` is held from the
+start; `session.command` and `session.takeover` hold nothing. The hold is the device's own, stored
+with the session and never sent, and `archived` keeps A15's meaning. The device publishes
+`control: "remote"` at once, before the turn's first output, and keeps a held session `remote` until
+Close: when its turn ends; across a restart or an update, which restore it as `remote` and `idle`
+with no process, every other session coming back `none`, `stopped` if archived; when it stops the
+session's Claude or pi process after 30 minutes unused, the next message starting it again; and
+when a terminal that took the session leaves, which returns it to `remote` and `idle` rather than
+`none`. The Codex and Grok tables of 4.4 make a held session `remote` whenever no terminal is in it,
+loaded or joined or not, and Grok publishes `control` as a device turn starts. A terminal that takes
+a held session the device runs an idle process for gets it alone: a Claude bridge, or a
+`SessionStart` hook moving one in, stops that process before the attachment is accepted, a busy
+process still refusing it; a plain `claude --resume` the holder scan finds naming the session stops
+it, and the session becomes `terminal`; a pi TUI that loads the session closes the device's pi.
+Close (A39) closes a held session with no process as well, and ends the hold; it no longer archives
+in Codex a thread a terminal started, which it interrupts and unsubscribes so that it stays in
+`codex resume`, and Grok's `session/close` is sent for a held session as for any other no terminal
+is in. Only what is launched or continued from A58 on is held: a session from before carries no hold
+and goes to the Archive when nothing holds it, as before, and a Codex thread or Grok session the
+device created before A58 is `remote` only while it is loaded or joined. The store says nothing
+reliable about which sessions were `remote` when the previous daemon stopped, so the restart that
+installs A58 restores none of them as `remote`, by decision; the next message holds such a session.
+See 4.4, 6.3 and 9.
+
+**2026-11-16 A59 — a `codex exec` run is not a session.** A `codex exec` run is a script's or an
+automation's work, which nobody sits in and nobody continues, and 4.4 published every such thread as
+a terminal's because its `source` is `exec`. A thread whose `originator` is `codex_exec` or whose
+`source` is `exec` is now never published, whatever else it says, and its rollout is never mirrored
+or tailed; the rule of 4.4 accepts the `source` `cli` alone. The device withdraws the runs it
+published before with `session.removed`, A18's route, saying it again on the next link: when it
+connects to the shared daemon it reads each stored terminal session's own rollout `session_meta`
+from disk and asks `thread/read` only about a thread with no rollout there, and without the daemon
+it reads the rollouts once at start. Apps need nothing: a session they never receive is a row they
+never draw. See 4.4 and 9.2.
+
+**2026-11-16 A60 — brief history pages.** Opening a long session waited on a history page full of
+tool output that the transcript draws collapsed. `session.history` takes `brief`, a boolean, `false`
+by default. With `brief: true` every `tool_call` in the page keeps its row — title, tool,
+`tool_kind`, status, ids, `block_id`, `seq`, `first_seq`, summary, a diff's path, additions and
+deletions — with `input` cut to at most 1 KiB of JSON (`input_truncated: true` when cut), no
+`output` (`output_truncated: true` when there was any) and no `diff.patch` (`patch_truncated: true`
+when there was one). Every other event is unchanged, a page without `brief` is unchanged, and a
+`brief` that is not a boolean is `bad_request`. `session.block` still returns the whole block, and
+an app fetches it when the person expands a tool row whose content is cut and that it does not hold
+whole. An app sends `brief: true` on every `session.history` it draws a transcript from — opening a
+session, older pages, a gap or a `resync` — and live events are unchanged; a device from before A60
+ignores the field and returns full pages, which an app draws as it always did. The gateway forwards
+the field as it forwards every field, sends none of its own backfill requests brief, and logs one
+line per forwarded `session.history`, `history forwarded`, with the device and session ids, `brief`,
+`ok`, the event count, the length of the reply's text as the device sent it and the milliseconds it
+took, never its content. `fixtures/app/session.history.brief.json`,
+`fixtures/device/forwarded/session.history.brief.json` and `fixtures/history/page.brief.json`, the
+brief form of `page.json`, are the worked examples. See 2.6, 6.3, 6.4 and 9.
+
+**2026-11-16 A61 — Close for a session a terminal holds.** A39's Close was offered only on a
+`remote` row, and a `session.archive {archived: true}` on a `terminal` or `shared` row archived the
+row alone: it went to the Archive while the CLI went on in its terminal, and a shared Codex thread
+was archived in Codex under its TUI. `AgentInfo.capabilities` gains `close_terminal`: the device can
+end the agent's CLI in the terminal that holds one of its sessions. Claude Code, Codex and pi list
+it, and Grok Build only while its leader mode is ready, as `rename`. The request is A39's. On a
+`terminal` or `shared` session the device answers `unsupported`, changing nothing, for an agent
+without the capability or a CLI it cannot end precisely; otherwise it interrupts a running turn,
+ends the CLI, waits at most 10 s for the process to exit, and only then publishes once
+`archived: true`, `control: "none"` and `state: "stopped"` and replies `{session}`, pending prompts
+expiring and held messages discarded as in A39; a CLI still there at the deadline is `conflict`, and
+nothing is published. The device sends SIGTERM only, never SIGKILL, to a process whose pid and
+start time, owner, program and controlling terminal it has checked, and holds back what the CLI's
+going away would say of the session meanwhile. Claude Code gets `/exit` typed into the terminal the
+shim owns when it is idle with an empty prompt box, otherwise Escape for a running turn and
+SIGTERM, and a CLI an IDE runs is `unsupported`. A Codex TUI gets SIGTERM as the one process writing
+the rollout or, on the shared daemon, as the TUI resuming the thread by its id, else the one Codex
+TUI in the thread's directory, once the turn is interrupted, and a thread a terminal started is never archived in Codex. Grok Build gets
+`session/cancel`, SIGTERM to the pid its registry names and `session/close` once the TUI is gone.
+pi's extension gains a `shutdown` command, and one without it means SIGTERM to the pid its `hello`
+gave. The reply may take about 10 s (2.3). An app offers Close on a `terminal` or `shared` row that
+is not archived exactly when its agent lists `close_terminal` and its device is online, where A39's
+Close is, deciding from the capability and never from a version; it always asks first, saying that
+the agent quits in its terminal and that anything typed there and not sent is lost, and words
+`unsupported` and `conflict` itself (8, rule 21). A device from before A61 lists no
+`close_terminal`, and no app offers it this Close. `fixtures/objects/agent.*.json` list the
+capability. See 2.3, 4.2, 4.4, 6.3, 8 and 9.

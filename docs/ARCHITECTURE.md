@@ -137,6 +137,19 @@ order, and an app edits an entry by taking it out with `session.queue_remove` an
 words back with that `ts` as `queue_ts`, so the edit waits where the original did and cannot be
 delivered while it is still being changed (A43).
 
+The pages an app draws a transcript from are **brief** (A60). Opening a long session waited on
+pages full of tool output that the transcript draws collapsed, so an app asks `session.history`
+with `brief: true` on every page it draws — opening a session, older pages, a gap, a `resync` — and
+the device cuts each `tool_call` to what draws its row: the title, the tool, its kind and status,
+its ids, a diff's path and counts, at most 1 KiB of input, and no output or patch, each cut
+flagged. The rest of the page is untouched, and so is everything the device stores: the whole
+block is one `session.block` away, which an app asks for when the person opens a tool row it does
+not hold whole. Live events are never brief, and neither is the gateway's own backfill below,
+which feeds the replay buffer every subscriber shares. The gateway forwards the field like any
+other and logs one line per forwarded page — its size in characters, its event count and how long
+it took, never its content — so the time an app waits on history can be read from the log. A
+device from before A60 ignores the field and sends the full page, which an app draws as before.
+
 When a **device** reconnects after an outage, the gateway compares each session's `last_seq` from
 the device `hello` with the tail of its own buffer and with the cursor of every app subscribed to
 the session. Where the device is ahead of either, it asks the device for
@@ -219,7 +232,13 @@ Claude transcripts under `~/.claude/projects` and Codex rollouts under the Codex
 ones that have grown, and translates their rows into the same block timeline. Growth is detected by
 file size rather than modification time, because `claude --resume` touches mtime without appending.
 Codex mirroring is the fallback rather than the rule: a thread the shared app-server daemon knows
-about is read from the daemon instead, as the Codex subsection below describes.
+about is read from the daemon instead, as the Codex subsection below describes. The scan is meant
+to take seconds however long the machine's history is: files that have left its window are no
+longer read unless a terminal holds them, who writes the rollouts and Grok's logs comes from one
+look at those agents' processes rather than one per file, and the Codex daemon and the Grok leader
+are kept current on loops of their own, so a slow answer from either holds back nothing the scan
+says about the rest. The aim is a Claude CLI's start or exit in the apps within about two seconds,
+and the other agents' within about ten.
 
 Mirroring answers "what is happening". A parallel process scan answers "who may type", and that
 answer is the session's `control` value. It is the only thing the apps consult to decide whether the
@@ -227,13 +246,27 @@ composer is live; `state` alone never decides it (amendment A7).
 
 | `control` | Who owns the input | What an app can do |
 | --- | --- | --- |
-| `remote` | The daemon runs the agent for this session | Everything |
+| `remote` | The daemon runs the agent for this session, or holds it with no process running yet (A58) | Everything |
 | `terminal` | A live CLI owns it and the device has no way in | Read only, plus "Take over" when the agent advertises `takeover` |
 | `shared` | A live CLI owns it **and the device is attached to it** | Compose, approve and queue exactly as for `remote` |
-| `none` | No process owns it | The next message resumes it and control becomes `remote` |
+| `none` | No process owns it, and the device does not hold it | The next message resumes it, control becomes `remote`, and the device holds it until Close |
 
 `terminal` and `shared` are the same CLI process seen with and without an attachment. `shared` is
 what makes leaving the desk cheap: the terminal keeps running, and the phone joins it.
+
+**A session an app launches or continues is the device's until Close (A58).** `none` used to be
+where every session went once nothing ran it: the Codex daemon and the Grok leader handed a thread
+back to nobody when the device's turn ended, every restart restored every session as `none`, and
+the apps file a session nothing holds in their Archive, so a conversation the person had just
+carried on from a phone kept falling out of the list. The device now holds what an app launches,
+and what an app's message takes out of `none`, in a flag of its own that it stores with the session
+and never sends. A held session is `remote` whenever no terminal is in it: after its turn, after a
+restart or an update (with no process until the next message), after the device stops its idle
+Claude or pi process at 30 minutes unused, and after a terminal that took it leaves. Only Close
+ends the hold. A terminal may take a held session at any time, and gets it alone: the device's own
+idle process gives way, since two processes writing one conversation would interleave two.
+Sessions from before the change are not held, and the restart that installed it restored none of
+them as `remote`, because nothing recorded which ones were.
 
 State follows from that. A `terminal` session reports `running` while its terminal turn is in flight
 and `readonly` only when that turn is idle, and `readonly` means exactly this one situation. An
@@ -338,9 +371,13 @@ mode has no command to type and stays the terminal's.
 ### Transitions, and what takeover is still for
 
 Control moves `terminal → shared` when a bridge registers, `shared → terminal` when the bridge drops
-while the CLI is still alive, and `shared → none` when the CLI exits. Each move travels as a `meta`
-event carrying `control`, a `status` event when the state changed with it, and a republished session
-summary — the same mechanism every other control change uses.
+while the CLI is still alive, and `shared → none` when the CLI exits, or `shared → remote` when the
+device holds the session (A58). Each move travels as a `meta` event carrying `control`, a `status`
+event when the state changed with it, and a republished session summary — the same mechanism every
+other control change uses. Whether the CLI exited is the kernel's answer: the device watches the
+pid the bridge registered (kqueue on macOS, a pidfd on Linux), because a CLI that quits writes its
+last rows and runs its hooks after its bridge has gone, and one look at the process table a second
+later took it for a CLI still running until the next scan.
 
 Takeover has not gone away; it has become the fallback. `session.takeover` is still Claude-only and
 still works only while the terminal owns an *idle* session: the daemon sends SIGTERM to the exact
@@ -349,6 +386,20 @@ CLI was running, which is the whole reason attaching exists, so it is now for on
 that was started without the shim and cannot be attached. On a `shared` session `session.takeover`
 answers `conflict`. Codex advertises no `takeover` capability and needs none: a bare `codex` is
 attached rather than taken over, and a Codex TUI that cannot be attached is released by quitting it.
+
+**Close ends the terminal's CLI (A61).** Closing a session from an app is A39's request, and on a
+session a terminal holds the device used to archive the row and leave the CLI running in its
+terminal, which archived a shared Codex thread in Codex under its TUI as well. An agent now lists
+`close_terminal` when the device can end its CLI, and on a `terminal` or `shared` row Close ends
+it: the turn is interrupted, the CLI quit the way its own terminal quits it where the device can
+type or ask for that (`/exit` into the pseudo-terminal the Claude shim owns, the pi extension's
+`shutdown`) and with SIGTERM otherwise, never SIGKILL, and only to a process the device has checked
+is that CLI — the same pid and start time, the person's own, the agent's program, on a terminal.
+The device waits at most ten seconds, then files the session archived, `none` and `stopped` in one
+publish; what the CLI's going away says meanwhile is held back. A CLI it cannot name precisely — an
+IDE's, a Codex TUI it cannot tell from another in the same directory — is `unsupported`, and one
+that does not quit in time is `conflict`; neither changes anything. Close is therefore also how an
+app releases a terminal that cannot be attached, without resuming it as Take over does.
 
 ### Codex on the shared app-server daemon
 
@@ -375,20 +426,23 @@ notifications map onto the block timeline one for one, so a shared Codex session
 tailing behind it. Threads the daemon marks `ephemeral` never become sessions: Codex spawns one per
 turn purely to generate a title.
 
-The device filters provenance before either daemon adoption or rollout mirroring (A18, A48).
-`source` must be a string, and the thread must carry the device's own client name, a `cli` or
-`exec` source, or the exact pair `originator: "codex-tui"`, `source: "vscode"` observed for a
-terminal TUI on Codex 0.160.0. Other applications' `vscode` threads stay foreign, and a subagent's
-object `source` never becomes a session of its own. Apps read only the published session summary;
-they need no Codex-specific discovery rule.
+The device filters provenance before either daemon adoption or rollout mirroring (A18, A48, A59).
+`source` must be a string, and the thread must carry the device's own client name, a `cli` source,
+or the exact pair `originator: "codex-tui"`, `source: "vscode"` observed for a terminal TUI on
+Codex 0.160.0. Other applications' `vscode` threads stay foreign, a subagent's object `source` never
+becomes a session of its own, and neither does a `codex exec` run (`originator` `codex_exec` or
+`source` `exec`), a script's or an automation's work that nobody sits in. What was published before
+a rule is withdrawn with `session.removed`, judged first from each thread's own rollout on disk and
+only then, for a thread with none, by asking the daemon. Apps read only the published session
+summary; they need no Codex-specific discovery rule.
 
 `origin` and `control` come from one table in `protocol/PROTOCOL.md` (4.4). A thread the device
 created and no terminal has typed into is `remote` and `remote`. A thread that was already loaded
 when the device found it, or that carries a message typed at a TUI, is `shared`, with origin
 `terminal` when the device did not create it. A thread known only from the daemon's history is
-`none`, and the next message resumes it. A rollout held by a Codex process that is *not* the daemon
-is `terminal` and cannot be attached at all. `shared` is sticky, because the daemon emits nothing
-when a TUI exits and the thread simply stays loaded.
+`none` unless the device holds it (A58), and the next message resumes it. A rollout held by a Codex
+process that is *not* the daemon is `terminal` and cannot be attached at all. `shared` is sticky,
+because the daemon emits nothing when a TUI exits and the thread simply stays loaded.
 
 A thread that disappears from `thread/list` altogether is a different matter: the device deletes the
 session and emits `session.removed`, so a thread deleted with `codex delete` does not linger in the
@@ -429,13 +483,16 @@ it loads TypeScript extensions from `~/.pi/agent/extensions/` into every process
 sees every agent event, can block a tool call, inject a user message, abort the turn and change
 the model and thinking level. `rc-client pi setup` installs the device's extension there; the
 device also loads it into the RPC sessions it starts when the installed copy is missing or stale.
-The extension dials a Unix socket in the device home, registers the pi session with the branch it
-already holds, forwards pi's events verbatim so one translator serves terminal and remote sessions
-alike, and takes the device's commands back. It is also what gives pi permission modes: pi itself
-asks nothing, so the extension holds a tool call until the app or the terminal answers — the
-Codex vocabulary, `untrusted` / `on-request` / `never`, with the device deciding which tools each
-mode asks about. A pi session started in a terminal is therefore `shared` for as long as the
-process lives, and without the extension it does not exist for the apps at all.
+The extension dials a Unix socket in the device home, registers the pi session and names its
+session file, from which the device reads the branch the session already holds the first time it
+meets it (a `hello` that carried the branch itself outgrew the socket's line on a long session),
+forwards pi's events verbatim so one translator serves terminal and remote sessions alike, and
+takes the device's commands back, `shutdown` among them for an app's Close (A61). It is also what
+gives pi permission modes: pi itself asks nothing, so the extension holds a tool call until the app
+or the terminal answers — the Codex vocabulary, `untrusted` / `on-request` / `never`, with the
+device deciding which tools each mode asks about. A pi session started in a terminal is therefore
+`shared` for as long as the process lives, and without the extension it does not exist for the apps
+at all.
 
 **Grok Build attaches through its own leader (A28).** Grok has what Codex has, under another name:
 a *leader* is one backend process per machine, and every `grok` on a machine whose
@@ -454,9 +511,11 @@ and a `grok` already running when that happens keeps its own process until it is
 is what the apps' hint says. Who is in a session is read from Grok's own registry,
 `~/.grok/active_sessions.json`, because the leader announces nothing when a TUI exits; whether a
 registered TUI is inside the leader is one `_x.ai/session/info` away, which answers `{}` for a
-session the leader does not hold. Two things the device never does: `session/close`, which unloads
-a session for every client including the terminal that is in it, and offering the leader's "don't
-ask again for anything" approval option, which is a permission policy and so a `session.set` matter.
+session the leader does not hold. Two things the device never does: `session/close` while a
+terminal is in the session, since it unloads a session for every client including the terminal that
+is in it — it sends it only on Close, for a session no terminal is in or once the TUI the close
+ended is gone (A39, A58, A61) — and offering the leader's "don't ask again for anything" approval
+option, which is a permission policy and so a `session.set` matter.
 
 ### Approvals are shared state, not a private modal
 
@@ -491,7 +550,7 @@ does not wait for somebody else to bring the daemon up. Since openai/codex rust-
 app-server for `--no-daemon`, `--oss`, `--profile`, `-c`, `--enable`, `--disable`, `--search`,
 `--strict-config`, WSL DrvFS and a Windows administrator. Codex 0.153 to 0.156 never starts it (a
 bare TUI runs embedded and joins only a daemon that already exists), and the excluded launches never
-do on any version, so on the same ten-second scan the device runs `codex app-server daemon start`
+do on any version, so on its own ten-second tick the device runs `codex app-server daemon start`
 itself whenever the standalone build is installed and the socket is not answering — idempotent, a third of
 a second, rate-limited, never downloading — installs its supervision once if the machine has none,
 and connects the moment the socket answers, publishing `agents.updated` so the apps drop the hint.
@@ -795,10 +854,10 @@ disconnects at once is not told either, and ends when the device replies, refuse
 the request times out after 60 seconds. When it starts, the hub also takes the mark off every
 closed session that still keeps one, because only a device replaces the summary it last sent and
 one that is away cannot; no app was shown those marks, so the count does not move and nobody is
-told. A device that restarts would hide every mark at once, since its hub restores every session
-as held by nothing; so its first hello waits for the first scan of its terminals
-(`docs/CLIENT.md`) and reports what that scan found, and a terminal that is still running shows
-its mark all the same.
+told. A device that restarts would hide the mark of every terminal's session at once, since its hub
+restores every session it does not hold as held by nothing (one it holds comes back `remote`, A58);
+so its first hello waits for the first scan of its terminals (`docs/CLIENT.md`) and reports what
+that scan found, and a terminal that is still running shows its mark all the same.
 
 Web Push is a blocking library call, so it runs on threads of its own with an explicit ten-second
 timeout. Both matter: `pywebpush` passes its `timeout` argument through even when it is `None`, so
@@ -889,7 +948,7 @@ deliberately absent: a device is one person's machine.
 
 ## The contract
 
-`protocol/PROTOCOL.md` is normative. Its amendments (A1…A55, dated at the end of it) are all part
+`protocol/PROTOCOL.md` is normative. Its amendments (A1…A61, dated at the end of it) are all part
 of the frozen contract; the first eleven, which shaped the architecture above, are:
 
 | Amendment | Ruling |
