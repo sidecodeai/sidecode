@@ -41,6 +41,9 @@ class LiveRecord:
     session_id: str
     started: str
     updated_at: int = 0
+    # How the process was started: `cli` for a terminal, something else for an IDE's panel
+    # or an SDK; empty when the record does not say.
+    entrypoint: str = ""
 
 
 def sessions_dir() -> Path:
@@ -92,11 +95,13 @@ def _parse(path: Path) -> LiveRecord | None:
     if not isinstance(started, str) or not started.strip():
         return None
     updated = payload.get("updatedAt")
+    entrypoint = payload.get("entrypoint")
     return LiveRecord(
         pid=pid,
         session_id=session_id,
         started=_plain(started),
         updated_at=updated if isinstance(updated, int) and not isinstance(updated, bool) else 0,
+        entrypoint=entrypoint if isinstance(entrypoint, str) else "",
     )
 
 

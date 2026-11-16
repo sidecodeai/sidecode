@@ -462,7 +462,7 @@ async def test_a_forgotten_thread_is_followed_afresh_when_it_returns(harness: Ha
     assert harness.service._indexed == {}
 
 
-async def test_detection_lists_rename_last_and_the_plugin_has_the_hook(
+async def test_detection_lists_rename_and_the_plugin_has_the_hook(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # With a binary found, detection runs `codex --version` and starts a throwaway
@@ -471,7 +471,8 @@ async def test_detection_lists_rename_last_and_the_plugin_has_the_hook(
 
     info = await codex_plugin.detect(DetectContext(codex_daemon_ready=False))
 
-    assert info.capabilities[-1] == "rename"
+    # Before Close for a terminal, which came after it (A61).
+    assert info.capabilities[-2:] == ["rename", "close_terminal"]
     assert callable(getattr(registry.plugin("codex"), "rename", None))
 
 

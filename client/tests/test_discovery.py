@@ -76,6 +76,7 @@ async def test_claude_detection_reads_the_version_and_advertises_capabilities(
         # A40: `/compact`, and nothing else Claude Code offers.
         "commands",
         "rename",
+        "close_terminal",
     }
 
 
@@ -151,6 +152,7 @@ async def test_codex_detection_without_a_reachable_app_server(
         "effort",
         "commands",
         "rename",
+        "close_terminal",
     }
 
 

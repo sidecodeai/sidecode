@@ -28,6 +28,7 @@ from rc_client.agents.grok import runtime as grok_runtime
 from rc_client.agents.grok.adapter import GrokRunner
 from rc_client.agents.grok.service import GrokLeaderService
 from rc_client.config import MirrorConfig
+from rc_client.errors import RcError
 from rc_client.models import AgentInfo, Session
 from rc_client.registry import Registry
 from rc_client.sessions.hub import SessionEntry, SessionHub
@@ -306,7 +307,11 @@ async def test_closing_a_session_cancels_the_turn_and_unloads_it(
 
 
 async def test_closing_never_unloads_a_session_a_terminal_is_in(home: Path, tmp_path: Path) -> None:
-    """`session/close` unloads for every client of the leader, the TUI included."""
+    """`session/close` unloads for every client of the leader, the TUI included.
+
+    Closing a session a terminal holds ends the TUI first (A61); where it cannot,
+    nothing changes, and nothing is unloaded either.
+    """
     register(home)
     binary, peer = leader_peer(tmp_path)
     hub, _, service = build(tmp_path)
@@ -314,10 +319,13 @@ async def test_closing_never_unloads_a_session_a_terminal_is_in(home: Path, tmp_
     entry = hub.entries[SESSION]
     assert control_of(entry) == "shared"
 
-    await hub.archive({"session_id": SESSION, "archived": True})
+    with pytest.raises(RcError) as refused:
+        await hub.archive({"session_id": SESSION, "archived": True})
 
+    assert refused.value.code == "unsupported"
     assert "session/close" not in peer.methods()
-    assert hub.entries[SESSION].runner is None
+    assert control_of(hub.entries[SESSION]) == "shared"
+    assert hub.entries[SESSION].session.archived is False
     await service.stop()
 
 

@@ -6,8 +6,8 @@ from ... import __version__
 from ...errors import RcError
 from ...models import AgentInfo, Choice, Command, Session
 from ..base import SessionRunner
-from ..registry import DetectContext, RenameSpec, RunnerSpec
-from . import account, naming, runtime
+from ..registry import CloseSpec, DetectContext, RenameSpec, RunnerSpec
+from . import account, ending, naming, runtime
 from . import commands as slash
 from .adapter import CodexRunner
 from .daemon.rpc import handshake_ok
@@ -32,6 +32,8 @@ CAPABILITIES = [
     "commands",
     # A55: `thread/name/set` on the daemon, or on the runner's own connection.
     "rename",
+    # A61: SIGTERM to the TUI holding the thread, when the device can name it.
+    "close_terminal",
 ]
 
 
@@ -106,3 +108,8 @@ async def build_runner(spec: RunnerSpec) -> SessionRunner:
 async def rename(spec: RenameSpec) -> str:
     """A55: `thread/name/set` on whichever app-server serves the thread."""
     return await naming.rename_thread(spec)
+
+
+async def close_terminal(spec: CloseSpec) -> bool:
+    """A61: end the TUI a terminal runs the thread in (`ending.py`)."""
+    return await ending.close_terminal(spec)

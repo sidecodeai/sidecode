@@ -660,6 +660,13 @@ class SharedControl:
             await self._emit_approval(entry, approval, status="expired")
         await self._expire_question(entry, state)
 
+    async def ended(self, entry: SessionEntry) -> None:
+        """An app's close ended the CLI (A61): what it asked expires, the rest goes quietly."""
+        state = entry.shared
+        if state is not None:
+            await self._expire_prompts(entry, state)
+        await self.forget(entry)
+
     async def forget(self, entry: SessionEntry) -> None:
         """Drop the attachment without publishing: the session itself is going.
 

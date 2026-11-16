@@ -327,8 +327,8 @@ def test_a_session_started_through_the_shim_still_counts_as_a_terminal_holder(
     argv: list[str], expected: bool
 ) -> None:
     """The shim's `--mcp-config` must not read as a background helper process."""
-    from rc_client.agents.claude.holders import _looks_like_claude
+    from rc_client.agents.claude.holders import looks_like_claude
     from rc_client.procscan import Proc
 
     proc = Proc(pid=1, ppid=0, start="0", command=" ".join(argv))
-    assert _looks_like_claude(proc) is expected
+    assert looks_like_claude(proc) is expected

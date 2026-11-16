@@ -103,6 +103,7 @@ MODEL_COMMAND = "/model"
 EFFORT_COMMAND = "/effort"
 COMPACT_COMMAND = "/compact"
 RENAME_COMMAND = "/rename"
+EXIT_COMMAND = "/exit"
 
 # What the CLI prints when it has taken the change, matched loosely: the rest
 # of the sentence says where it was saved, which is what we are avoiding.
@@ -369,6 +370,25 @@ class Typist:
             await self._check_for_text(name)
             raise RcError("timeout", NOT_CONFIRMED) from exc
         return await self._named(pending, name)
+
+    async def exit(self) -> bool:
+        """A61: `/exit`, which is how the person quits the CLI, into an idle terminal.
+
+        Only a CLI with no turn, no dialog and nothing in its prompt box is quit this
+        way: words in the box would be sent ahead of the command. False means it
+        was not typed, and the caller ends the CLI another way.
+        """
+        state = self.entry.shared
+        if state is None or not state.injectable:
+            return False
+        try:
+            terminal = await self.link.state()
+            if terminal.draft > 0:
+                return False
+            await self.link.keys(EXIT_COMMAND + ENTER, clear=True)
+        except RcError:
+            return False
+        return True
 
     async def interrupt(self) -> None:
         """A42: Escape, which is how a turn is stopped in that terminal.

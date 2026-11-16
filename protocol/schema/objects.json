@@ -90,7 +90,8 @@
         "effort",
         "history",
         "commands",
-        "rename"
+        "rename",
+        "close_terminal"
       ]
     },
     "AttachMode": {

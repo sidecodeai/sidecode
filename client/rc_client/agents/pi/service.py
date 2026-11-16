@@ -98,6 +98,9 @@ class PiExtensionService:
         # this device.
         await runner.gone()
         entry.runner = None
+        if entry.ending:
+            # A close from an app ended this pi (A61), and says what became of the session.
+            return
         control = self.hub.released_control(entry)
         entry.session.control = control
         await entry.channel.emit("meta", control=control)

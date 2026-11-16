@@ -506,7 +506,7 @@ async def test_the_mirror_takes_a_generated_title_as_the_agents(home: Path, tmp_
 # ------------------------------------------------------------- the capability
 
 
-async def test_detection_lists_rename_last_while_the_leader_is_ready(
+async def test_detection_lists_rename_while_the_leader_is_ready(
     home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # With a binary found, detection runs `grok --version`, so none may be found.
@@ -515,7 +515,8 @@ async def test_detection_lists_rename_last_while_the_leader_is_ready(
     info = await grok_plugin.detect(DetectContext())
 
     assert info.attach_ready is True
-    assert info.capabilities[-1] == "rename"
+    # After every capability the agent always has, and before Close for a terminal (A61).
+    assert info.capabilities[-2:] == ["rename", "close_terminal"]
     assert callable(getattr(registry.plugin("grok"), "rename", None))
 
 

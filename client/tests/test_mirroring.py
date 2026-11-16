@@ -17,8 +17,8 @@ from rc_client.agents.claude.holders import (
     HolderScan,
     SessionRef,
     _is_attachable,
-    _looks_like_claude,
     _session_from_argv,
+    looks_like_claude,
 )
 from rc_client.agents.claude.transcripts import (
     SESSION_SETTINGS,
@@ -373,9 +373,9 @@ def test_claude_process_detection_and_session_extraction() -> None:
     live = Proc(pid=10, ppid=1, start="s", command="/Users/me/.local/bin/claude --resume abc-123")
     daemon = Proc(pid=11, ppid=1, start="s", command="/Users/me/.local/bin/claude daemon")
     other = Proc(pid=12, ppid=1, start="s", command="/usr/bin/python -m http.server")
-    assert _looks_like_claude(live)
-    assert not _looks_like_claude(daemon)
-    assert not _looks_like_claude(other)
+    assert looks_like_claude(live)
+    assert not looks_like_claude(daemon)
+    assert not looks_like_claude(other)
     assert _session_from_argv(live.argv) == "abc-123"
     assert _session_from_argv(["claude", "--session-id=xyz"]) == "xyz"
     assert _session_from_argv(["claude"]) is None

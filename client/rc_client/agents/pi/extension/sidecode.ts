@@ -29,6 +29,7 @@
  * | `stats` | the session's totals, summed from the branch |
  * | `commands` | `pi.getCommands()`: the extension commands, prompt templates and skills this session offers (A27) |
  * | `compact` | `ctx.compact()`, answered when the compaction finishes or fails |
+ * | `shutdown` | `ctx.abort()` then `ctx.shutdown()`, after the answer: an app closed the session (A61) |
  *
  * Only Node built-ins and type-only pi imports, because pi loads this through
  * jiti with no install step of its own.
@@ -551,6 +552,18 @@ export default function (pi: ExtensionAPI): void {
 		}
 		if (command === "abort") {
 			ctx.abort();
+			return null;
+		}
+		if (command === "shutdown") {
+			// After the answer has been written, so the device hears it before pi goes.
+			setTimeout(() => {
+				try {
+					ctx.abort();
+				} catch {
+					/* nothing was running */
+				}
+				void ctx.shutdown();
+			}, 0);
 			return null;
 		}
 		if (command === "set_model") {

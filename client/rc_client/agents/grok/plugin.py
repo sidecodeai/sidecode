@@ -5,8 +5,8 @@ from __future__ import annotations
 from ...errors import RcError
 from ...models import AgentInfo, Choice, Command, Session
 from ..base import SessionRunner
-from ..registry import DetectContext, RenameSpec, RunnerSpec
-from . import account, leader, naming, runtime
+from ..registry import CloseSpec, DetectContext, RenameSpec, RunnerSpec
+from . import account, ending, leader, naming, runtime
 from . import catalog as catalogue
 from .adapter import GrokRunner
 from .commands import recall
@@ -33,6 +33,8 @@ CAPABILITIES = [
     "history",
     "commands",
 ]
+# A61: SIGTERM to the TUI Grok's registry names, after `session/cancel`.
+CLOSE_TERMINAL = "close_terminal"
 
 
 async def detect(context: DetectContext) -> AgentInfo:
@@ -54,7 +56,7 @@ async def detect(context: DetectContext) -> AgentInfo:
         default_effort=models.default_effort,
         # A55: Grok renames a session through its leader, so `rename` is listed
         # only while the leader is ready.
-        capabilities=[*CAPABILITIES, "rename"] if leader_ready else list(CAPABILITIES),
+        capabilities=[*CAPABILITIES, *(["rename"] if leader_ready else []), CLOSE_TERMINAL],
         # Grok Build attaches through its leader: one backend per machine that
         # every `grok` joins when `[cli] use_leader` is on (A28). There is
         # nothing to hand-shake with beforehand, because whichever client comes
@@ -110,3 +112,8 @@ async def rename(spec: RenameSpec) -> str:
         raise RcError("unsupported", naming.NOT_JOINED)
     await service.rename(spec.session.session_id, spec.session.cwd, spec.name)
     return spec.name
+
+
+async def close_terminal(spec: CloseSpec) -> bool:
+    """A61: end the TUI a terminal runs the session in (`ending.py`)."""
+    return await ending.close_terminal(spec)

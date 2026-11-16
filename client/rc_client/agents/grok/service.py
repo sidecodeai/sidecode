@@ -231,6 +231,9 @@ class GrokLeaderService:
 
     async def publish_control(self, entry: SessionEntry) -> None:
         """Apply the A28 table and announce a change the way every other one travels."""
+        if entry.ending:
+            # A close from an app is ending the terminal's TUI (A61); it says what happened.
+            return
         runner = entry.runner if isinstance(entry.runner, GrokRunner) else None
         session = entry.session
         origin, new_control = control.resolve(

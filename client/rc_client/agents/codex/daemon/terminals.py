@@ -22,9 +22,8 @@ means "unknown", never "nobody".
 from __future__ import annotations
 
 import os
-from collections import Counter
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ....procscan import Proc, descendants, process_open_paths, scan_processes
 from ..runtime import SESSIONS_DIR
@@ -37,10 +36,11 @@ NOT_A_TUI = frozenset({"app-server", "exec", "mcp", "mcp-server", "proto", "daem
 
 @dataclass(slots=True)
 class TerminalScan:
-    """How many Codex TUIs are running in each working directory."""
+    """How many Codex TUIs are running in each working directory, and which they are."""
 
     cwds: dict[str, int]
     complete: bool
+    tuis: dict[str, tuple[Proc, ...]] = field(default_factory=dict)
 
     def count(self, cwd: str) -> int:
         """How many terminals this directory can speak for."""
@@ -50,6 +50,11 @@ class TerminalScan:
 
     def holds(self, cwd: str) -> bool:
         return self.count(cwd) > 0
+
+    def only(self, cwd: str) -> Proc | None:
+        """The one TUI in this directory, when there is exactly one (A61); None otherwise."""
+        found = self.tuis.get(os.path.realpath(cwd), ()) if cwd else ()
+        return found[0] if len(found) == 1 else None
 
 
 def looks_like_a_tui(proc: Proc) -> bool:
@@ -80,9 +85,13 @@ async def scan_terminals() -> TerminalScan:
     opened, complete = await process_open_paths([proc.pid for proc in candidates])
     if not complete:
         return TerminalScan(cwds={}, complete=False)
-    found = Counter(
-        os.path.realpath(held.cwd)
-        for held in opened.values()
-        if held.cwd and not holds_a_rollout(held.files)
+    by_pid = {proc.pid: proc for proc in candidates}
+    tuis: dict[str, list[Proc]] = {}
+    for pid, held in opened.items():
+        if held.cwd and not holds_a_rollout(held.files) and pid in by_pid:
+            tuis.setdefault(os.path.realpath(held.cwd), []).append(by_pid[pid])
+    return TerminalScan(
+        cwds={cwd: len(procs) for cwd, procs in tuis.items()},
+        complete=True,
+        tuis={cwd: tuple(procs) for cwd, procs in tuis.items()},
     )
-    return TerminalScan(cwds=dict(found), complete=True)

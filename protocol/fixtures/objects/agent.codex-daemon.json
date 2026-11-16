@@ -53,7 +53,8 @@
     "effort",
     "history",
     "commands",
-    "rename"
+    "rename",
+    "close_terminal"
   ],
   "attach": "daemon",
   "attach_ready": true,

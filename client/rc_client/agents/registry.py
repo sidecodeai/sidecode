@@ -119,6 +119,34 @@ class RenameSpec:
 RenameHook = Callable[[RenameSpec], Awaitable[str]]
 
 
+@dataclass(slots=True)
+class CloseSpec:
+    """Everything an adapter needs to end the CLI a terminal runs a session in (A61).
+
+    `deadline` is on the event loop's clock: the CLI has to be gone by then.
+    `process_ended` is how a wait for a process's end is made, the hub's own,
+    which a test can replace. The hub holds `entry.lock` for as long as the hook
+    runs; a hook never takes it.
+    """
+
+    entry: SessionEntry
+    shared: SharedControl
+    deadline: float
+    process_ended: Callable[[int, float], Awaitable[bool]]
+    codex_daemon: CodexDaemonService | None = None
+    grok_leader: GrokLeaderService | None = None
+
+    @property
+    def session(self) -> Session:
+        return self.entry.session
+
+
+# `async def close_terminal(spec) -> bool` on a plugin module whose agent lists
+# `close_terminal`: True once the CLI is gone, False when it is still there at the
+# deadline; `RcError("unsupported")`, with nothing done, when it cannot be ended.
+CloseHook = Callable[[CloseSpec], Awaitable[bool]]
+
+
 class AgentPlugin(Protocol):
     """The shape every `rc_client/agents/<id>/plugin.py` satisfies."""
 
@@ -177,6 +205,14 @@ async def offline_commands(agent: str, session: Session) -> list[Command]:
     if offline is None:
         return []
     return list(await offline(session))
+
+
+async def close_terminal_in_agent(agent: str, spec: CloseSpec) -> bool:
+    """End the CLI a terminal runs a session in, and say whether it ended in time (A61)."""
+    hook = cast("CloseHook | None", getattr(plugin(agent), "close_terminal", None))
+    if hook is None:
+        raise RcError("unsupported", f"{agent} sessions cannot be closed from here")
+    return await hook(spec)
 
 
 async def rename_in_agent(agent: str, spec: RenameSpec) -> str:

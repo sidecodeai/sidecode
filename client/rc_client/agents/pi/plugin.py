@@ -5,8 +5,8 @@ from __future__ import annotations
 from ...errors import RcError
 from ...models import AgentInfo, Command, Session
 from ..base import SessionRunner
-from ..registry import DetectContext, RenameSpec, RunnerSpec
-from . import account, install, naming, runtime, slash
+from ..registry import CloseSpec, DetectContext, RenameSpec, RunnerSpec
+from . import account, ending, install, naming, runtime, slash
 from . import catalog as catalogue
 from .adapter import PiRunner
 
@@ -28,6 +28,8 @@ CAPABILITIES = [
     # A55: the RPC child's `set_session_name`, the extension's `set_name`, or the
     # session file for one nothing holds.
     "rename",
+    # A61: the extension's `shutdown`, or SIGTERM to the pi it runs in.
+    "close_terminal",
 ]
 
 
@@ -93,3 +95,8 @@ async def build_runner(spec: RunnerSpec) -> SessionRunner:
 async def rename(spec: RenameSpec) -> str:
     """A55: `set_session_name`, the extension's `set_name`, or the session file."""
     return await naming.rename_session(spec)
+
+
+async def close_terminal(spec: CloseSpec) -> bool:
+    """A61: shut down the pi a terminal runs the session in (`ending.py`)."""
+    return await ending.close_terminal(spec)

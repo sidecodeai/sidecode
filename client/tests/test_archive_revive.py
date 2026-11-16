@@ -130,8 +130,9 @@ async def test_a_turn_started_in_the_terminal_takes_a_shared_session_out_of_the_
         Attachment(session_id="sess-1", cwd="/repo", pid=100, claude_version="2.1.267")
     )
     entry = hub.entry("sess-1")
-    result = await hub.archive({"session_id": "sess-1", "archived": True})
-    assert result["session"]["archived"] is True
+    # An app cannot archive a session a terminal holds without ending its CLI (A61), but one
+    # that reads as archived still comes back to life when the terminal works in it.
+    entry.session.archived = True
 
     await hub.shared.tick(entry, running=True)
 
@@ -152,7 +153,7 @@ async def test_a_message_held_for_a_shared_session_takes_it_out_of_the_archive(
     )
     entry = hub.entry("sess-1")
     await hub.shared.tick(entry, running=True)
-    await hub.archive({"session_id": "sess-1", "archived": True})
+    entry.session.archived = True
 
     result = await hub.send({"id": "req-1", "session_id": "sess-1", "text": "when you can"})
 

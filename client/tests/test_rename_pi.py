@@ -689,7 +689,7 @@ async def test_a_session_does_not_run_name_as_a_command(tmp_path: Path) -> None:
     await runner.close()
 
 
-async def test_detection_lists_rename_last_and_the_plugin_has_the_hook(
+async def test_detection_lists_rename_and_the_plugin_has_the_hook(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # With a binary found, detection runs `pi --version` and `pi --list-models`, so none
@@ -698,5 +698,6 @@ async def test_detection_lists_rename_last_and_the_plugin_has_the_hook(
 
     info = await pi_plugin.detect(DetectContext())
 
-    assert info.capabilities[-1] == "rename"
+    # Before Close for a terminal, which came after it (A61).
+    assert info.capabilities[-2:] == ["rename", "close_terminal"]
     assert callable(getattr(registry.plugin("pi"), "rename", None))

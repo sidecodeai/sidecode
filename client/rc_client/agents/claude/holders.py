@@ -162,7 +162,7 @@ def _is_attachable(argv: list[str]) -> bool:
     return False
 
 
-def _looks_like_claude(proc: Proc) -> bool:
+def looks_like_claude(proc: Proc) -> bool:
     argv = proc.argv
     if not argv:
         return False
@@ -202,7 +202,7 @@ async def scan_holders(exclude_pids: set[int] | None = None, *, cwds: bool = Tru
     # whole daemon subtree rather than just this process.
     excluded = set(exclude_pids or set()) | descendants(scan.procs, os.getpid())
     candidates = [
-        proc for proc in scan.procs if proc.pid not in excluded and _looks_like_claude(proc)
+        proc for proc in scan.procs if proc.pid not in excluded and looks_like_claude(proc)
     ]
     directories: dict[int, str] = {}
     complete = True
@@ -227,4 +227,4 @@ async def scan_holders(exclude_pids: set[int] | None = None, *, cwds: bool = Tru
 
 async def release_holder(pid: int, identity: tuple[int, str]) -> bool:
     """SIGTERM the exact terminal process so the session can be resumed."""
-    return await terminate(pid, identity, expect=_looks_like_claude)
+    return await terminate(pid, identity, expect=looks_like_claude)

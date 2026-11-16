@@ -42,6 +42,7 @@ from . import offsets, rename, titles
 from .attach import Attachment, HookQuestion, SessionStart, TurnHook
 from .bindings import Binding, TerminalBindings
 from .channel import SessionChannel
+from .ending import close_terminal, holds_terminal
 from .idle import IdleRelease, unused
 from .limits import LimitStop
 from .ptys import PtyLinks
@@ -118,6 +119,9 @@ class SessionEntry:
     # When the session was last used on the monotonic clock: a request, a
     # process started, a turn ended. What the idle release counts from (A58).
     active_at: float = field(default_factory=time.monotonic)
+    # Set while Close ends the CLI a terminal runs the session in (A61): what the
+    # CLI's going says of the session waits for the close's own one publish.
+    ending: bool = False
 
 
 class SessionHub:
@@ -1225,6 +1229,10 @@ class SessionHub:
         """
         entry = self.entry(str(params.get("session_id") or ""))
         archived = bool(params.get("archived"))
+        if archived and holds_terminal(entry):
+            # A61: the terminal's CLI is ended first, or nothing changes at all.
+            await close_terminal(self, entry)
+            return {"session": entry.session.to_dict()}
         if archived and (entry.runner is not None or self.holds(entry)):
             await self._close_session(entry)
             return {"session": entry.session.to_dict()}
@@ -1495,6 +1503,9 @@ class SessionHub:
             async with entry.lock:
                 await self.shared.stopped(entry, attachment)
             return
+        if entry.ending:
+            # A close from an app ended the CLI (A61), and says what became of the session.
+            return
         held_by_terminal = not gone and await self._holder_control(entry) == "terminal"
         if not held_by_terminal:
             # The CLI is gone, and what its hook said went with it: a later process may be given
@@ -1534,7 +1545,7 @@ class SessionHub:
             return
         if entry.shared is not None or entry.runner is not None:
             return
-        if session.control != "terminal" or entry.holder_pid != pid:
+        if session.control != "terminal" or entry.holder_pid != pid or entry.ending:
             return
         log.info("a terminal CLI ended after its bridge closed")
         entry.holder_pid = None
@@ -1552,6 +1563,9 @@ class SessionHub:
         archived session nothing has revived reads back as `stopped` (`load`), and finding no
         terminal has taught nothing that would change that.
         """
+        if entry.ending:
+            # A close from an app is ending the terminal's CLI (A61); it says what happened.
+            return
         control: Control = "terminal" if holds else self.released_control(entry)
         changed = entry.session.control != control
         if changed:

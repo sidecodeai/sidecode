@@ -68,7 +68,8 @@
     "effort",
     "history",
     "commands",
-    "rename"
+    "rename",
+    "close_terminal"
   ],
   "attach": "leader",
   "attach_ready": true,

@@ -48,7 +48,13 @@ def test_a_record_names_the_session_its_process_is_in() -> None:
     write(PID, record())
     found = live.read_records()
     assert found == {
-        PID: live.LiveRecord(pid=PID, session_id=SESSION, started=STARTED, updated_at=1793112062214)
+        PID: live.LiveRecord(
+            pid=PID,
+            session_id=SESSION,
+            started=STARTED,
+            updated_at=1793112062214,
+            entrypoint="cli",
+        )
     }
 
 

@@ -782,6 +782,9 @@ class CodexDaemonService:
         the index does not hear of it again until the next scan. A thread the
         device created or holds stays `remote` when its turn ends (A58).
         """
+        if entry.ending:
+            # A close from an app is ending the terminal's TUI (A61); it says what happened.
+            return
         runner = entry.runner if isinstance(entry.runner, CodexDaemonSession) else None
         loaded = entry.session.session_id in self._loaded or (
             runner is not None and runner.subscribed

@@ -57,7 +57,8 @@
     "effort",
     "history",
     "commands",
-    "rename"
+    "rename",
+    "close_terminal"
   ],
   "attach": "extension",
   "attach_ready": true,
