@@ -458,3 +458,64 @@ async def test_a_grok_tui_is_ended_and_its_session_unloaded_once_it_is_gone(
     finally:
         await service.stop()
         await stop(process)
+
+
+async def test_a_tui_that_names_its_thread_is_the_one_ended_wherever_it_runs(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    closes_terminals(harness.hub, monkeypatch)
+    await started(harness, loaded=[THREAD])
+    process = await cli()
+    other = Proc(pid=process.pid + 100000, ppid=1, start="o", command="codex")
+    resumed = Proc(pid=process.pid, ppid=1, start="s", command=f"codex resume {THREAD}")
+    # Another thread's TUI sits in the thread's directory; the one resuming it runs elsewhere.
+    scan = TerminalScan(
+        cwds={"/repo": 1, "/elsewhere": 1},
+        complete=True,
+        tuis={"/repo": (other,), "/elsewhere": (resumed,)},
+    )
+    ended: list[int] = []
+
+    async def terminals_now() -> TerminalScan:
+        return scan
+
+    async def found(pid: int | None, expect: Any) -> Proc | None:
+        return resumed if pid == process.pid and process.returncode is None else None
+
+    async def terminate(pid: int, identity: tuple[int, str], **kwargs: Any) -> bool:
+        ended.append(pid)
+        process.terminate()
+        await process.wait()
+        return True
+
+    from rc_client.agents.codex.daemon import terminals
+
+    monkeypatch.setattr(terminals, "scan_terminals", terminals_now)
+    monkeypatch.setattr(ending, "the_process", found)
+    monkeypatch.setattr(procscan, "terminate", terminate)
+    try:
+        result = await harness.hub.archive({"session_id": THREAD, "archived": True})
+        assert ended == [process.pid]
+        assert result["session"]["archived"] is True
+    finally:
+        await stop(process)
+
+
+async def test_the_one_tui_in_the_directory_is_not_taken_when_it_resumes_another_thread(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    closes_terminals(harness.hub, monkeypatch)
+    await started(harness, loaded=[THREAD])
+    elsewhere = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"
+    tui = Proc(pid=4321, ppid=1, start="s", command=f"codex resume {elsewhere}")
+
+    async def terminals_now() -> TerminalScan:
+        return TerminalScan(cwds={"/repo": 1}, complete=True, tuis={"/repo": (tui,)})
+
+    from rc_client.agents.codex.daemon import terminals
+
+    monkeypatch.setattr(terminals, "scan_terminals", terminals_now)
+    with pytest.raises(RcError) as refused:
+        await harness.hub.archive({"session_id": THREAD, "archived": True})
+    assert refused.value.code == "unsupported"
+    assert harness.hub.entry(THREAD).session.archived is False
