@@ -33,8 +33,10 @@ CAPABILITIES = [
     "history",
     "commands",
 ]
-# A61: SIGTERM to the TUI Grok's registry names, after `session/cancel`.
-CLOSE_TERMINAL = "close_terminal"
+# What only the leader makes possible: renaming a session in Grok (A55), and closing
+# one a terminal holds, `session/cancel` then SIGTERM to the TUI Grok's registry
+# names and `session/close` (A61).
+LEADER_CAPABILITIES = ["rename", "close_terminal"]
 
 
 async def detect(context: DetectContext) -> AgentInfo:
@@ -54,9 +56,9 @@ async def detect(context: DetectContext) -> AgentInfo:
         default_permission_mode="default",
         efforts=list(models.efforts),
         default_effort=models.default_effort,
-        # A55: Grok renames a session through its leader, so `rename` is listed
-        # only while the leader is ready.
-        capabilities=[*CAPABILITIES, *(["rename"] if leader_ready else []), CLOSE_TERMINAL],
+        # A55, A61: renaming a session and closing one a terminal holds both go
+        # through the leader, so both are listed only while it is ready.
+        capabilities=[*CAPABILITIES, *LEADER_CAPABILITIES] if leader_ready else list(CAPABILITIES),
         # Grok Build attaches through its leader: one backend per machine that
         # every `grok` joins when `[cli] use_leader` is on (A28). There is
         # nothing to hand-shake with beforehand, because whichever client comes

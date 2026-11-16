@@ -69,18 +69,19 @@ def resolve(
     "Loaded" on its own says nothing, because the daemon never unloads a thread —
     a directory holds every thread ever opened in it — so taking it for a
     terminal would put a row in the app for every `codex` the user has ever run
-    there. A thread the device created, or one an app's message took (`held`),
-    is the device's until the person closes it (A58): with no terminal in it it
-    is `remote`, loaded or not, and the next message resumes it. Any other is
-    `remote` only while a turn this device started runs, and `none` otherwise;
-    so is a `closed` one. `origin` never changes.
+    there. A thread the device holds — one an app launched or an app's message
+    took since A58 — is the device's until the person closes it: with no
+    terminal in it it is `remote`, loaded or not, and the next message resumes
+    it. One this device created before then is `remote` while it is loaded, as
+    it always was; any other only while a turn this device started runs. The
+    rest is `none`, and so is a `closed` thread. `origin` never changes.
     """
     origin = "remote" if created_here else "terminal"
     if loaded and terminal_holds:
         return origin, "shared"
-    if (created_here or held) and not closed:
-        return origin, "remote"
-    if loaded and local_turn:
+    if closed:
+        return origin, "none"
+    if held or (loaded and (created_here or local_turn)):
         return origin, "remote"
     return origin, "none"
 

@@ -32,9 +32,11 @@ from rc_client.sessions.attach import Attachment
 from rc_client.sessions.hub import SessionHub
 from rc_client.sessions.ptys import PtyLink, TerminalState
 from tests.test_codex_daemon_sessions import THREAD, Harness, harness, started
+from tests.test_grok_service import SESSION as GROK_SESSION
+from tests.test_grok_service import build, home, leader_peer, register
 from tests.test_pi_extension import Bench, bench, connect, settle
 
-__all__ = ["bench", "harness"]
+__all__ = ["bench", "harness", "home"]
 
 
 async def cli() -> asyncio.subprocess.Process:
@@ -409,3 +411,50 @@ async def test_only_this_user_s_cli_on_a_terminal_is_ever_signalled(
         with pytest.raises(RcError) as refused:
             await ending.the_process(pid, looks_like_claude)
         assert refused.value.code == "unsupported"
+
+
+# ---------------------------------------------------------------------- grok
+
+
+async def test_a_grok_tui_is_ended_and_its_session_unloaded_once_it_is_gone(
+    home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    process = await cli()
+    register(home, pid=process.pid)
+    binary, peer = leader_peer(tmp_path)
+    hub, _, service = build(tmp_path)
+    closes_terminals(hub, monkeypatch)
+    signalled: list[int] = []
+
+    async def found(pid: int | None, expect: Any) -> Proc | None:
+        if pid != process.pid or process.returncode is not None:
+            return None
+        return standing_in(process, "grok")
+
+    async def terminate(pid: int, identity: tuple[int, str], **kwargs: Any) -> bool:
+        signalled.append(pid)
+        process.terminate()
+        await process.wait()
+        return True
+
+    monkeypatch.setattr(ending, "the_process", found)
+    monkeypatch.setattr(procscan, "terminate", terminate)
+    try:
+        await service.tick(binary)
+        assert str(hub.entries[GROK_SESSION].session.control) == "shared"
+        assert "session/close" not in peer.methods()
+
+        result = await hub.archive({"session_id": GROK_SESSION, "archived": True})
+
+        assert signalled == [process.pid]
+        # Only once the TUI is gone is the session unloaded for every client of the leader.
+        assert "session/close" in peer.methods()
+        session = result["session"]
+        assert (session["archived"], session["control"], session["state"]) == (
+            True,
+            "none",
+            "stopped",
+        )
+    finally:
+        await service.stop()
+        await stop(process)

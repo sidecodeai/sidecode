@@ -229,13 +229,15 @@ class SessionHub:
     def holds(entry: SessionEntry) -> bool:
         """Whether the session is the device's until the person closes it (A58).
 
-        One the device launched, and one an app's message took out of the
-        Archive, are held; Close lets go of both. A terminal may still take a
-        held session for a while, and when it leaves, the session is the
-        device's again rather than nobody's.
+        One the device launched, and one an app's message took, are held: the
+        flag is stored with the session from the moment it is set. A session
+        launched before A58 never had it, so it is not held, and keeps going
+        to the Archive when nothing holds it, as it always did. Close lets go.
+        A terminal may still take a held session for a while, and when it
+        leaves, the session is the device's again rather than nobody's.
         """
         session = entry.session
-        return (session.held or session.origin == "remote") and not session.archived
+        return session.held and not session.archived
 
     def released_control(self, entry: SessionEntry) -> Control:
         """What a session is once no terminal holds it: the device's when it holds it (A58)."""
@@ -510,6 +512,8 @@ class SessionHub:
             permission_mode=params.get("permission_mode") or info.default_permission_mode,
             effort=params.get("effort") or info.default_effort,
             speed=params.get("speed"),
+            # A58: a session an app launched is the device's until the person closes it.
+            held=True,
         )
         session.git = await session_git(cwd, worktree=worktree)
         entry = SessionEntry(session=session, channel=self._channel(session))

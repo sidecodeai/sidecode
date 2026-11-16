@@ -106,8 +106,11 @@ async def test_a_restart_brings_held_and_launched_sessions_back_remote(
     held = built.seed("held-1")
     await built.hub.send({"id": "m-1", "session_id": "held-1", "text": "go"})
     await built.runners[0].finish()
-    built.seed("launched-1", origin="remote", control="remote")
-    built.seed("closed-1", origin="remote", control="none", archived=True, state="stopped")
+    launched = await built.hub.create({"agent": "claude", "cwd": str(tmp_path)})
+    launched_id = launched["session"]["session_id"]
+    # A launch from before A58 carries no flag: it goes on to the Archive as it always did.
+    built.seed("launched-before", origin="remote", control="remote")
+    built.seed("closed-1", origin="remote", held=True, archived=True, state="stopped")
     built.seed("nobody-1")
     assert held.session.held is True
     built.registry.close()
@@ -118,7 +121,8 @@ async def test_a_restart_brings_held_and_launched_sessions_back_remote(
         controls = {sid: e.session.control for sid, e in again.hub.entries.items()}
         assert controls == {
             "held-1": "remote",
-            "launched-1": "remote",
+            launched_id: "remote",
+            "launched-before": "none",
             "closed-1": "none",
             "nobody-1": "none",
         }
@@ -245,9 +249,13 @@ def test_the_codex_table_holds_what_the_device_holds() -> None:
     assert resolve(held=True) == ("terminal", "remote")
     assert resolve(held=True, loaded=False) == ("terminal", "remote")
     assert resolve(held=True, terminal_holds=True) == ("terminal", "shared")
-    assert resolve(created_here=True, loaded=False) == ("remote", "remote")
-    assert resolve(created_here=True, closed=True) == ("remote", "none")
     assert resolve(held=True, closed=True) == ("terminal", "none")
+    # A thread launched since A58 is held from the start; one launched before is the device's
+    # while it is loaded, as it always was, and nobody's when it is not.
+    assert resolve(created_here=True, held=True, loaded=False) == ("remote", "remote")
+    assert resolve(created_here=True) == ("remote", "remote")
+    assert resolve(created_here=True, loaded=False) == ("remote", "none")
+    assert resolve(created_here=True, closed=True) == ("remote", "none")
 
 
 def test_the_grok_table_holds_what_the_device_holds() -> None:
@@ -259,7 +267,9 @@ def test_the_grok_table_holds_what_the_device_holds() -> None:
     assert resolve(held=True) == ("terminal", "remote")
     assert resolve(held=True, attached=False) == ("terminal", "remote")
     assert resolve(held=True, registered=True) == ("terminal", "shared")
-    assert resolve(created_here=True, attached=False) == ("remote", "remote")
+    assert resolve(created_here=True, held=True, attached=False) == ("remote", "remote")
+    assert resolve(created_here=True) == ("remote", "remote")
+    assert resolve(created_here=True, attached=False) == ("remote", "none")
     assert resolve(created_here=True, closed=True) == ("remote", "none")
 
 

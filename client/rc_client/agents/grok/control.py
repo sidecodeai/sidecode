@@ -21,17 +21,19 @@ def resolve(
     profile, runs its own agent, so the leader never has its session and the
     mirror keeps it as `terminal`.
 
-    A session the device created, or one an app's message took (`held`), is the
-    device's until the person closes it (A58): once the terminal is gone it is
-    `remote`, joined or not, and the next message loads it. Any other is
-    `remote` only while a turn this device started is running, and `none`
-    otherwise; so is a `closed` one. `origin` never changes.
+    A session the device holds — one an app launched or an app's message took
+    since A58 — is the device's until the person closes it: once the terminal
+    is gone it is `remote`, joined or not, and the next message loads it. One
+    this device created before then is `remote` while it holds it in the
+    leader, as it always was; any other only while a turn this device started
+    is running. The rest is `none`, and so is a `closed` session. `origin`
+    never changes.
     """
     origin = "remote" if created_here else "terminal"
     if registered:
         return origin, "shared" if attached else "terminal"
-    if (created_here or held) and not closed:
-        return origin, "remote"
-    if attached and local_turn:
+    if closed:
+        return origin, "none"
+    if held or (attached and (created_here or local_turn)):
         return origin, "remote"
     return origin, "none"
