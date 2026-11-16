@@ -373,13 +373,15 @@ class CodexDaemonSession:
         self._subscribed = False
 
     async def shutdown(self) -> None:
-        """End the thread for good (A39): stop the turn, archive it, then let go.
+        """End the thread for good (A39): stop the turn, archive it if it is ours, then let go.
 
         Unsubscribing alone leaves the thread loaded in the daemon with its turn
         still running, and its next word would take the session back out of the
-        Archive. Archiving it in Codex is what ends it for every client, so the
-        service is told first: nothing the thread says on its way out is a
-        reason to adopt or revive it.
+        Archive, so the service is told first: nothing the thread says on its way
+        out is a reason to adopt or revive it. A thread this device created is
+        archived in Codex too, which ends it for every client. One a terminal
+        started is not (A58): archiving would take it out of `codex resume`,
+        which is where the person who started it will look for it.
         """
         thread_id = self._thread_id
         if thread_id is not None and self._on_closing is not None:
@@ -387,7 +389,7 @@ class CodexDaemonSession:
         if self.busy:
             with contextlib.suppress(TimeoutError, RcError):
                 await asyncio.wait_for(self.interrupt(), CLOSE_DRAIN_TIMEOUT)
-        if thread_id is not None and self._client.connected:
+        if thread_id is not None and self._created_here and self._client.connected:
             try:
                 await self._client.request("thread/archive", {"threadId": thread_id})
             except RcError as exc:

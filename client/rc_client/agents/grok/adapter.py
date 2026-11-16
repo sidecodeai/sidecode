@@ -86,6 +86,7 @@ class GrokRunner:
         leader: LeaderClient | None = None,
         on_turn_end: TurnEndCallback | None = None,
         on_session_id: SessionIdCallback | None = None,
+        on_turn_start: TurnEndCallback | None = None,
     ) -> None:
         self.channel = channel
         self._binary = binary
@@ -98,6 +99,9 @@ class GrokRunner:
         self._leader = leader
         self._on_turn_end = on_turn_end
         self._on_session_id = on_session_id
+        # Told when a turn of this device's starts, so `control` says so at once
+        # rather than at the next scan (A58).
+        self._on_turn_start = on_turn_start
         self._child: GrokAgent | None = None
         self._session_id: str | None = None
         self._translator = GrokTranslator(
@@ -523,6 +527,8 @@ class GrokRunner:
         # task: the hub's caller must come back as soon as the prompt is in.
         self._turn = asyncio.create_task(self._run_turn(transport, prompt, sent), name="grok-turn")
         self._turn.add_done_callback(self._prompt_answered)
+        if self._on_turn_start is not None:
+            await self._on_turn_start()
 
     def _prompt_answered(self, turn: asyncio.Task[None]) -> None:
         """The prompt's task is done, so the session is idle for its queue at last.

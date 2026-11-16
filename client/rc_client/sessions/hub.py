@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -15,7 +16,9 @@ from ..agents.base import AttachmentSteering, SessionRunner
 from ..agents.claude import live, transcripts
 from ..agents.claude.holders import Holder
 from ..agents.codex.daemon.service import CodexDaemonService
+from ..agents.codex.daemon.session import CodexDaemonSession
 from ..agents.codex.models import catalog_cache
+from ..agents.grok.adapter import GrokRunner
 from ..agents.grok.service import GrokLeaderService
 from ..agents.pi.adapter import PiRunner
 from ..agents.pi.service import PiExtensionService
@@ -38,6 +41,7 @@ from . import offsets, rename, titles
 from .attach import Attachment, HookQuestion, SessionStart, TurnHook
 from .bindings import Binding, TerminalBindings
 from .channel import SessionChannel
+from .idle import IdleRelease, unused
 from .limits import LimitStop
 from .ptys import PtyLinks
 from .queue import hold, queue_ts_from, release, snapshot_entry
@@ -110,6 +114,9 @@ class SessionEntry:
     # asked again while it ran (A43).
     drainer: asyncio.Task[None] | None = None
     drain_again: bool = False
+    # When the session was last used on the monotonic clock: a request, a
+    # process started, a turn ended. What the idle release counts from (A58).
+    active_at: float = field(default_factory=time.monotonic)
 
 
 class SessionHub:
@@ -133,6 +140,8 @@ class SessionHub:
         # Amendment A35: what the device does about a session the usage limit
         # stopped. Replaceable so a test can drive it from its own clock.
         self.resumes = ResumeScheduler(self)
+        # A58: the processes of held sessions nobody has used for a while are stopped.
+        self.idle = IdleRelease(self)
         # Set by the daemon once the shared Codex app-server answers a handshake
         # (amendment A11); absent means the per-session spawn path.
         self.codex_daemon: CodexDaemonService | None = None
@@ -204,30 +213,124 @@ class SessionHub:
 
     async def _turn_ended(self, session: Session, limit: LimitStop | None) -> None:
         """Amendment A35: a turn the usage limit ended schedules its own resume."""
+        entry = self.entries.get(session.session_id)
+        if entry is not None:
+            entry.active_at = time.monotonic()
         await self.resumes.on_turn_end(session, limit)
 
-    def load(self) -> None:
-        """Restore persisted sessions as resumable, terminal-free records.
+    # ----------------------------------------------------------------- held
 
-        `resume` is not restored here: a pending one belongs to the scheduler,
-        which reads its own records back and puts them on the sessions (A35).
+    @staticmethod
+    def holds(entry: SessionEntry) -> bool:
+        """Whether the session is the device's until the person closes it (A58).
+
+        One the device launched, and one an app's message took out of the
+        Archive, are held; Close lets go of both. A terminal may still take a
+        held session for a while, and when it leaves, the session is the
+        device's again rather than nobody's.
+        """
+        session = entry.session
+        return (session.held or session.origin == "remote") and not session.archived
+
+    def released_control(self, entry: SessionEntry) -> Control:
+        """What a session is once no terminal holds it: the device's when it holds it (A58)."""
+        return "remote" if self.holds(entry) else "none"
+
+    async def _publish_control(self, entry: SessionEntry, control: Control) -> None:
+        """Change `control` the way every change of it travels: a `meta` event, then the summary."""
+        if entry.session.control == control:
+            return
+        entry.session.control = control
+        await entry.channel.emit("meta", control=control)
+        await entry.channel.publish_summary()
+
+    async def _hold(self, entry: SessionEntry) -> None:
+        """An app's message reached a session nothing holds: it is the device's from now on (A58).
+
+        A session the device drives through somebody else's process, a Codex
+        thread on the shared daemon or a Grok session on the leader, says so at
+        once; one with no process of the device's says so as its process starts.
+        """
+        entry.session.held = True
+        if entry.runner is not None:
+            await self._settle_control(entry)
+
+    async def _settle_control(self, entry: SessionEntry) -> None:
+        """Say who holds a session the device now drives.
+
+        A Codex thread on the shared daemon and a Grok session on the leader
+        have their own tables (A11, A28), which say `remote` for a session the
+        device holds (A58); a process of the device's own is `remote` outright.
+        """
+        runner = entry.runner
+        if self.codex_daemon is not None and isinstance(runner, CodexDaemonSession):
+            await self.codex_daemon.publish_control(entry)
+        elif self.grok_leader is not None and isinstance(runner, GrokRunner) and runner.attached:
+            await self.grok_leader.publish_control(entry)
+        else:
+            await self._publish_control(entry, "remote")
+
+    def own_process(self, entry: SessionEntry) -> bool:
+        """Whether the session runs in a Claude or pi process this device started and holds."""
+        runner = entry.runner
+        if runner is None or not self.holds(entry):
+            return False
+        return entry.session.agent == "claude" or isinstance(runner, PiRunner)
+
+    async def release_process(self, entry: SessionEntry) -> bool:
+        """Stop the device's own process of a session nothing is going on in; the row stays (A58).
+
+        The session keeps `remote` and `idle`, and the next message starts the
+        process again. False when something is going on after all: a request
+        on its way through, a turn, a queued message.
+        """
+        runner = entry.runner
+        if runner is None or not unused(entry) or entry.lock.locked():
+            return False
+        async with entry.lock:
+            if entry.runner is not runner or not unused(entry):
+                return False
+            entry.runner = None
+            with contextlib.suppress(Exception):
+                await runner.close()
+            self._mark_released(entry)
+        return True
+
+    async def _make_way(self, session_id: str) -> None:
+        """A terminal is taking a session the device holds: its own idle process goes first (A58).
+
+        Two processes writing one transcript would interleave two
+        conversations; the device's gives way when nothing is going on in it,
+        and is otherwise left to refuse the terminal as before.
+        """
+        entry = self.entries.get(session_id)
+        if entry is not None and self.own_process(entry) and await self.release_process(entry):
+            log.info("let a terminal take a session the device held, stopping its own process")
+
+    def load(self) -> None:
+        """Restore persisted sessions as terminal-free records with no process running.
+
+        A session the device holds — one it launched, or one an app's message
+        took — comes back `remote`, as it was until the person closed it, and
+        the next message starts its process (A58); every other one comes back
+        `none`, resumable. `resume` is not restored here: a pending one belongs
+        to the scheduler, which reads its own records back and puts them on the
+        sessions (A35).
         """
         self.bindings.load()
         for session in self.registry.load_sessions():
             if not session.session_id or not session.agent:
                 continue
             session.device_id = self.device_id
-            session.control = "none"
             session.state = "stopped" if session.archived else "idle"
             session.turn = None
             if session.queued:
                 self._stale_queues.append(session.session_id)
             session.queued = 0
             session.resume = None
-            self.entries[session.session_id] = SessionEntry(
-                session=session,
-                channel=self._channel(session),
-            )
+            entry = SessionEntry(session=session, channel=self._channel(session))
+            session.control = self.released_control(entry)
+            self.entries[session.session_id] = entry
 
     async def clear_stale_queues(self) -> None:
         """Tell the gateway that the Up next of every session that had one is empty now.
@@ -299,6 +402,7 @@ class SessionHub:
 
     async def close(self) -> None:
         self._closed = True
+        await self.idle.stop()
         for watch in list(self._exit_watches.values()):
             watch.cancel()
         for entry in list(self.entries.values()):
@@ -507,6 +611,7 @@ class SessionHub:
         together, not one after another.
         """
         arrived = asyncio.get_running_loop().time()
+        entry.active_at = time.monotonic()
         key = (entry.session.session_id, request_id)
         flying = self._flying.get(key) if request_id else None
         if flying is not None:
@@ -561,6 +666,8 @@ class SessionHub:
                 return result
             if entry.session.control == "terminal":
                 raise RcError("conflict", self._terminal_conflict_message(entry))
+            if entry.session.control == "none":
+                await self._hold(entry)
             if entry.runner is None:
                 await self._resume(entry)
             runner = entry.runner
@@ -807,12 +914,9 @@ class SessionHub:
         except Exception as exc:
             raise RcError("agent_unavailable", f"could not resume the session: {exc}") from exc
         entry.runner = runner
-        entry.session.control = "remote"
+        entry.active_at = time.monotonic()
+        await self._settle_control(entry)
         await entry.channel.set_state("idle")
-        if self.codex_daemon is not None and entry.session.agent == "codex":
-            await self.codex_daemon.publish_control(entry)
-        if self.grok_leader is not None and entry.session.agent == "grok":
-            await self.grok_leader.publish_control(entry)
         await entry.channel.notice("info", "resumed this session from its transcript")
 
     async def _await_terminal(self, entry: SessionEntry, arrived: float) -> None:
@@ -1105,14 +1209,16 @@ class SessionHub:
         return {}
 
     async def archive(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Close a session the device drives, then archive it (amendment A39).
+        """Close a session the device drives or holds, then archive it (amendments A39, A58).
 
-        `archived: false` only clears the flag; the session comes back to life
-        through the paths A15 names.
+        A held session with no process running — let go of while idle, or
+        restored after a restart — is closed all the same: Close is what ends
+        the device's hold on it. `archived: false` only clears the flag; the
+        session comes back to life through the paths A15 names.
         """
         entry = self.entry(str(params.get("session_id") or ""))
         archived = bool(params.get("archived"))
-        if archived and entry.runner is not None:
+        if archived and (entry.runner is not None or self.holds(entry)):
             await self._close_session(entry)
             return {"session": entry.session.to_dict()}
         entry.session.archived = archived
@@ -1145,6 +1251,7 @@ class SessionHub:
             log.warning("closing a session failed", error=str(exc)[:200])
         finally:
             entry.runner = None
+            entry.session.held = False
             entry.session.archived = True
             entry.session.control = "none"
             entry.session.state = "stopped"
@@ -1264,7 +1371,9 @@ class SessionHub:
         if start is not None and start.session_id != attachment.session_id:
             log.info("a bridge was put in the session its CLI is in", source=start.source)
             attachment.session_id = start.session_id
+            await self._make_way(start.session_id)
             return self._terminal_entry(start.session_id, attachment.cwd, start.transcript_path)
+        await self._make_way(attachment.session_id)
         return self._terminal_entry(attachment.session_id, attachment.cwd, "")
 
     async def _bound_start(self, attachment: Attachment) -> SessionStart | None:
@@ -1379,18 +1488,19 @@ class SessionHub:
             async with entry.lock:
                 await self.shared.stopped(entry, attachment)
             return
-        control = "none" if gone else await self._holder_control(entry)
-        if control == "none":
+        held_by_terminal = not gone and await self._holder_control(entry) == "terminal"
+        if not held_by_terminal:
             # The CLI is gone, and what its hook said went with it: a later process may be given
             # its pid. A bridge that closes while its CLI lives, as one reconnecting does, leaves
             # the hook's word where it is.
             self.bindings.forget(attachment.pid)
+        control = "terminal" if held_by_terminal else self.released_control(entry)
         async with entry.lock:
             await self.shared.closed(entry, attachment, control)
-        if control == "none" and self._is_ghost(entry):
-            await self.withdraw(entry)
-        elif control == "terminal":
+        if held_by_terminal:
             self._watch_exit(entry, attachment.pid)
+        elif self._is_ghost(entry):
+            await self.withdraw(entry)
 
     async def _cli_ended(self, pid: int, timeout: float) -> bool:
         """Whether the CLI with this pid ends within `timeout`; an unknown one is waited for."""
@@ -1431,10 +1541,11 @@ class SessionHub:
         """Say what a scan, or a watched process, found about a session the device does not drive.
 
         A terminal holding it makes it `terminal`, `readonly` while idle (A7); nothing holding it
-        hands it back. An archived session nothing has revived reads back as `stopped`
-        (`load`), and finding no terminal has taught nothing that would change that.
+        hands it back: to the device when it holds the session (A58), to nobody otherwise. An
+        archived session nothing has revived reads back as `stopped` (`load`), and finding no
+        terminal has taught nothing that would change that.
         """
-        control: Control = "terminal" if holds else "none"
+        control: Control = "terminal" if holds else self.released_control(entry)
         changed = entry.session.control != control
         if changed:
             entry.session.control = control
@@ -1478,6 +1589,7 @@ class SessionHub:
         if state is None:
             return
         attachment = state.attachment
+        await self._make_way(start.session_id)
         target = self._terminal_entry(start.session_id, start.cwd, start.transcript_path)
         if target is None:
             return
@@ -1486,7 +1598,7 @@ class SessionHub:
         async with entry.lock:
             entry.holder_pid = None
             entry.holder_identity = None
-            await self.shared.closed(entry, attachment, "none")
+            await self.shared.closed(entry, attachment, self.released_control(entry))
         async with target.lock:
             await self.shared.registered(target, attachment)
         if self._is_ghost(entry):

@@ -56,20 +56,24 @@ async def test_deltas_are_coalesced_per_block(tmp_path: Path) -> None:
     registry.close()
 
 
+def flushing(channel: SessionChannel) -> bool:
+    return channel._flusher is not None
+
+
 async def test_the_flusher_runs_only_while_there_is_something_to_flush(tmp_path: Path) -> None:
     """A session with nothing streaming costs no task waking every 80 ms."""
     channel, recorder, registry = build(tmp_path)
-    assert channel._flusher is None
+    assert not flushing(channel)
     await channel.emit_delta("assistant_text", "blk", "a")
-    assert channel._flusher is not None
+    assert flushing(channel)
     await asyncio.sleep(0.3)
-    assert channel._flusher is None
+    assert not flushing(channel)
     assert [event["delta"] for event in recorder.events() if event.get("delta")] == ["a"]
     # The next delta wakes it again.
     await channel.emit_delta("assistant_text", "blk", "b")
-    assert channel._flusher is not None
+    assert flushing(channel)
     await asyncio.sleep(0.3)
-    assert channel._flusher is None
+    assert not flushing(channel)
     assert [event["delta"] for event in recorder.events() if event.get("delta")] == ["a", "b"]
     await channel.close()
     registry.close()

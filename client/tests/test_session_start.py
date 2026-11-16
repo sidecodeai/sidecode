@@ -236,9 +236,15 @@ async def test_a_session_moved_back_onto_keeps_its_title_and_its_history(
     assert harness.removed() == ["startup-1"]
 
 
-async def test_a_session_this_device_drives_is_never_moved_onto(harness: Harness) -> None:
+class Working:
+    """A process of the device's own in the middle of a turn."""
+
+    busy = True
+
+
+async def test_a_session_this_device_is_working_in_is_never_moved_onto(harness: Harness) -> None:
     driven = harness.seed("driven-1", origin="remote")
-    driven.runner = object()  # type: ignore[assignment]
+    driven.runner = Working()  # type: ignore[assignment]
     attachment = await harness.attach("startup-1")
 
     await harness.hook("driven-1", source="resume")

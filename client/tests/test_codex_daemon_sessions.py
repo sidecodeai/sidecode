@@ -1914,7 +1914,10 @@ async def device_driven(harness: Harness) -> None:
     assert harness.hub.entry(THREAD).session.control == "none"
 
 
-async def test_closing_a_thread_interrupts_the_turn_then_archives_it(harness: Harness) -> None:
+async def test_closing_a_thread_interrupts_the_turn_then_lets_go_without_archiving_it(
+    harness: Harness,
+) -> None:
+    """A58: a thread a terminal started stays in `codex resume`, where its person looks."""
     await device_driven(harness)
     await harness.hub.send({"id": "req-1", "session_id": THREAD, "text": "go"})
     assert harness.hub.entry(THREAD).session.control == "remote"
@@ -1931,11 +1934,31 @@ async def test_closing_a_thread_interrupts_the_turn_then_archives_it(harness: Ha
         for method, _ in harness.daemon.calls
         if method in {"turn/interrupt", "thread/archive", "thread/unsubscribe"}
     ]
-    assert asked == ["turn/interrupt", "thread/archive", "thread/unsubscribe"]
-    assert harness.daemon.sent("thread/archive")[-1] == {"threadId": THREAD}
+    assert asked == ["turn/interrupt", "thread/unsubscribe"]
     session = result["session"]
     assert (session["archived"], session["control"], session["state"]) == (True, "none", "stopped")
     assert harness.hub.entry(THREAD).runner is None
+    assert harness.hub.entry(THREAD).session.held is False
+
+
+async def test_closing_a_thread_the_device_created_archives_it_in_codex(
+    harness: Harness, tmp_path: Path
+) -> None:
+    await started(harness, loaded=[])
+    harness.daemon.replies["thread/start"] = {"thread": {"id": "t-made"}}
+    await harness.hub.create({"agent": "codex", "cwd": str(tmp_path)})
+
+    result = await harness.hub.archive({"session_id": "t-made", "archived": True})
+
+    asked = [
+        method
+        for method, _ in harness.daemon.calls
+        if method in {"thread/archive", "thread/unsubscribe"}
+    ]
+    assert asked == ["thread/archive", "thread/unsubscribe"]
+    assert harness.daemon.sent("thread/archive")[-1] == {"threadId": "t-made"}
+    session = result["session"]
+    assert (session["archived"], session["control"], session["state"]) == (True, "none", "stopped")
 
 
 async def test_a_thread_s_last_word_during_a_close_does_not_revive_it(harness: Harness) -> None:

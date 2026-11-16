@@ -232,11 +232,14 @@ class GrokLeaderService:
     async def publish_control(self, entry: SessionEntry) -> None:
         """Apply the A28 table and announce a change the way every other one travels."""
         runner = entry.runner if isinstance(entry.runner, GrokRunner) else None
+        session = entry.session
         origin, new_control = control.resolve(
-            entry.session.origin == "remote",
-            registered=entry.session.session_id in self._registered,
+            session.origin == "remote",
+            registered=session.session_id in self._registered,
             attached=runner is not None and runner.attached,
             local_turn=runner is not None and runner.local_turn,
+            held=session.held,
+            closed=session.archived,
         )
         changed = entry.session.origin != origin or entry.session.control != new_control
         entry.session.origin = origin  # type: ignore[assignment]
@@ -287,6 +290,9 @@ class GrokLeaderService:
             self._known.add(session_id)
             await self.hub.rekey(entry, session_id)
 
+        async def on_turn_start() -> None:
+            await self.publish_control(entry)
+
         client = self._client
         if client is None:  # pragma: no cover - the caller checked `ensure`
             raise RcError("agent_unavailable", "the grok leader is not connected")
@@ -302,6 +308,7 @@ class GrokLeaderService:
             leader=client,
             on_turn_end=on_turn_end,
             on_session_id=on_session_id,
+            on_turn_start=on_turn_start,
         )
 
     # -------------------------------------------------------------- the link

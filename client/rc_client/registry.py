@@ -183,7 +183,7 @@ class Registry:
             (
                 session.session_id,
                 session.agent,
-                json.dumps(session.to_dict(), ensure_ascii=False),
+                json.dumps(session.record(), ensure_ascii=False),
                 session.session_id,
                 1 if session.archived else 0,
                 session.updated_at,

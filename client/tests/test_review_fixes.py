@@ -355,16 +355,13 @@ async def test_a_non_numeric_paging_argument_is_a_bad_request(tmp_path: Path) ->
 async def test_a_mirrored_terminal_session_is_running_mid_turn_and_readonly_when_idle(
     tmp_path: Path,
 ) -> None:
-    from rc_client.sessions.mirror import MirrorService
-
     hub, _, registry = build_hub(tmp_path)
     entry = add_session(hub, control="terminal")
     entry.runner = None
-    mirror = MirrorService(hub)
 
     states: list[str] = []
-    for control, running in (("terminal", True), ("terminal", False), ("none", False)):
-        await mirror._set_control(entry, control, running=running)
+    for holds, running in ((True, True), (True, False), (False, False)):
+        await hub.terminal_holds(entry, holds, running=running)
         states.append(entry.session.state)
     assert states == ["running", "readonly", "idle"]
     registry.close()

@@ -93,12 +93,14 @@ class PiExtensionService:
             return
         if not isinstance(runner, PiTerminalSession) or runner.link is not link:
             return
-        # Amendment A10: the CLI is gone, so nobody owns the session now. The
-        # next send resumes it under this device.
+        # Amendment A10: the CLI is gone, so nobody owns the session now, or the
+        # device does when it holds it (A58). The next send resumes it under
+        # this device.
         await runner.gone()
         entry.runner = None
-        entry.session.control = "none"
-        await entry.channel.emit("meta", control="none")
+        control = self.hub.released_control(entry)
+        entry.session.control = control
+        await entry.channel.emit("meta", control=control)
         await entry.channel.set_state("idle")
         await entry.channel.publish_summary()
 
@@ -111,6 +113,7 @@ class PiExtensionService:
             previous.detach()
         self._links[hello.session_id] = link
         entry, fresh = self._entry(hello.session_id, link)
+        await self._give_way(entry)
         mode = entry.session.permission_mode or DEFAULT_PERMISSION_MODE
 
         async def on_turn_end() -> None:
@@ -129,6 +132,21 @@ class PiExtensionService:
         await self._publish_meta(entry, link)
         await link.welcome(mode, stream=True)
         return True
+
+    @staticmethod
+    async def _give_way(entry: SessionEntry) -> None:
+        """A pi in a terminal took a session the device's own pi was running: that one stops.
+
+        Two processes writing one session file would branch it behind each
+        other's backs (A58: one writer). The terminal's pi is already in the
+        session, so the device's own one goes, turn and all.
+        """
+        runner = entry.runner
+        if not isinstance(runner, PiRunner):
+            return
+        log.info("a terminal pi took a session the device was running; stopping the device's")
+        entry.runner = None
+        await runner.close()
 
     def _entry(self, session_id: str, link: PiLink) -> tuple[SessionEntry, bool]:
         """The session this pi process is in, created the first time it is seen."""

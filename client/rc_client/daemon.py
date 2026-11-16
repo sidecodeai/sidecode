@@ -118,6 +118,8 @@ class Daemon:
         self.mirror.start()
         self.link.start()
         self.hub.resumes.start()
+        # A58: the processes of the sessions the device holds stop after 30 minutes unused.
+        self.hub.idle.start()
         self._refresh_task = asyncio.create_task(self._refresh_loop())
         self._lag_task = asyncio.create_task(watch_loop_lag(), name="loop-lag")
         self._sweep_task = asyncio.create_task(self._sweep_loop(), name="attachment-sweep")

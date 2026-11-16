@@ -58,26 +58,29 @@ def resolve(
     loaded: bool,
     terminal_holds: bool,
     local_turn: bool = False,
+    held: bool = False,
+    closed: bool = False,
 ) -> tuple[str, str]:
     """`(origin, control)` for one Codex thread on the daemon.
 
-    An unloaded thread is `none` and the next `session.send` resumes it. A
-    loaded thread is `shared` only while a terminal is known to be in it, which
-    the daemon never reports: `terminal_holds` is what the service has pieced
-    together from the thread's own evidence and the process scan. "Loaded" on
-    its own says nothing, because the daemon never unloads a thread — a
-    directory holds every thread ever opened in it — so taking it for a
-    terminal would put a row in the app for every `codex` the user has ever
-    run there. Once the terminal is gone the thread stays ours to drive —
-    `remote` while a turn this device started is running, `none` when it is
-    idle — and `origin` never changes.
+    A loaded thread is `shared` only while a terminal is known to be in it,
+    which the daemon never reports: `terminal_holds` is what the service has
+    pieced together from the thread's own evidence and the process scan.
+    "Loaded" on its own says nothing, because the daemon never unloads a thread —
+    a directory holds every thread ever opened in it — so taking it for a
+    terminal would put a row in the app for every `codex` the user has ever run
+    there. A thread the device created, or one an app's message took (`held`),
+    is the device's until the person closes it (A58): with no terminal in it it
+    is `remote`, loaded or not, and the next message resumes it. Any other is
+    `remote` only while a turn this device started runs, and `none` otherwise;
+    so is a `closed` one. `origin` never changes.
     """
     origin = "remote" if created_here else "terminal"
-    if not loaded:
-        return origin, "none"
-    if terminal_holds:
+    if loaded and terminal_holds:
         return origin, "shared"
-    if created_here or local_turn:
+    if (created_here or held) and not closed:
+        return origin, "remote"
+    if loaded and local_turn:
         return origin, "remote"
     return origin, "none"
 

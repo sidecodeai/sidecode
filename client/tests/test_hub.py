@@ -448,14 +448,29 @@ async def test_load_restores_persisted_sessions_as_resumable(tmp_path: Path) -> 
     )
     registry.upsert_session(session)
 
+    registry.upsert_session(
+        Session(
+            session_id="term-1",
+            device_id="dev-1",
+            agent="claude",
+            cwd="/repo",
+            origin="terminal",
+            control="terminal",
+            state="readonly",
+        )
+    )
+
     fresh, _, _ = build_hub(tmp_path)
     fresh.registry = registry
     fresh.load()
     restored = fresh.entries["old-1"].session
     assert restored.state == "idle"
-    assert restored.control == "none"
+    # A58: a session the device launched is still its own until the person closes it.
+    assert restored.control == "remote"
     assert restored.queued == 0
     assert restored.turn is None
+    assert fresh.entries["term-1"].session.control == "none"
+    assert fresh.entries["term-1"].session.state == "idle"
     registry.close()
 
 

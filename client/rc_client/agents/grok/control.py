@@ -8,6 +8,8 @@ def resolve(
     registered: bool,
     attached: bool,
     local_turn: bool = False,
+    held: bool = False,
+    closed: bool = False,
 ) -> tuple[str, str]:
     """`(origin, control)` for one Grok session.
 
@@ -19,16 +21,17 @@ def resolve(
     profile, runs its own agent, so the leader never has its session and the
     mirror keeps it as `terminal`.
 
-    Once the terminal is gone the session stays the device's to drive, because
-    the leader still holds it: `remote` while a turn this device started is
-    running, `none` when it is idle, and `none` is resumable in place. `origin`
-    never changes.
+    A session the device created, or one an app's message took (`held`), is the
+    device's until the person closes it (A58): once the terminal is gone it is
+    `remote`, joined or not, and the next message loads it. Any other is
+    `remote` only while a turn this device started is running, and `none`
+    otherwise; so is a `closed` one. `origin` never changes.
     """
     origin = "remote" if created_here else "terminal"
     if registered:
         return origin, "shared" if attached else "terminal"
-    if not attached:
-        return origin, "none"
-    if created_here or local_turn:
+    if (created_here or held) and not closed:
+        return origin, "remote"
+    if attached and local_turn:
         return origin, "remote"
     return origin, "none"

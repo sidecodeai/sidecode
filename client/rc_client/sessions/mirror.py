@@ -20,7 +20,7 @@ from typing import Any
 
 from ..agents.claude import subagents, transcripts
 from ..agents.claude.calls import LOOKBACK, read_calls
-from ..agents.claude.holders import SessionRef, scan_holders
+from ..agents.claude.holders import Holder, HolderScan, SessionRef, scan_holders
 from ..agents.codex import rollouts
 from ..agents.codex.daemon.service import CodexDaemonService
 from ..agents.codex.runtime import resolve_binary as resolve_codex
@@ -662,7 +662,8 @@ class MirrorService:
         directory out of it.
         """
         tracked = self._claude_tracked()
-        if not tracked:
+        driven = self._held_claude_processes()
+        if not tracked and not driven:
             return
         scan = self.hub.bindings.refine(await scan_holders())
         if not scan.complete:
@@ -703,6 +704,44 @@ class MirrorService:
                     mirror.tailer.awaiting_reply = False
                     mirror.working = False
                 await self.hub.terminal_holds(entry, False)
+        if scan.complete:
+            await self._yield_to_terminals(driven, scan, assigned)
+
+    def _held_claude_processes(self) -> list[SessionEntry]:
+        """The Claude sessions the device holds and runs a process of its own for (A58)."""
+        return [
+            entry
+            for entry in self.hub.entries.values()
+            if entry.session.agent == "claude"
+            and entry.shared is None
+            and self.hub.own_process(entry)
+        ]
+
+    async def _yield_to_terminals(
+        self, driven: list[SessionEntry], scan: HolderScan, assigned: dict[str, Holder]
+    ) -> None:
+        """A terminal resumed a Claude session the device runs: the device's idle process goes.
+
+        Two CLIs writing one transcript would interleave two conversations
+        (A58: one writer). Only a CLI that names the session counts, by its
+        argv or Claude Code's own record of it: a terminal in the same
+        directory may be in any session of it. A device process in the middle
+        of something is left alone.
+        """
+        taken = {holder.pid for holder in assigned.values()}
+        for entry in driven:
+            session_id = entry.session.session_id
+            holder = next(
+                (h for h in scan.holders if h.session_id == session_id and h.pid not in taken),
+                None,
+            )
+            if holder is None or not await self.hub.release_process(entry):
+                continue
+            log.info("a terminal took a session the device held; stopped the device's process")
+            entry.holder_pid = holder.pid
+            entry.holder_identity = holder.identity
+            taken.add(holder.pid)
+            await self.hub.terminal_holds(entry, True)
 
     async def _refresh_codex_control(self) -> None:
         """A rollout some Codex process writes is a terminal's; one nobody writes is nobody's.

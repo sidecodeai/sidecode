@@ -279,6 +279,9 @@ class Session:
     # is none (amendment A35). Always published, so an app that redraws from a
     # summary is never left holding one the device has dropped.
     resume: SessionResume | None = None
+    # Whether an app's message made the session the device's to hold until the
+    # person closes it (A58). The device's own: stored, never on the wire.
+    held: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -307,6 +310,13 @@ class Session:
             "resume": self.resume.to_dict() if self.resume else None,
         }
 
+    def record(self) -> dict[str, Any]:
+        """What the registry keeps: the wire object, and whether the device holds it (A58)."""
+        stored = self.to_dict()
+        if self.held:
+            stored["held"] = True
+        return stored
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Session:
         resume = data.get("resume")
@@ -334,6 +344,7 @@ class Session:
             usage=data.get("usage"),
             queued=int(data.get("queued") or 0),
             resume=SessionResume.from_dict(resume) if isinstance(resume, dict) else None,
+            held=data.get("held") is True,
         )
 
 

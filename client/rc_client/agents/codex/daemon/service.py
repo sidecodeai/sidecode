@@ -779,7 +779,8 @@ class CodexDaemonService:
 
         A live subscription is proof the daemon has the thread, as speaking is:
         a session reopened after a close (A39) resumed the thread itself, and
-        the index does not hear of it again until the next scan.
+        the index does not hear of it again until the next scan. A thread the
+        device created or holds stays `remote` when its turn ends (A58).
         """
         runner = entry.runner if isinstance(entry.runner, CodexDaemonSession) else None
         loaded = entry.session.session_id in self._loaded or (
@@ -790,6 +791,8 @@ class CodexDaemonService:
             loaded=loaded,
             terminal_holds=runner is not None and runner.terminal_holds,
             local_turn=runner is not None and runner.local_turn,
+            held=entry.session.held,
+            closed=entry.session.archived,
         )
         changed = entry.session.origin != origin or entry.session.control != control
         entry.session.origin = origin  # type: ignore[assignment]
