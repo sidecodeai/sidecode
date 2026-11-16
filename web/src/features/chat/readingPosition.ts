@@ -16,7 +16,11 @@ export const MAX_POSITIONS = 500;
 
 /** Where a conversation was being read when it was last saved. */
 export interface ReadingPosition {
-  /** The `seq` of the lowest row whose top was on screen. */
+  /**
+   * The lowest row whose top was on screen, by its place in display order: the
+   * `seq` of its block's first event (`first_seq`), never a later one, so a long
+   * row that finished after a message drawn below it still sorts above it.
+   */
   seq: number;
   /**
    * The newest event the app held then. A message of the person's numbered

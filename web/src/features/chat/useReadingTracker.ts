@@ -11,9 +11,10 @@ import { savePosition } from './readingPosition';
 const SAVE_EVERY_MS = 1_000;
 
 /**
- * The `seq` of the lowest row whose top is above the bottom of the transcript.
- * Rows are drawn in order, so their tops only grow, and the search halves. A
- * send not yet confirmed carries no `seq` and is not counted.
+ * The place of the lowest row whose top is above the bottom of the transcript:
+ * the `seq` of its block's first event, which is what rows are ordered by. Rows
+ * are drawn in order, so their tops only grow, and the search halves. A send
+ * not yet confirmed carries no `seq` and is not counted.
  */
 export function lowestOnScreen(scroller: HTMLElement): number | null {
   const rows = [...scroller.querySelectorAll<HTMLElement>('[data-row-seq]')].filter(

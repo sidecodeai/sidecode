@@ -242,6 +242,54 @@ describe('the reading position', () => {
   });
 });
 
+/** Coming back to a conversation: the saved place against what happened since. */
+describe('coming back', () => {
+  /** The reader scrolls up to the top, where the first question's answer is, and leaves. */
+  function readTheFirstTurnAndLeave(): void {
+    const first = show(conversation());
+    const list = scroller();
+    if (!list) throw new Error('no transcript');
+    act(() => {
+      list.dispatchEvent(new Event('wheel'));
+    });
+    list.scrollTop = 0;
+    act(() => {
+      list.dispatchEvent(new Event('scroll', { bubbles: true }));
+    });
+    first.view.unmount();
+  }
+
+  it('brings a reader who scrolled back into an older turn back to that turn', () => {
+    readTheFirstTurnAndLeave();
+    // Rows 1 to 4 had their tops on screen; the app held events up to 12.
+    expect(readPosition('me', 'dev-mac/ses-1')).toEqual({ seq: 4, held: 12 });
+
+    show(conversation());
+
+    // Their first question, the third row at 200 px — not their newest at 6.
+    expect(scroller()?.scrollTop).toBe(188);
+  });
+
+  it('opens on a reply sent from elsewhere after the reader left', () => {
+    readTheFirstTurnAndLeave();
+    const answered = stateOf(
+      ...[1, 2].map(said),
+      asked(3),
+      ...[4, 5].map(said),
+      asked(6),
+      ...[7, 8, 9, 10, 11, 12].map(said),
+      // Written on another device while this tab was elsewhere, and answered.
+      asked(13),
+      ...[14, 15, 16, 17, 18, 19, 20].map(said),
+    );
+
+    show(answered);
+
+    // The thirteenth row, at 1200 px.
+    expect(scroller()?.scrollTop).toBe(1188);
+  });
+});
+
 /**
  * `docs/DESIGN.md` § "Reading position": the timeline is keyed by conversation
  * like the header and the composer, so moving to another one in the sidebar
