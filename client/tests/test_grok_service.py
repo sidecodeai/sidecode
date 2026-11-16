@@ -924,7 +924,6 @@ async def test_closing_a_session_only_the_device_is_in_still_refuses_its_prompts
         session_id="temp-1", device_id="d1", agent="grok", cwd=str(tmp_path), origin="remote"
     )
     entry = hub.register_mirrored(session)
-    entry.channel.start()
     assert await service.ensure(binary) is True
     runner = service.runner_for(entry, resume=None)
     await runner.start()
@@ -1021,7 +1020,6 @@ async def test_a_session_the_device_creates_runs_on_the_same_leader(
         session_id="temp-1", device_id="d1", agent="grok", cwd=str(tmp_path), origin="remote"
     )
     entry = hub.register_mirrored(session)
-    entry.channel.start()
     assert await service.ensure(binary) is True
 
     runner = service.runner_for(entry, resume=None)

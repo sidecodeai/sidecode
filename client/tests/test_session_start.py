@@ -214,7 +214,6 @@ async def test_a_session_moved_back_onto_keeps_its_title_and_its_history(
     harness: Harness,
 ) -> None:
     older = harness.seed("older-1", title="Ledger migration")
-    older.channel.start()
     await said(older, "where were we")
 
     await harness.attach("startup-1")
@@ -295,7 +294,6 @@ async def test_the_sweep_removes_ghosts_and_leaves_everything_else(
     harness.seed("ghost-1")
     harness.seed("ghost-2")
     used = harness.seed("used-1")
-    used.channel.start()
     await said(used, "still here")
     mirrored = harness.seed("mirrored-1")
     mirrored.transcript = "/t/mirrored-1.jsonl"

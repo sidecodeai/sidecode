@@ -395,7 +395,6 @@ class SessionHub:
         session.git = await session_git(cwd, worktree=worktree)
         entry = SessionEntry(session=session, channel=self._channel(session))
         self.entries[session.session_id] = entry
-        entry.channel.start()
         self.registry.upsert_session(session)
         if chosen:
             # A title the user typed outranks anything the agent later produces.
@@ -792,7 +791,6 @@ class SessionHub:
         info = self.agent_info(entry.session.agent)
         if not info.available:
             raise RcError("agent_unavailable", f"{entry.session.agent} is not installed")
-        entry.channel.start()
         runner = await self._build_runner(entry, info, resume=entry.session.session_id)
         try:
             await runner.start()
@@ -1314,7 +1312,6 @@ class SessionHub:
             control="shared",
         )
         entry = self.register_mirrored(session, transcript or None)
-        entry.channel.start()
         return entry
 
     async def attach_permission_request(

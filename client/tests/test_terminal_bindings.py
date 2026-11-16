@@ -210,8 +210,7 @@ async def test_a_session_that_was_already_known_is_the_one_the_cli_is_put_back_i
 ) -> None:
     """The row the apps know, with its title and history, not a blank one beside it."""
     before = run_of(tmp_path, processes)
-    known = before.seed(MOVED, title="Ledger migration")
-    known.channel.start()
+    before.seed(MOVED, title="Ledger migration")
     await hook(before)
     await before.attach("started-in")
     before.close()
@@ -595,7 +594,6 @@ async def test_a_later_record_decides_which_session_a_scan_finds_held(
     before.seed(MOVED)
     # Something was said in it, so the sweep does not take it for a session nobody ever used.
     hooked = before.seed("hooked-1")
-    hooked.channel.start()
     await said(hooked, "where were we")
     before.hub.bindings.remember(
         SessionStart("hooked-1", "/repo", TERMINAL_PID, "resume", ""), STARTED

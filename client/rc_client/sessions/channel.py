@@ -57,10 +57,6 @@ class SessionChannel:
 
     # ------------------------------------------------------------- lifecycle
 
-    def start(self) -> None:
-        if self._flusher is None:
-            self._flusher = asyncio.create_task(self._flush_loop())
-
     async def close(self) -> None:
         self._closed = True
         if self._flusher is not None:
@@ -96,7 +92,7 @@ class SessionChannel:
                 entry = {"kind": kind, "delta": "", "fields": dict(fields), "due": 0.0}
                 self._pending[block_id] = entry
             entry["delta"] = str(entry["delta"]) + delta
-        self.start()
+        self._flush_soon()
 
     async def flush_block(self, block_id: str) -> None:
         async with self._lock:
@@ -115,11 +111,27 @@ class SessionChannel:
         for block_id in list(self._pending):
             await self.flush_block(block_id)
 
+    def _flush_soon(self) -> None:
+        """Have the pending deltas flushed within the interval, starting the flusher if it sleeps.
+
+        The flusher runs only while there is something to flush: a task
+        waking every 80 ms for every session the device knows cost more than
+        the streaming it was there for.
+        """
+        if self._closed or (self._flusher is not None and not self._flusher.done()):
+            return
+        self._flusher = asyncio.create_task(self._flush_loop())
+
     async def _flush_loop(self) -> None:
         while not self._closed:
             await asyncio.sleep(FLUSH_INTERVAL)
-            if self._pending:
-                await self.flush_all()
+            await self.flush_all()
+            if not self._pending:
+                # Nothing was added while that flush ran, so the flusher sleeps
+                # until a delta wakes it; nothing is awaited between the check
+                # and the reset, so no delta can come in between.
+                self._flusher = None
+                return
 
     async def _write(self, kind: str, fields: dict[str, Any]) -> dict[str, Any]:
         seq = self.registry.next_seq(self.session.session_id)

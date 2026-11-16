@@ -59,7 +59,6 @@ def build(tmp_path: Path, agent: str) -> tuple[SessionChannel, Collector, Regist
     registry.upsert_session(session)
     collector = Collector()
     channel = SessionChannel(registry, session, collector)
-    channel.start()
     return channel, collector, registry, session
 
 

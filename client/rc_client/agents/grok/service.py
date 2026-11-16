@@ -173,7 +173,6 @@ class GrokLeaderService:
                     updated_at=stamp,
                 )
             )
-            entry.channel.start()
         if registered.cwd and not entry.session.cwd:
             entry.session.cwd = registered.cwd
         entry.holder_pid = registered.pid or None

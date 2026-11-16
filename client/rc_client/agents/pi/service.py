@@ -153,7 +153,6 @@ class PiExtensionService:
                 updated_at=created,
             )
         )
-        entry.channel.start()
         return entry, True
 
     async def _replay(self, entry: SessionEntry, link: PiLink) -> None:

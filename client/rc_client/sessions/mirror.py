@@ -395,7 +395,6 @@ class MirrorService:
             tailer = transcripts.TranscriptTailer(path=info.path, cwd=info.cwd)
             tailer.offset = self._initial_offset(info.session_id, info.path)
             entry.transcript = info.path
-            entry.channel.start()
             self._claude[info.session_id] = ClaudeMirror(tailer=tailer)
             adopted.append(info.session_id)
         return adopted
@@ -531,7 +530,6 @@ class MirrorService:
             tailer = rollouts.RolloutTailer(path=info.path, cwd=info.cwd)
             tailer.offset = self._initial_offset(info.thread_id, info.path)
             entry.transcript = info.path
-            entry.channel.start()
             self._codex[info.thread_id] = CodexMirror(tailer=tailer)
 
     async def _adopt_grok(self, found: list[grok_sessions.GrokSessionInfo]) -> None:
@@ -567,7 +565,6 @@ class MirrorService:
             tailer.offset = self._initial_offset(info.session_id, info.path)
             tailer.resume_from = grok_cursor.read(self.hub.registry, info.session_id)
             entry.transcript = info.path
-            entry.channel.start()
             self._grok[info.session_id] = GrokMirror(tailer=tailer)
             if info.settings:
                 await entry.channel.set_meta(**info.settings)

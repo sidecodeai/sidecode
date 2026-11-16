@@ -656,7 +656,6 @@ class CodexDaemonService:
                     updated_at=summary.updated_at,
                 )
             )
-            entry.channel.start()
         if terminal:
             # Amendment A15: a TUI is sitting in this thread, so it is live again.
             await entry.channel.revive()

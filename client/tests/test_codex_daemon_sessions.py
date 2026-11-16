@@ -1148,7 +1148,6 @@ def seed(harness: Harness, session_id: str, origin: str = "terminal") -> Session
             control="none",
         )
     )
-    entry.channel.start()
     return entry
 
 

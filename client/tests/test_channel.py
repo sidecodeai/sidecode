@@ -45,7 +45,6 @@ async def test_emit_assigns_increasing_seq_and_publishes(tmp_path: Path) -> None
 
 async def test_deltas_are_coalesced_per_block(tmp_path: Path) -> None:
     channel, recorder, registry = build(tmp_path)
-    channel.start()
     for piece in ("a", "b", "c"):
         await channel.emit_delta("assistant_text", "blk", piece)
     await asyncio.sleep(0.2)
@@ -54,6 +53,25 @@ async def test_deltas_are_coalesced_per_block(tmp_path: Path) -> None:
     assert len(deltas) == 1
     assert deltas[0]["delta"] == "abc"
     assert deltas[0]["block_id"] == block_uuid("blk")
+    registry.close()
+
+
+async def test_the_flusher_runs_only_while_there_is_something_to_flush(tmp_path: Path) -> None:
+    """A session with nothing streaming costs no task waking every 80 ms."""
+    channel, recorder, registry = build(tmp_path)
+    assert channel._flusher is None
+    await channel.emit_delta("assistant_text", "blk", "a")
+    assert channel._flusher is not None
+    await asyncio.sleep(0.3)
+    assert channel._flusher is None
+    assert [event["delta"] for event in recorder.events() if event.get("delta")] == ["a"]
+    # The next delta wakes it again.
+    await channel.emit_delta("assistant_text", "blk", "b")
+    assert channel._flusher is not None
+    await asyncio.sleep(0.3)
+    assert channel._flusher is None
+    assert [event["delta"] for event in recorder.events() if event.get("delta")] == ["a", "b"]
+    await channel.close()
     registry.close()
 
 
