@@ -65,6 +65,7 @@ from .frames import (
     PROTOCOL_VERSION,
     REQUEST_TIMEOUT_SECONDS,
     SESSION_ARCHIVE,
+    SESSION_HISTORY,
     SESSION_RESULT_TYPES,
     SILENT_TIMEOUT_SECONDS,
     TERMINAL_ATTACH,
@@ -226,6 +227,8 @@ class _Pending:
     #: newer one replaced can be told apart from one written to the live link.
     device_connection_id: str = ""
     session_id: str = ""
+    #: A60: whether a `session.history` asked for a brief page, which its log line says.
+    brief: bool = False
     started: float = field(default_factory=time.monotonic)
     timer: asyncio.Task[None] | None = None
 
@@ -744,13 +747,16 @@ class Hub:
         finally:
             self._gateway_pending.pop(identifier, None)
 
-    async def handle_device_frame(self, connection: DeviceConnection, frame: Frame) -> None:
+    async def handle_device_frame(
+        self, connection: DeviceConnection, frame: Frame, *, size: int = 0
+    ) -> None:
+        """One frame a device sent; `size` is the length of its text, which a log line may say."""
         kind = frame_type(frame)
         if kind == "pong":
             connection.note_pong()
             return
         if kind == "reply":
-            await self._route_reply(connection, frame)
+            await self._route_reply(connection, frame, size)
             return
         if kind not in DEVICE_PUSH_TYPES:
             log.debug("unknown device frame dropped", device_id=connection.device_id, kind=kind)
@@ -1243,6 +1249,7 @@ class Hub:
                 closing=_session_being_closed(frame),
                 device_connection_id=device.id,
                 session_id=text_field(frame, "session_id"),
+                brief=frame.get("brief") is True,
             ),
         )
 
@@ -1265,7 +1272,7 @@ class Hub:
             key[0], error_reply(identifier, ERROR_TIMEOUT, "device did not reply in time")
         )
 
-    async def _route_reply(self, device: DeviceConnection, frame: Frame) -> None:
+    async def _route_reply(self, device: DeviceConnection, frame: Frame, size: int = 0) -> None:
         identifier = request_id(frame)
         target = text_field(frame, "from")
         if not identifier or not target:
@@ -1297,6 +1304,8 @@ class Hub:
         del self._pending[key]
         if pending.timer is not None:
             pending.timer.cancel()
+        if pending.kind == SESSION_HISTORY:
+            _log_history(device.device_id, pending, frame, size)
         if pending.kind == DEVICE_UPDATE and frame.get("ok") is True:
             await self._begin_update(device.device_id)
         # A38: an accepted open or attach is where the gateway learns who receives this
@@ -2010,6 +2019,26 @@ def _attachments_over_limit(frame: Frame) -> str | None:
         if isinstance(encoded, str) and len(encoded) // 4 * 3 > MAX_ATTACHMENT_BYTES:
             return f"attachments are limited to {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MiB each"
     return None
+
+
+def _log_history(device_id: str, pending: _Pending, frame: Frame, size: int) -> None:
+    """One line per `session.history` an app asked a device for: how long, how big, never what.
+
+    `chars` is the length of the reply's text as the device sent it. An app opening a
+    long session waits on this request, and A60's brief pages are there to shorten it.
+    """
+    result = frame.get("result")
+    events = result.get("events") if isinstance(result, dict) else None
+    log.info(
+        "history forwarded",
+        device_id=device_id,
+        session_id=pending.session_id,
+        brief=pending.brief,
+        ok=frame.get("ok") is True,
+        events=len(events) if isinstance(events, list) else None,
+        chars=size,
+        ms=int((time.monotonic() - pending.started) * 1000),
+    )
 
 
 def _session_being_closed(frame: Frame) -> str:

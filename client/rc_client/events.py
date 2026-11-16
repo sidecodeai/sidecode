@@ -17,6 +17,8 @@ MAX_PATCH_BYTES = 32 * 1024
 MAX_EVENT_BYTES = 64 * 1024
 MAX_BLOCK_BYTES = 1024 * 1024
 DELTA_FLUSH_MS = 80
+# How much of a tool call's input a brief history page keeps (A60).
+BRIEF_INPUT_BYTES = 1024
 
 TRUNCATION_MARKER = "\n…[truncated]"
 
@@ -160,6 +162,37 @@ def _fit_frame(bounded: dict[str, Any]) -> dict[str, Any]:
                 continue
             break
     return bounded
+
+
+def brief_event(event: dict[str, Any]) -> dict[str, Any]:
+    """A history event as a brief page carries it (A60).
+
+    A tool call keeps what draws its row — its title, name, kind, status and
+    ids, and a diff's path and counts — with at most 1 KiB of its input and none
+    of its output or patch, each cut marked as 2.6 marks one. Every other event
+    is unchanged. What was cut is fetched with `session.block`, as anything cut
+    by 2.6 is.
+    """
+    if event.get("kind") != "tool_call":
+        return event
+    brief = dict(event)
+    raw_input = brief.get("input")
+    if isinstance(raw_input, dict):
+        value, cut = bound_object(raw_input, BRIEF_INPUT_BYTES)
+        brief["input"] = value
+        if cut:
+            brief["input_truncated"] = True
+    if "output" in brief:
+        output = brief.pop("output")
+        if output:
+            brief["output_truncated"] = True
+    diff = brief.get("diff")
+    if isinstance(diff, dict) and "patch" in diff:
+        trimmed = {key: value for key, value in diff.items() if key != "patch"}
+        if diff.get("patch"):
+            trimmed["patch_truncated"] = True
+        brief["diff"] = trimmed
+    return brief
 
 
 def bound_block(event: dict[str, Any]) -> dict[str, Any]:

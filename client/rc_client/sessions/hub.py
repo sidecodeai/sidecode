@@ -24,6 +24,7 @@ from ..agents.pi.adapter import PiRunner
 from ..agents.pi.service import PiExtensionService
 from ..agents.registry import RunnerSpec, offline_commands, runner_for
 from ..errors import RcError, TerminalNotReady
+from ..events import brief_event
 from ..git import create_worktree, session_git, slugify
 from ..logging_setup import logger
 from ..models import (
@@ -1178,6 +1179,7 @@ class SessionHub:
         return result
 
     async def history(self, params: dict[str, Any]) -> dict[str, Any]:
+        """One page of stored events (6.4); with `brief`, tool calls cut short (A60)."""
         session_id = str(params.get("session_id") or "")
         self.entry(session_id)
         before_seq = _as_int(params.get("before_seq"), "before_seq")
@@ -1185,7 +1187,12 @@ class SessionHub:
         if before_seq is not None and after_seq is not None:
             raise RcError("bad_request", "before_seq and after_seq are mutually exclusive")
         limit = _as_int(params.get("limit"), "limit") or 200
+        brief = params.get("brief", False)
+        if not isinstance(brief, bool):
+            raise RcError("bad_request", "brief must be a boolean")
         events, has_more = self.registry.history(session_id, before_seq, limit, after_seq)
+        if brief:
+            events = [brief_event(event) for event in events]
         return {"events": events, "has_more": has_more}
 
     async def block(self, params: dict[str, Any]) -> dict[str, Any]:

@@ -843,6 +843,11 @@
           "minimum": 1,
           "maximum": 1000,
           "default": 200
+        },
+        "brief": {
+          "type": "boolean",
+          "default": false,
+          "description": "Cut every tool_call in the page harder than the size bounds do: input to at most 1 KiB of JSON (input_truncated), no output (output_truncated when there was any), no diff.patch (patch_truncated when there was one). Every other event is unchanged; session.block returns the whole block (A60). A device from before A60 ignores it."
         }
       },
       "required": [
@@ -850,7 +855,7 @@
         "id",
         "session_id"
       ],
-      "description": "Page a session's stored history. `before_seq` walks backwards from the newest event; `after_seq` walks forwards and is what the gateway uses to backfill its replay buffer after a device link outage (amendment A9). The two cursors are mutually exclusive."
+      "description": "Page a session's stored history. `before_seq` walks backwards from the newest event; `after_seq` walks forwards and is what the gateway uses to backfill its replay buffer after a device link outage (amendment A9). The two cursors are mutually exclusive. `brief` asks for tool calls cut short, for an app drawing a transcript (A60)."
     },
     "SessionBlock": {
       "allOf": [

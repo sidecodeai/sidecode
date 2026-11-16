@@ -76,7 +76,7 @@ async def device_socket(ws: WebSocket) -> None:
     try:
         # The slot is claimed only once the hello parses: a client stuck in a reconnect loop
         # would otherwise close its own working connection with 4001 on every attempt.
-        hello = await asyncio.wait_for(_receive(reader), timeout=HELLO_TIMEOUT_SECONDS)
+        hello, _ = await asyncio.wait_for(_receive(reader), timeout=HELLO_TIMEOUT_SECONDS)
         if hello is None or frame_type(hello) != "hello":
             await connection.stop(code=CLOSE_PROTOCOL_ERROR, reason=BAD_HELLO_CLOSE_REASON)
             return
@@ -105,11 +105,11 @@ async def device_socket(ws: WebSocket) -> None:
             },
         )
         while True:
-            frame = await _receive(reader)
+            frame, size = await _receive(reader)
             if frame is None:
                 continue
             connection.note_frame()
-            await state.hub.handle_device_frame(connection, frame)
+            await state.hub.handle_device_frame(connection, frame, size=size)
     except (TimeoutError, WebSocketDisconnect):
         pass
     except BinaryFrames as exc:
@@ -154,12 +154,12 @@ def _claimed_device_id(ws: WebSocket) -> str:
     return "".join(char for char in claimed if char.isalnum() or char in "-_")[:64]
 
 
-async def _receive(reader: TextReader) -> dict[str, Any] | None:
-    """Read one JSON object; malformed text is ignored rather than fatal."""
+async def _receive(reader: TextReader) -> tuple[dict[str, Any] | None, int]:
+    """Read one JSON object and the length of its text; malformed text is ignored, not fatal."""
     raw = await reader.read()
     try:
         frame = json.loads(raw)
     except ValueError:
         log.warning("malformed frame ignored", bytes=len(raw))
-        return None
-    return frame if isinstance(frame, dict) else None
+        return None, len(raw)
+    return (frame if isinstance(frame, dict) else None), len(raw)

@@ -29,6 +29,8 @@ Frame = dict[str, Any]
 
 #: With `archived: true` it closes a session the device drives (A39); the gateway watches for one.
 SESSION_ARCHIVE = "session.archive"
+#: A page of a session's stored events, which the gateway logs the size and time of (A60).
+SESSION_HISTORY = "session.history"
 
 #: App requests the gateway forwards to a device, mapped to the field that names the target.
 FORWARDED_BY_SESSION = frozenset(
@@ -38,7 +40,7 @@ FORWARDED_BY_SESSION = frozenset(
         "session.approve",
         "session.answer",
         "session.set",
-        "session.history",
+        SESSION_HISTORY,
         "session.block",
         "session.commands",
         "session.command",
