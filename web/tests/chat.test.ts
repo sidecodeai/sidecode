@@ -9,9 +9,12 @@ const subscribe = vi.fn();
 const unsubscribe = vi.fn();
 const updateCursor = vi.fn();
 
+/** Whether the app socket is up; down, an open subscribes to nothing. */
+let socketUp = true;
+
 vi.mock('../src/lib/gateway', () => ({
   rpc: (...args: unknown[]) => rpc(...args),
-  getSocket: () => ({ subscribe, unsubscribe, updateCursor }),
+  getSocket: () => (socketUp ? { subscribe, unsubscribe, updateCursor } : null),
   setSocket: vi.fn(),
 }));
 
@@ -143,20 +146,25 @@ function openFresh(): Handlers {
 /**
  * The same for a conversation whose newest page was read, which is what a reply
  * that carries events or a cursor is a reconnect of: its transcript is what the
- * device sent, and nothing more is owed from it.
+ * device sent, and nothing more is owed from it. The read is marked before the
+ * open, with the socket down, so the open sends no newest page beside its
+ * subscribe (§5.2).
  */
 function openSession(): Handlers {
-  const handlers = openFresh();
+  socketUp = false;
+  useChat.getState().open(DEVICE, SESSION);
+  socketUp = true;
   useChat.setState((s) => ({
     sessions: { ...s.sessions, [KEY]: { ...s.sessions[KEY]!, historyLoaded: true } },
   }));
-  return handlers;
+  return openFresh();
 }
 
 const chat = () => useChat.getState().sessions[KEY];
 const summary = () => useSessions.getState().sessions[KEY];
 
 beforeEach(() => {
+  socketUp = true;
   rpc.mockReset();
   subscribe.mockReset();
   unsubscribe.mockReset();
@@ -193,7 +201,7 @@ describe('subscribe replay', () => {
     expect(chat()?.queue.map((q) => q.id)).toEqual(['q1', 'q2']);
     // The timeline still drops the state-only kinds.
     expect(chat()?.timeline.order).toEqual(['b12']);
-    expect(chat()?.ready).toBe(true);
+    expect(chat()?.subscription).toBe('live');
   });
 
   it('keeps the subscribe summary authoritative over replayed snapshots', () => {
@@ -311,8 +319,8 @@ describe('subscribe replay', () => {
     });
 
     it('keeps the older pages the reader loaded, and where the transcript begins', async () => {
-      const handlers = openFresh();
       rpc.mockResolvedValueOnce({ events: [textEvent(40, 'newest')], has_more: true });
+      const handlers = openFresh();
       handlers.onResult({ session, resync: false, events: [] });
       await vi.waitFor(() => expect(chat()?.timeline.order).toEqual(['b40']));
       rpc.mockResolvedValueOnce({ events: [textEvent(10, 'older')], has_more: false });
@@ -367,7 +375,7 @@ describe('subscribe replay', () => {
   it('records a subscribe failure without wedging the view', () => {
     const handlers = openSession();
     handlers.onError(new Error('device_offline'));
-    expect(chat()?.ready).toBe(true);
+    expect(chat()?.subscription).toBe('failed');
     expect(chat()?.error).toBe('device_offline');
   });
 });
@@ -393,11 +401,11 @@ describe('history paging', () => {
   });
 
   it('applies the todos snapshot from the newest page', async () => {
-    const handlers = openFresh();
     rpc.mockResolvedValueOnce({
       events: [todosEvent(3, 1), textEvent(4, 'first answer')],
       has_more: true,
     });
+    const handlers = openFresh();
     handlers.onResult({ session, resync: false, events: [] });
 
     await vi.waitFor(() => expect(chat()?.timeline.order).toEqual(['b4']));
@@ -439,8 +447,8 @@ describe('history paging', () => {
   });
 
   it('never lets an older page roll the todos snapshot back', async () => {
-    const handlers = openFresh();
     rpc.mockResolvedValueOnce({ events: [todosEvent(30, 2), textEvent(31, 'newest')], has_more: true });
+    const handlers = openFresh();
     handlers.onResult({ session, resync: false, events: [] });
     await vi.waitFor(() => expect(chat()?.todos[1]?.status).toBe('completed'));
 
@@ -455,8 +463,8 @@ describe('history paging', () => {
   });
 
   it('sends before_seq only once an older page is requested', async () => {
-    const handlers = openFresh();
     rpc.mockResolvedValueOnce({ events: [textEvent(40, 'newest')], has_more: true });
+    const handlers = openFresh();
     handlers.onResult({ session, resync: false, events: [] });
     await vi.waitFor(() => expect(chat()?.timeline.order).toEqual(['b40']));
 
@@ -483,6 +491,149 @@ describe('account scope', () => {
     await expansion;
 
     expect(chat()?.timeline.items.b100?.event).toMatchObject({ text: 'new' });
+  });
+});
+
+/**
+ * §5.2: opening a conversation does not wait for one answer before asking the
+ * next. The newest page goes out beside the subscribe, the two are merged by
+ * block whichever answers first, and a copy kept from an earlier visit that the
+ * session has moved far past is read again from the newest page.
+ */
+describe('opening a conversation', () => {
+  const historyCalls = () => rpc.mock.calls.filter((c) => c[0] === 'session.history').map((c) => c[1]);
+  const newestPage = { session_id: SESSION, limit: 200, brief: true };
+
+  it('asks for the newest page beside the subscribe, before its reply', () => {
+    rpc.mockReturnValueOnce(new Promise(() => undefined));
+    openFresh();
+
+    expect(subscribe).toHaveBeenLastCalledWith(SESSION, undefined, expect.any(Object));
+    expect(historyCalls()).toEqual([newestPage]);
+  });
+
+  it('merges the page that answers first and asks for it no second time', async () => {
+    rpc.mockResolvedValueOnce({ events: [textEvent(40, 'newest')], has_more: false });
+    const handlers = openFresh();
+    await vi.waitFor(() => expect(chat()?.historyLoaded).toBe(true));
+
+    handlers.onResult({ session: { ...session, last_seq: 40 }, resync: false, events: [] });
+
+    expect(chat()?.timeline.order).toEqual(['b40']);
+    expect(chat()?.subscription).toBe('live');
+    expect(historyCalls()).toHaveLength(1);
+  });
+
+  it('merges the page that answers after the subscribe and asks for it no second time', async () => {
+    let resolvePage!: (result: HistoryResult) => void;
+    rpc.mockReturnValueOnce(new Promise<HistoryResult>((resolve) => { resolvePage = resolve; }));
+    const handlers = openFresh();
+    handlers.onResult({ session: { ...session, last_seq: 40 }, resync: false, events: [] });
+    // A live event can land between the two answers.
+    useChat.getState().ingestEvent(SESSION, textEvent(41, 'live'), DEVICE);
+
+    resolvePage({ events: [textEvent(39, 'older'), textEvent(40, 'newest')], has_more: false });
+
+    await vi.waitFor(() => expect(chat()?.timeline.order).toEqual(['b39', 'b40', 'b41']));
+    expect(historyCalls()).toHaveLength(1);
+    expect(hasGap(chat()!.timeline)).toBe(false);
+  });
+
+  // The subscribe went out first, so the page holds everything up to the count
+  // its reply carries; what lies past the page's last event was never stored.
+  it('counts as read what the device never stored, whichever answered first', async () => {
+    let resolvePage!: (result: HistoryResult) => void;
+    rpc.mockReturnValueOnce(new Promise<HistoryResult>((resolve) => { resolvePage = resolve; }));
+    openFresh().onResult({ session: { ...session, last_seq: 112 }, resync: false, events: [] });
+    resolvePage({ events: [textEvent(109, 'a'), textEvent(110, 'b')], has_more: false });
+    await vi.waitFor(() => expect(chat()?.timeline.lastSeq).toBe(112));
+    rpc.mockClear();
+
+    useChat.getState().ingestEvent(SESSION, textEvent(113, 'the next turn'), DEVICE);
+
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it('keeps a subscribe failure in view when the page beside it reads well', async () => {
+    let resolvePage!: (result: HistoryResult) => void;
+    rpc.mockReturnValueOnce(new Promise<HistoryResult>((resolve) => { resolvePage = resolve; }));
+    openFresh().onError(new RequestError({ code: 'timeout', message: '' }));
+
+    resolvePage({ events: [textEvent(40, 'newest')], has_more: false });
+
+    await vi.waitFor(() => expect(chat()?.historyLoaded).toBe(true));
+    expect(chat()?.error).toBe(strings.errors.timeout);
+    expect(chat()?.timeline.order).toEqual(['b40']);
+  });
+
+  it('subscribes again on retry while the page beside a failed subscribe is still out', () => {
+    rpc.mockReturnValueOnce(new Promise(() => undefined));
+    openFresh().onError(new RequestError({ code: 'timeout', message: '' }));
+    subscribe.mockClear();
+
+    useChat.getState().retry(KEY);
+
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    // The page is still out, and nothing asks for it twice.
+    expect(historyCalls()).toHaveLength(1);
+  });
+
+  describe('a copy kept from an earlier visit', () => {
+    /** A conversation read as far as event 5, then left. */
+    function readAndLeave(): void {
+      openSession().onResult({ session: { ...session, last_seq: 5 }, resync: false, events: [textEvent(5, 'old')] });
+      useChat.getState().close(DEVICE, SESSION);
+      rpc.mockClear();
+      subscribe.mockClear();
+    }
+
+    const movedOnTo = (lastSeq: number) => useSessions.getState().upsert({ ...session, last_seq: lastSeq });
+
+    it('is read again from the newest page when the session moved more than 300 past it', () => {
+      readAndLeave();
+      movedOnTo(306);
+      rpc.mockReturnValueOnce(new Promise(() => undefined));
+
+      useChat.getState().open(DEVICE, SESSION, { fresh: true });
+
+      expect(subscribe).toHaveBeenLastCalledWith(SESSION, undefined, expect.any(Object));
+      expect(historyCalls()).toEqual([newestPage]);
+      // No forward walk from the old cursor, and nothing of the copy to join it to.
+      expect(chat()?.timeline.order).toEqual([]);
+      expect(chat()?.historyLoaded).toBe(false);
+    });
+
+    it('is joined from its cursor when the session moved 300 or fewer past it', () => {
+      readAndLeave();
+      movedOnTo(305);
+
+      useChat.getState().open(DEVICE, SESSION, { fresh: true });
+
+      expect(subscribe).toHaveBeenLastCalledWith(SESSION, 5, expect.any(Object));
+      expect(historyCalls()).toEqual([]);
+      expect(chat()?.timeline.order).toEqual(['b5']);
+    });
+
+    it('is kept on a reconnect however far the session moved', () => {
+      readAndLeave();
+      movedOnTo(2_000);
+
+      useChat.getState().open(DEVICE, SESSION);
+
+      expect(subscribe).toHaveBeenLastCalledWith(SESSION, 5, expect.any(Object));
+      expect(chat()?.timeline.order).toEqual(['b5']);
+    });
+
+    it('is not taken for current before its own subscribe has answered', () => {
+      readAndLeave();
+      expect(chat()?.subscription).toBe('pending');
+
+      useChat.getState().open(DEVICE, SESSION, { fresh: true });
+      expect(chat()?.subscription).toBe('pending');
+
+      (subscribe.mock.calls.at(-1)![2] as Handlers).onResult({ session, resync: false, events: [] });
+      expect(chat()?.subscription).toBe('live');
+    });
   });
 });
 
@@ -1140,7 +1291,7 @@ describe('a conversation that could not be read', () => {
   it('says why a subscribe failed, and subscribes again on retry', () => {
     openFresh().onError(new RequestError({ code: 'timeout', message: '' }));
     expect(chat()?.error).toBe(strings.errors.timeout);
-    expect(chat()?.ready).toBe(true);
+    expect(chat()?.subscription).toBe('failed');
 
     subscribe.mockClear();
     useChat.getState().retry(KEY);
@@ -1148,8 +1299,8 @@ describe('a conversation that could not be read', () => {
   });
 
   it('does not report an older page that fails: scrolling up asks for it again', async () => {
-    const handlers = openFresh();
     rpc.mockResolvedValueOnce({ events: [textEvent(40, 'newest')], has_more: true });
+    const handlers = openFresh();
     handlers.onResult({ session, resync: false, events: [] });
     await vi.waitFor(() => expect(chat()?.timeline.order).toEqual(['b40']));
 

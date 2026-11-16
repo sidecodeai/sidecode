@@ -89,7 +89,7 @@ const chatOf = (s: Session, queue: QueuedMessage[]): ChatSession => ({
   queue,
   queueSeq: 0,
   usage: null,
-  ready: true,
+  subscription: 'live',
   historyLoading: false,
   historyHasMore: false,
   historyLoaded: true,

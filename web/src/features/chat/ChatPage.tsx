@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { errorText, queueRemoveText, refusalText } from '../../lib/errors';
 import { rpc } from '../../lib/gateway';
@@ -77,12 +77,18 @@ export function ChatPage() {
     [device, session?.agent],
   );
 
+  // §5.2: the conversation this page last opened. A run of the effect below for
+  // another one is the person opening it; one for the same is the socket
+  // coming back, which keeps the copy and the reader's place.
+  const openedKey = useRef<string | null>(null);
   useEffect(() => {
     if (!deviceId || !sessionId) return;
     if (socketStatus !== 'open') return;
-    openChat(deviceId, sessionId);
+    const fresh = openedKey.current !== key;
+    openedKey.current = key;
+    openChat(deviceId, sessionId, { fresh });
     return () => closeChat(deviceId, sessionId);
-  }, [deviceId, sessionId, socketStatus, openChat, closeChat]);
+  }, [deviceId, sessionId, key, socketStatus, openChat, closeChat]);
 
   // A47: an open conversation is a seen one only while the page is in front.
   useFrontConversation(deviceId, sessionId);

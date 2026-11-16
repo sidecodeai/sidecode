@@ -4,10 +4,18 @@
  * in, and when the rows start again (`docs/DESIGN.md` § "Keeping a transcript
  * whole").
  */
+import type { SubscribeResult } from '../protocol/frames';
 import type { SessionEvent } from '../protocol/types';
 import type { ChatSession } from './chat';
-import { foldPage } from './chatFold';
-import { hasGap, keepOptimistic, mergeMissed, type TimelineState } from './timeline';
+import { foldChat, foldPage } from './chatFold';
+import {
+  applyEvents,
+  dropQueued,
+  hasGap,
+  keepOptimistic,
+  mergeMissed,
+  type TimelineState,
+} from './timeline';
 
 /**
  * How many pages one repair walks forward before giving up on joining. A device
@@ -61,6 +69,31 @@ export function restart(chat: ChatSession): ChatSession {
 }
 
 /**
+ * §5.2: how far the session may have moved on past a copy kept from an earlier
+ * visit before that copy is worth nothing. Walking forward to join more than
+ * this is slower than reading the newest page, which is what the reader opens
+ * on anyway.
+ */
+export const STALE_AFTER = 300;
+
+/**
+ * Whether a copy kept from an earlier visit is stale: the session's own count
+ * of its last event is more than `STALE_AFTER` past the copy's cursor. A copy
+ * that was never read is not one.
+ */
+export function isStale(chat: ChatSession, lastSeq: number | undefined): boolean {
+  return chat.historyLoaded && lastSeq !== undefined && lastSeq - chat.timeline.lastSeq > STALE_AFTER;
+}
+
+/**
+ * The conversation as an open finds it: its subscribe not answered yet, and a
+ * stale copy started again from the newest page (§5.2), which a cold open reads.
+ */
+export function reopen(chat: ChatSession, stale: boolean): ChatSession {
+  return { ...(stale ? restart(chat) : chat), closedSeq: null, subscription: 'pending' };
+}
+
+/**
  * What a subscribe reply still owes from the device: the newest page when none
  * has been read (a `resync` of a conversation with no rows puts it back to
  * that), or the repair of a stretch the gateway could not serve (a `resync`) or
@@ -72,4 +105,33 @@ export function restart(chat: ChatSession): ChatSession {
 export function owedAfterSubscribe(chat: ChatSession, resync: boolean): 'newest' | 'repair' | null {
   if (!chat.historyLoaded) return 'newest';
   return resync || hasGap(chat.timeline) ? 'repair' : null;
+}
+
+/**
+ * A subscribe reply folded in. A resync no longer clears the transcript: the
+ * rows stay where the reader left them, and the repair joins what the device
+ * holds after the cursor; only a conversation with nothing to keep asks for the
+ * newest page afresh, which wants `historyHasMore` back. The buffered events
+ * carry todos and queue snapshots the timeline drops, and the reply's own queue
+ * snapshot wins over them (A6). The subscribe worked, so the failure it
+ * answers is cleared, unless what it still owes from the device is unpaid.
+ */
+export function foldSubscribe(chat: ChatSession, result: SubscribeResult): ChatSession {
+  const base =
+    result.resync && chat.timeline.order.length === 0
+      ? { ...chat, historyHasMore: true, historyLoaded: false }
+      : chat;
+  const folded = result.events.reduce(foldChat, base);
+  const queue = result.queue ? result.queue.pending : folded.queue;
+  const timeline = dropQueued(
+    applyEvents(folded.timeline, result.events),
+    queue.map((item) => item.id),
+  );
+  const next: ChatSession = {
+    ...adopt(folded, timeline),
+    queue,
+    usage: result.session.usage ?? folded.usage,
+    subscription: 'live',
+  };
+  return owedAfterSubscribe(next, result.resync) === null ? { ...next, error: null } : next;
 }

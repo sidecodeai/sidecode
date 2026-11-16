@@ -24,14 +24,21 @@ import type {
   Usage,
 } from '../protocol/types';
 import { foldChat, foldLate, foldPage, foldSession } from './chatFold';
-import { REPAIR_PAGES, absorbMissed, adopt, owedAfterSubscribe, restart } from './chatSync';
+import {
+  REPAIR_PAGES,
+  absorbMissed,
+  adopt,
+  foldSubscribe,
+  isStale,
+  owedAfterSubscribe,
+  reopen,
+  restart,
+} from './chatSync';
 import {
   addOptimistic,
   applyEvent,
-  applyEvents,
   beginRepair,
   coverThrough,
-  dropQueued,
   emptyTimeline,
   hasGap,
   markAccepted,
@@ -85,7 +92,13 @@ export interface ChatSession {
    */
   queueSeq: number;
   usage: Usage | null;
-  ready: boolean;
+  /**
+   * Where this open's `session.subscribe` stands. `close` puts it back to
+   * `pending`, so a conversation opened again is not taken for current before
+   * its own subscribe has answered (§5.1 places the reader only then), and a
+   * newest page that reads well never clears the failure of a subscribe.
+   */
+  subscription: 'pending' | 'live' | 'failed';
   historyLoading: boolean;
   historyHasMore: boolean;
   /**
@@ -130,7 +143,7 @@ function blank(deviceId: string, sessionId: string): ChatSession {
     queue: [],
     queueSeq: 0,
     usage: null,
-    ready: false,
+    subscription: 'pending',
     historyLoading: false,
     historyHasMore: true,
     historyLoaded: false,
@@ -178,7 +191,14 @@ function evictClosed(sessions: Record<string, ChatSession>): Record<string, Chat
 
 interface ChatState {
   sessions: Record<string, ChatSession>;
-  open: (deviceId: string, sessionId: string) => void;
+  /**
+   * Subscribe to a conversation and read what it owes. `fresh` says the person
+   * is opening it — from a list, a notification, a link or another
+   * conversation — rather than the app subscribing again after a reconnect:
+   * only then is a stale copy from an earlier visit read again from the newest
+   * page (§5.2).
+   */
+  open: (deviceId: string, sessionId: string, options?: { fresh?: boolean }) => void;
   close: (deviceId: string, sessionId: string) => void;
   ingestEvent: (sessionId: string, event: SessionEvent, deviceId?: string) => void;
   loadOlder: (key: string) => Promise<void>;
@@ -193,7 +213,8 @@ interface ChatState {
   /**
    * Try again whatever failed: subscribe afresh, which reads the newest page if
    * none was read and repairs what is missing. A load or a repair already on
-   * its way is left to finish.
+   * its way is left to finish, except a newest page beside a subscribe that
+   * failed.
    */
   retry: (key: string) => void;
   expandBlock: (key: string, blockId: string) => Promise<void>;
@@ -242,65 +263,52 @@ function upsertSessionFrom(key: string, events: readonly SessionEvent[]): void {
 export const useChat = create<ChatState>((set, get) => ({
   sessions: {},
 
-  open: (deviceId, sessionId) => {
+  open: (deviceId, sessionId, options = {}) => {
     const sent = epoch;
     const key = sessionKey(deviceId, sessionId);
+    const lastSeq = useSessions.getState().sessions[key]?.last_seq;
     if (!get().sessions[key]) {
       set((s) => ({ sessions: { ...s.sessions, [key]: blank(deviceId, sessionId) } }));
     } else {
-      patch(set, key, (chat) => (chat.closedSeq === null ? chat : { ...chat, closedSeq: null }));
+      patch(set, key, (chat) => reopen(chat, options.fresh === true && isStale(chat, lastSeq)));
     }
     const socket = getSocket();
-    if (!socket) return;
-    const existing = get().sessions[key];
-    socket.subscribe(sessionId, existing?.timeline.lastSeq || undefined, {
+    const chat = get().sessions[key];
+    if (!socket || !chat) return;
+    // §5.2: an unread newest page goes out beside the subscribe rather than
+    // after its reply, and the two are merged by block whichever answers first.
+    const both = chat.historyLoaded ? null : countAfterBoth(set, key);
+    socket.subscribe(sessionId, chat.timeline.lastSeq || undefined, {
       onResult: (result) => {
         if (sent !== epoch) return;
         // Replayed state events can predate this summary after a device reconnect.
         // last_seq is an event cursor, not a version of the summary's state.
         useSessions.getState().upsert(result.session);
-        patch(set, key, (chat) => {
-          // A resync no longer clears the transcript: the rows stay where the
-          // reader left them, and `repair` joins what the device holds after the
-          // cursor. Only a conversation with nothing to keep asks for the newest
-          // page afresh, which wants `historyHasMore` back.
-          const base =
-            result.resync && chat.timeline.order.length === 0
-              ? { ...chat, historyHasMore: true, historyLoaded: false }
-              : chat;
-          // Buffered events carry todos and queue snapshots the timeline drops.
-          const folded = result.events.reduce(foldChat, base);
-          // Amendment A6: an explicit queue snapshot wins over replayed events.
-          const queue = result.queue ? result.queue.pending : folded.queue;
-          const timeline = dropQueued(
-            applyEvents(folded.timeline, result.events),
-            queue.map((item) => item.id),
-          );
-          const next = {
-            ...adopt(folded, timeline),
-            queue,
-            usage: result.session.usage ?? folded.usage,
-            ready: true,
-          };
-          // The subscribe worked. A failure of what it still owes from the
-          // device stays in view until that is paid.
-          return owedAfterSubscribe(next, result.resync) === null ? { ...next, error: null } : next;
-        });
-        const chat = get().sessions[key];
-        if (chat === undefined) return;
-        const owed = owedAfterSubscribe(chat, result.resync);
+        patch(set, key, (c) => foldSubscribe(c, result));
+        both?.subscribed(result.session.last_seq);
+        const next = get().sessions[key];
+        if (next === undefined) return;
+        const owed = owedAfterSubscribe(next, result.resync);
         if (owed === 'newest') void get().loadOlder(key);
         else if (owed === 'repair') void get().repair(key);
       },
       onError: (err) => {
         if (sent !== epoch) return;
-        patch(set, key, (chat) => ({
-          ...chat,
-          ready: true,
+        patch(set, key, (c) => ({
+          ...c,
+          subscription: 'failed',
           error: errorText(err, strings.errors.historyFailed),
         }));
       },
     });
+    if (both === null) return;
+    const generation = chat.generation;
+    void get()
+      .loadOlder(key)
+      .then(() => {
+        const read = get().sessions[key];
+        if (sent === epoch && read?.historyLoaded && read.generation === generation) both.pageRead();
+      });
   },
 
   close: (deviceId, sessionId) => {
@@ -311,7 +319,10 @@ export const useChat = create<ChatState>((set, get) => ({
       if (!chat) return {};
       closeTick += 1;
       return {
-        sessions: evictClosed({ ...s.sessions, [key]: { ...chat, closedSeq: closeTick } }),
+        sessions: evictClosed({
+          ...s.sessions,
+          [key]: { ...chat, closedSeq: closeTick, subscription: 'pending' },
+        }),
       };
     });
   },
@@ -391,7 +402,8 @@ export const useChat = create<ChatState>((set, get) => ({
           historyLoading: false,
           historyHasMore: result.has_more,
           historyLoaded: true,
-          error: first ? null : c.error,
+          // Read beside the subscribe (§5.2), the page clears no failure of it.
+          error: first && c.subscription !== 'failed' ? null : c.error,
         };
       });
       // A hole noticed while the failure held the repair back is asked for now.
@@ -467,7 +479,11 @@ export const useChat = create<ChatState>((set, get) => ({
 
   retry: (key) => {
     const chat = get().sessions[key];
-    if (!chat || chat.historyLoading || repairsInFlight.has(key)) return;
+    if (!chat || repairsInFlight.has(key)) return;
+    // A page on its way is left to finish, unless the subscribe beside it
+    // failed: the page cannot stand in for that, and opening again asks for
+    // no second one while it is out.
+    if (chat.historyLoading && chat.subscription !== 'failed') return;
     get().open(chat.deviceId, chat.sessionId);
   },
 
@@ -581,6 +597,36 @@ export const useChat = create<ChatState>((set, get) => ({
 }));
 
 type Setter = (fn: (s: ChatState) => Partial<ChatState>) => void;
+
+/**
+ * §5.2: the newest page and the subscribe went out together, the subscribe
+ * first, so the page holds at least everything up to the count the subscribe's
+ * reply carries. Once both have answered, whichever came first, nothing up to
+ * that count is missing (`docs/DESIGN.md` § "Keeping a transcript whole": what
+ * the device never stored is not a hole).
+ */
+function countAfterBoth(
+  set: Setter,
+  key: string,
+): { subscribed: (count: number) => void; pageRead: () => void } {
+  let counted: number | null = null;
+  let read = false;
+  const cover = () => {
+    if (counted === null || !read) return;
+    const seq = counted;
+    patch(set, key, (chat) => ({ ...chat, timeline: coverThrough(chat.timeline, seq) }));
+  };
+  return {
+    subscribed: (count) => {
+      counted = count;
+      cover();
+    },
+    pageRead: () => {
+      read = true;
+      cover();
+    },
+  };
+}
 
 /** Put a message in the timeline before the device has echoed it back. */
 function showPending(

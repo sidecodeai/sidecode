@@ -166,7 +166,7 @@ describe('a draft belongs to its session', () => {
           queue: [],
           queueSeq: 0,
           usage: null,
-          ready: true,
+          subscription: 'live',
           historyLoading: false,
           historyHasMore: false,
           historyLoaded: true,

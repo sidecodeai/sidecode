@@ -697,7 +697,7 @@ describe.runIf(fixturesAvailable())('A19 a held message is a queue entry', () =>
       queue: [],
       queueSeq: 0,
       usage: null,
-      ready: true,
+      subscription: 'live',
       historyLoading: false,
       historyHasMore: false,
       historyLoaded: true,

@@ -107,8 +107,11 @@ describe('the command list', () => {
 describe('running one command', () => {
   const rows = () =>
     selectView(useChat.getState().sessions[KEY]?.timeline ?? emptyTimeline(), 'detailed').roots;
+  // The open asks for the newest page beside its subscribe (§5.2); the command is its own call.
+  const commandCall = () => rpc.mock.calls.find((call) => call[0] === 'session.command') ?? [];
 
   beforeEach(() => {
+    rpc.mockReturnValueOnce(new Promise(() => undefined));
     useChat.getState().open(DEVICE, SESSION);
   });
 
@@ -116,7 +119,7 @@ describe('running one command', () => {
     rpc.mockResolvedValue({});
     await useChat.getState().runCommand(KEY, 'review', 'focus on the retry logic');
 
-    const [type, params, options] = rpc.mock.calls[0] ?? [];
+    const [type, params, options] = commandCall();
     expect(type).toBe('session.command');
     expect(params).toEqual({
       session_id: SESSION,
@@ -138,7 +141,7 @@ describe('running one command', () => {
   it('leaves the argument out when the command takes none', async () => {
     rpc.mockResolvedValue({});
     await useChat.getState().runCommand(KEY, 'compact');
-    expect(rpc.mock.calls[0]?.[1]).toEqual({ session_id: SESSION, name: 'compact' });
+    expect(commandCall()[1]).toEqual({ session_id: SESSION, name: 'compact' });
     expect(rows().at(-1)?.event).toMatchObject({ text: '/compact' });
   });
 
