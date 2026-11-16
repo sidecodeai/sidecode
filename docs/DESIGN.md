@@ -902,75 +902,211 @@ edited — its files are on the device, and nothing can bring them back into the
 has the paperclip and Remove, and tapping it does nothing. On a composer that is disabled (the
 terminal holds the session, the device is offline) the list still opens, and offers Remove only.
 
-**Voice** dictates into the composer's own field rather than into a separate panel. Tapping the
-mic starts listening on the web as on the phone — there is no hold-to-talk chord to learn: a waveform and an
-elapsed timer take the control row, and there is exactly one button, Done, which stops listening
-and keeps the transcript in the field; it stands where Send stands, at Send's size, because it is
-the one primary action while listening. There is no Cancel: a dictation you do not want is Done
-and then edited or cleared like any draft, and a second button of a different size beside the
-primary only made the row look unfinished. There is no time limit; listening runs until Done is
-tapped, and only leaving the app ends listening early: the background suspends a dictation that is
-still listening with its words kept, while Control Centre, the app switcher's peek, an incoming-call banner and a system alert only
-make the app inactive, and dictation listens through them — as the app lock stays down through
-them, engaging when the app returns from the background and not before, exactly as its own footer
-says. On iOS a soft multi-colour glow runs around the edge of the whole display while
-listening, the way Siri does, never around the field alone. The glow is meant to be seen, not
-found: in silence it rests as a band of light plainly present along all four edges, and ordinary
-speech at a conversational level swells it unmistakably — the rim brightens and the halo spills
-well into the page margin, rising fast and falling slow so it reads as breathing rather than as a
-meter. It is still light spilling in from outside the glass, not a border: the page under it stays
-readable to the margin, and the colour never reaches the text. The label says "Transcribing live ·
-edit before sending", and it means it — the transcript is a draft you edit and send with the
-ordinary Send button; no utterance is ever sent by the act of stopping the recording. The mic
-disappears entirely when the gateway has no speech backend rather than failing when pressed.
+**Voice** dictates into the composer's own field rather than into a separate panel. Tapping the mic
+starts listening on the web as on the phone — there is no hold-to-talk chord to learn: a waveform
+and an elapsed timer take the control row (the listening row, below), and there is exactly one
+button, Done, which stops listening and keeps the transcript in the field; it stands where Send
+stands, at Send's size, because it is the one primary action while listening. There is no Cancel: a
+dictation you do not want is Done and then edited or cleared like any draft, and a second button of
+a different size beside the primary only made the row look unfinished. There is no time limit;
+listening runs until Done is tapped, and only leaving the app ends listening early: the background
+suspends a live dictation that is still listening with its words kept, and ends a batch one as Done
+would (below), while Control Centre, the app switcher's peek, an incoming-call banner and a system
+alert only make the app inactive, and dictation listens through them — as the app lock stays down
+through them, engaging when the app returns from the background and not before, exactly as its own
+footer says. On iOS a soft multi-colour glow runs around the edge of the whole display while
+listening, the way Siri does, never around the field alone. The glow is meant to be seen, not found:
+in silence it rests as a band of light plainly present along all four edges, and ordinary speech at
+a conversational level swells it unmistakably — the rim brightens and the halo spills well into the
+page margin, rising fast and falling slow so it reads as breathing rather than as a meter. It is
+still light spilling in from outside the glass, not a border: the page under it stays readable to
+the margin, and the colour never reaches the text. The status line says "Transcribing live · edit
+before sending" while the words arrive as they are spoken, or "Recording · transcribed when you tap
+Done" while they wait for the end (below), and it means it — the transcript is a draft you edit and
+send with the ordinary Send button; no utterance is ever sent by the act of stopping the recording.
+The mic disappears entirely when the gateway has no speech backend rather than failing when pressed.
+
+**Live words where the backend streams them, the whole transcript where it does not (A57).** Most
+speech backends transcribe a recording rather than a voice: given audio, they answer with its words
+once. The gateway used to make live text out of them by transcribing everything heard so far again
+every two seconds, so the words trailed the speaker, rewrote themselves as each pass changed its
+mind, and every pass paid again for audio an earlier one had already transcribed. The composer no
+longer pretends. The gateway says whether its backend streams (`stt.streaming`), and each dictation
+takes one of two modes when it starts and keeps it to the end:
+
+- **Live**, wherever the words really arrive while they are spoken: on a gateway whose backend
+  streams them (`realtime`), on a gateway older than A57, which says nothing and keeps its old
+  behaviour, and with the phone's own recogniser. The words come into the field as they are
+  recognised, exactly as before.
+- **Batch**, for gateway dictation on any other backend. Nothing is written into the field while it
+  listens, so the draft stays exactly as it was, and the status line reads "Recording · transcribed
+  when you tap Done" (录音中 · 点完成后转写), which says why the field stays still while the
+  waveform shows the voice being heard. After Done the whole transcript lands in the field
+  in one step, after whatever the field holds then, and polish, the spinner, Send's return and
+  Polished · Undo follow as for any dictation. There is no trickle: words typed in a few at a time
+  after half a minute of nothing would only be a slower way to wait.
+
+It is how voice-memo and chat apps treat a recording: a waveform while it records, the words when
+it is done. A long dictation is still cut into segments behind the scenes, at a pause after 30
+seconds or at 45, and in both modes the cut is invisible: the waveform glides on and the timer
+counts the whole time. A batch dictation holds each segment's words in order and joins them only
+when the last has come, so the field never shows part of one, and each segment is transcribed once.
+
+**The listening row is a waveform, in both modes (A57).** While listening, the control row is a
+scrolling waveform across the width it has free, the elapsed time right after it, and Done in Send's
+slot. It replaced the level meter (the web's eleven bars, the phone's five), which said the
+microphone was on but not that anything was being kept; a waveform that runs says a recording is
+being made, which in batch mode is all the screen has to say. Each choice is there so that it reads
+as speech rather than as a meter:
+
+- **One bar for every 80 ms of sound**, about twelve a second. New bars enter at the trailing edge
+  and the row glides toward the leading edge at one bar's pitch per 80 ms, in sub-pixel steps, never
+  jumping a bar at a time; a new bar grows from a dot to its height over 120 ms. Old bars dissolve
+  across the leading edge and new ones emerge through a short fade at the trailing one, so the row
+  has no hard ends.
+- **A bar is the energy of its own 80 ms of audio**, on a decibel scale with a quiet room at the
+  dot, and its height is that level to the power 1.5, so ordinary speech spreads over the range and
+  only loud syllables reach the top; a falling bar keeps at least 55 % of the one before it, so
+  speech reads as shapes rather than flicker. The loudest peak in each window would sit near the
+  top under a browser's automatic gain and draw a fence of full bars. A bar is never a copy of the
+  one before, made up for a window that heard nothing.
+- **Silence is a gliding row of dots**, which still shows the row is live, and the row starts full
+  of them, as if silence had been recorded, so it never shows an empty stretch while the first bars
+  arrive.
+- **The time** is `m:ss` from 0:00, holding at 59:59, in tabular digits in the secondary label
+  colour, so it never jitters, and it counts the whole dictation across segment cuts.
+- **The look.** Bars are 3 wide on a pitch of 6 with round ends, at most about 60 % of the row's
+  height, in the primary label colour; every colour is a platform label colour, so dark mode
+  follows. As listening starts, the waveform and the time fade in from 98 % scale over 180 ms.
+- **Assistive technology** skips the waveform, which is decorative; the time keeps its label and is
+  not announced every second.
+
+On iOS the edge glow stays as it was, above all of this.
 
 **Dictation keeps going when you leave.** Once Done is tapped, a dictation is a job owned by an
-app-level job store (one per app, keyed by account and session), not by the composer, and it outlives
-the composer, the single open chat and every session switch on every app. Its states are
+app-level job store (one per app, keyed by account and session), not by the composer, and it
+outlives the composer, the single open chat and every session switch on every app. Its states are
 finishing (waiting for the last final transcript), polishing, and ready; or interrupted, when the
-transcription ended without a final and the partial words were kept. A polish that fails or is
-refused ends ready, with the plain transcript in the draft and the usual failure note shown when
-the session is opened. While the person stays in the session nothing changes: live words, the
-spinner, the polish in place, the Polished · Undo note. At the moment the composer would go away — a
-session switch, a deep link, a notification — it hands the job over instead of cancelling it, and
-a dictation still listening at that moment is treated as Done and handed over too, so the person can
-go straight to another session and dictate there: one recording at a time, any number of jobs
-finishing and polishing in parallel. The result lands in the open composer, which adopts the job
-and applies it by the ordinary polish rules, or, when the session is not open, in that session's
-persisted draft: on handover the live partial words are taken out of the draft if it still holds
-exactly them, the plain transcript is appended the moment it is final — before polish starts —
-and the polished text replaces it only while the draft is still as the transcript left it. Text
-typed meanwhile always wins; a result is appended, never overwrites. A job has no send path:
-the result waits in the draft for the person to check and send. The composer's status line is
-driven by the job, so reopening the session shows the live state, and the session list row carries
-a small trailing label while a job exists or its result is unseen: "Transcribing…" (转写中…),
-"Polishing…" (润色中…), "Draft ready" (草稿已就绪) and "Dictation interrupted" (听写已中断); opening
-the session clears the last two. On a phone the
-system may suspend the app while a job finishes; the job then ends interrupted with its partial
-words kept, and listening while backgrounded stays unsupported. No audio is retained and
-a transcription is never retried, so an interrupted job keeps only what was heard; the protocol
-does not change, and the gateway lets one account hold eight speech streams (`MAX_SOCKETS_PER_USER`),
-which is usually enough for several finishing jobs to overlap a new recording; switching quickly
-across more than four long dictations can still hit it.
+transcription ended without a final and what was heard was kept: a live dictation's partial words, a
+batch one's held segments. A polish that fails or is refused ends ready, with the plain transcript
+in the draft and the usual failure note shown when the session is opened. While the person stays in
+the session nothing changes: live words, the spinner, the polish in place, the Polished · Undo note.
+At the moment the composer would go away — a session switch, a deep link, a notification — it hands
+the job over instead of cancelling it, and a dictation still listening at that moment is treated as
+Done and handed over too, so the person can go straight to another session and dictate there: one
+recording at a time, any number of jobs finishing and polishing in parallel, though one per session
+— a session's mic offers no new dictation until its job's words have landed. The result lands in the
+open composer, which adopts the job and applies it by the ordinary polish rules, or, when the
+session is not open, in that session's persisted draft: on handover the live partial words are taken
+out of the draft if it still holds exactly them (a batch dictation has put none there), the plain
+transcript is appended the moment it is final — before polish starts — and the polished text
+replaces it only while the draft is still as the transcript left it. Text typed meanwhile always
+wins; a result is appended, never overwrites. A job has no send path: the result waits in the draft
+for the person to check and send. The composer's status line is driven by the job, so reopening the
+session shows the live state, and the session list row carries a small trailing label while a job
+exists or its result is unseen: "Transcribing…" (转写中…), "Polishing…" (润色中…), "Draft ready" (草稿已就绪)
+and "Dictation interrupted" (听写已中断); opening the session clears the last two. On a phone the system
+may suspend the app while a job finishes; the job then ends interrupted with its partial words, or a
+batch dictation's held segments, kept, and listening while backgrounded stays unsupported. No audio
+is retained and a transcription is never retried, so an interrupted job keeps only what was heard;
+the protocol does not change, and the gateway lets one account hold eight speech streams
+(`MAX_SOCKETS_PER_USER`), which is usually enough for several finishing jobs to overlap a new
+recording; switching quickly across more than four long dictations can still hit it.
 
 **Done becomes a spinner, and the spinner becomes Send.** The tap on Done is answered at once: the
 capsule gives way to Send's circle holding a spinner, in the same slot at the same height, and
 nothing in it can be tapped. It stays a spinner for as long as the words are still on their way —
 the backend's final transcript, and then, when polish is on, the model's answer — and turns into
 Send the moment the field holds what will be sent: the final transcript when polish is off, the
-polished words when the model answers, the dictated words when it fails. The level meter rests and
-the elapsed time stops at the moment Done was tapped; once the transcript is final the ordinary row
-returns around the spinner. A control that looks live and does nothing is the one thing the row
-must never show: the earlier form, Done still drawn as tappable while the transcript was finishing
-and Send offered while the model was still writing, was exactly that. Typing into the field while
-the spinner is up ends the wait: the person's words win, the request out is dropped, and Send comes
-back. The rule is the composer's, on both apps. On the web, Enter is Send and waits with it — a
+polished words when the model answers, the dictated words when it fails. The waveform comes to rest
+and the elapsed time stops at the moment Done was tapped (described next); once the transcript is
+final the ordinary row returns around the spinner. A control that looks live and does nothing is the
+one thing the row must never show: the earlier form, Done still drawn as tappable while the
+transcript was finishing and Send offered while the model was still writing, was exactly that.
+Typing into the field while the spinner is up ends the wait: the person's words win, the request out
+is dropped, and Send comes back — except while a batch dictation's words are still on their way,
+because they are the dictation itself (below). The rule is the composer's, on both apps. On the web, Enter is Send and waits with it — a
 keystroke that sent while the spinner is up would be the button in another guise — and the "⋯"
 menu beside Send, whose only item is a send, is not drawn while the spinner is. The one Enter
 that is never Send is the input method's: under a Chinese or Japanese IME the letters are
 composed first and Enter confirms them, and that press only puts the words in the field — the
 next one sends. A confirmation that sent would be a message the person had not finished
 writing.
+
+**At Done the waveform comes to rest, and says what it is waiting for (A57).** The tap stops the
+time, and no bar arrives after it; the glide slows to a stop over 200 ms rather than freezing
+mid-step. In 150 ms the time cross-fades to "Transcribing…" (转写中…), the session row's own label
+for a job in that state. The label ends where the time ended and, being wider, reaches left over
+the waveform's tail. The bars under it and its clearance are gone within 80 ms, before the label has
+faded in, so the words never land on bars and no half-covered bar is left as a faint tick at their
+edge. The bars that remain dim to about a third, and a soft highlight travels across them from left
+to right at one constant speed, starting over at once: a pass takes 1.4 s, or on a long row as long
+as 480 points a second needs, and it crosses only the bars still drawn. An eased sweep that lingered
+at its ends read as a brief flash, and one that also crossed the empty stretch under the label lit
+nothing for about a quarter of every pass on a desktop and half of one on a phone. Done's slot keeps
+Done's width for the spinner, so nothing in the row moves at the tap; above the field the status
+line says "Finishing the transcript".
+
+The composer changes its layout once when listening starts and once when it ends. Everything
+listening brings — the status line, the listening row, Done — appears in one frame, and when the
+words land or the dictation ends, the status line, the listening row and the ordinary row change in
+one frame, with the words landing in the field in the same one: a composer that settles in two
+steps, the listening row leaving and the ordinary row arriving after its fade, looks like a glitch.
+A fade may stay only where it holds no layout: the phone fades the waveform out over the returning
+row in 150 ms, laid over it and taking no room; the web drops it. Under Reduce Motion, or the
+platform's equivalent, nothing in the row moves by itself: bars step in one slot at a time with no
+glide and no growth, the rested bars stay dimmed with no sweep, and "Transcribing…" replaces the
+time without a fade.
+
+**When a batch dictation's words land (A57).** Words that arrive whole, seconds after Done, can
+find a field the person has moved on in, and a segment can lose its words on the way. Five rules
+decide what happens:
+
+- **Typing never loses them.** The rule above, that typing while the spinner is up ends the wait,
+  assumes the field already holds the dictated words. A batch dictation's words on their way are
+  the whole of it, and dropping them would throw away everything that was said. So reaching for the
+  field during a batch dictation — a keystroke, or a tap or click in it, while it listens or after
+  Done — is Done and drops nothing: the typed words stay where they are, the transcript is appended
+  after them when it comes, never over them, and polish touches the dictated words alone. The web
+  hands the dictation to the job store, as leaving the session does, so Send comes back with the
+  first keystroke while the status line goes on saying the words are coming. A composer that keeps
+  the dictation holds Send's slot with the spinner until the words land, so nothing can be sent
+  ahead of them.
+- **A lost segment stops listening only when it must.** A segment loses its words when its socket
+  fails, closes without its final or never connects, or when no answer comes in time. The loss costs
+  that segment alone: the others are awaited, never cancelled, because each may hold up to 45
+  seconds of speech. When the lost segment is the newest, the one taking the audio, listening stops
+  as Done stops it, since nothing more could be heard into it. The loss of an older segment, one
+  that has already handed the microphone on, is only recorded: listening goes on, and the dictation
+  ends at Done as it would have. A live dictation is unchanged: its words are on screen, and its
+  newest segment's failure ends it at once.
+- **A loss is always said.** With nothing on screen while it listened, a batch dictation that lost a
+  segment would end in silence, the field quietly holding less than was spoken. So such a dictation
+  lands what was held first and then the composer's ordinary transcription-failure notice; nothing
+  empty or stale is ever inserted. The notice names one loss, the first. A dictation handed to the
+  job store (at a session switch, as a phone app goes to the background, or at a reach for the field
+  on the web) that ends this way ends interrupted with its held segments kept, and says so once in
+  its own conversation: at once if the conversation is open, otherwise when it is next opened.
+  Clearing the session row's "Dictation interrupted" label is not saying it. On the web the notice
+  goes when it is dismissed, the draft is sent or the next dictation starts. A live job that ends
+  interrupted owes no notice: its words were on screen all along.
+- **Never inside a composition.** Chinese and Japanese are typed through an input method that
+  composes letters before confirming them as words, and typing during the wait is invited. Words
+  inserted into a composition would split it or commit half-typed pinyin, so while the field holds
+  one the landing waits, and runs the moment the composition is committed or cancelled, after the
+  confirmed text; polish then runs as usual. Until then the words are still on their way, and the
+  composer says so: the status line keeps "Finishing the transcript", no new dictation can start
+  over them, a failure's notice waits until they are in, and the spinner keeps Send's slot, except
+  on the web, where the first keystroke already gave Send back.
+- **In the draft they were spoken for.** A queued message can be taken into the field to be edited
+  (A43) while the words are on their way. If, when they arrive, the field is editing a queued
+  message the dictation did not start in, or that edit is on its way back into the line, they join
+  the draft set aside for it and come back with it, unpolished: a polish that rewrote a draft
+  nobody can see would change words with no Undo in sight. A dictation started inside an open edit
+  lands in that edit while it is open, and in the draft the edit gave back once it has ended.
+
+The web holds batch words to the last two rules, in the open composer and from a job alike, and a
+live job's result too.
 
 **A draft belongs to its session.** Words typed and files attached for one session stay with it
 when another is opened, and are found again on return, on both apps. Nothing typed for one session
@@ -998,7 +1134,9 @@ had just been recognised. Now every transcript update that lands past the visibl
 the field so its last line — the newest words — stays in view, without animation, for as long as
 listening runs and through the finishing spinner; a person who wants to read back taps the field,
 which ends the dictation (the takeover rule above) and leaves the field where the words ended. On
-both apps; typing is untouched, because a caret already keeps itself visible.
+both apps; typing is untouched, because a caret already keeps itself visible. A batch dictation has
+nothing to follow while it listens; its one write, when the words land, brings their last line into
+view the same way.
 
 ## Approvals and questions
 

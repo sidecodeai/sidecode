@@ -873,8 +873,9 @@ with no protocol change.
 
 **PCM16 streaming for voice.** Sending a recorded file is simpler, but the wait after you stop
 talking is exactly the moment the interaction feels slow. Streaming raw PCM lets partial transcripts
-appear while you speak, and 16 kHz mono is what every speech backend wants anyway. The cost is an
-AudioWorklet and a resampler in each client.
+appear while you speak from a backend that streams, and leaves only the last segment to transcribe
+when you stop for one that answers whole recordings (A57); 16 kHz mono is what every speech backend
+wants anyway. The cost is an AudioWorklet and a resampler in each client.
 
 **Accounts are people, and nothing is shared between two of them (1.1, A24).** Version 1.0 had one
 password and one user. The gateway now keeps accounts — `admin` from `RC_PASSWORD`, members by
