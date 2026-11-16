@@ -61,6 +61,8 @@ const MAX_SOCKET_PATH_BYTES = 100;
 
 const RECONNECT_MIN_MS = 1000;
 const RECONNECT_MAX_MS = 30000;
+/** As much of the first prompt as a title can use, and then some. */
+const FIRST_PROMPT_CHARS = 500;
 
 /** pi's own readers, which `on-request` never asks about. */
 const READERS = new Set(["read", "grep", "find", "ls"]);
@@ -92,7 +94,9 @@ function socketPath(): string {
 /**
  * The connection to the device, which reconnects for as long as the session
  * lives. `hello` is rebuilt on every connect, so a daemon that starts after pi
- * did is told the whole branch as it stands then.
+ * did is told the session as it stands then. The wait between attempts starts
+ * over only once the device has welcomed this process: a device that keeps
+ * hanging up is dialled less and less often, not once a second for ever.
  */
 class Link {
 	private socket: Socket | null = null;
@@ -128,7 +132,6 @@ class Link {
 		}
 		socket.setNoDelay(true);
 		socket.on("connect", () => {
-			this.backoff = RECONNECT_MIN_MS;
 			this.ready = true;
 			this.write(this.hello());
 		});
@@ -175,6 +178,11 @@ class Link {
 			}
 			cut = this.buffer.indexOf("\n");
 		}
+	}
+
+	/** The device took this process on, so the next loss of it redials at once. */
+	welcomed(): void {
+		this.backoff = RECONNECT_MIN_MS;
 	}
 
 	write(frame: Json): void {
@@ -314,15 +322,39 @@ export default function (pi: ExtensionAPI): void {
 		}
 	};
 
+	/** The first thing the person said, which is what the device titles a session by. */
+	const firstPrompt = (ctx: ExtensionContext): string | null => {
+		for (const raw of entriesOf(ctx)) {
+			const entry = raw as { type?: string; message?: { role?: string; content?: unknown } };
+			if (entry.type !== "message" || entry.message?.role !== "user") continue;
+			const content = entry.message.content;
+			const text =
+				typeof content === "string"
+					? content
+					: Array.isArray(content)
+						? String(
+								(content as Json[]).find((item) => item?.type === "text")?.text ?? "",
+							)
+						: "";
+			if (text.trim()) return text.slice(0, FIRST_PROMPT_CHARS);
+		}
+		return null;
+	};
+
+	/**
+	 * Who this process is, and nothing it has said: the device reads the
+	 * branch from the session file when it first meets a session. A hello that
+	 * carried every entry outgrew the socket's line on a long session.
+	 */
 	const helloFrame = (ctx: ExtensionContext): Json => {
-		let base: Json = { session_id: "", session_file: null, cwd: "", name: null, entries: [] };
+		let base: Json = { session_id: "", session_file: null, cwd: "", name: null, first_prompt: null };
 		try {
 			base = {
 				session_id: ctx.sessionManager.getSessionId(),
 				session_file: ctx.sessionManager.getSessionFile() ?? null,
 				cwd: ctx.cwd,
 				name: ctx.sessionManager.getSessionName() ?? null,
-				entries: entriesOf(ctx),
+				first_prompt: firstPrompt(ctx),
 			};
 		} catch {
 			/* an unreadable session still registers, with what we do know */
@@ -556,6 +588,7 @@ export default function (pi: ExtensionAPI): void {
 		if (kind === "welcome") {
 			mode = String(frame.permission_mode ?? "never");
 			streaming = frame.stream !== false;
+			link?.welcomed();
 			return;
 		}
 		if (kind === "answer") {

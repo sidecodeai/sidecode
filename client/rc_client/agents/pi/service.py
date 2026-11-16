@@ -14,13 +14,14 @@ thread under the shared daemon. When the process leaves, the session drops to
 
 from __future__ import annotations
 
+import asyncio
 import weakref
 from typing import TYPE_CHECKING, Any
 
 from ...logging_setup import logger
 from ...models import Session, now_ms
 from ...sessions import titles
-from . import frames
+from . import frames, session_file
 from .adapter import PiRunner
 from .catalog import DEFAULT_PERMISSION_MODE
 from .history import replay
@@ -156,8 +157,16 @@ class PiExtensionService:
         return entry, True
 
     async def _replay(self, entry: SessionEntry, link: PiLink) -> None:
-        """Publish what the session already held, once, in its own timestamps."""
-        for emit in replay(link.hello.entries):
+        """Publish what the session already held, once, in its own timestamps.
+
+        An older extension sent the branch in its `hello`; a current one
+        names the session file, which is read here instead, once per session.
+        """
+        hello = link.hello
+        entries = hello.entries or await asyncio.to_thread(
+            session_file.branch, hello.session_id, hello.session_file
+        )
+        for emit in replay(entries):
             await entry.channel.emit(emit.kind, **emit.fields)
 
     async def _publish_meta(self, entry: SessionEntry, link: PiLink) -> None:
@@ -182,6 +191,8 @@ class PiExtensionService:
 
 def _first_prompt(link: PiLink) -> str:
     """The first thing the person said, which is what pi titles a session by."""
+    if link.hello.first_prompt:
+        return link.hello.first_prompt
     for entry in link.hello.entries:
         if not isinstance(entry, dict) or entry.get("type") != "message":
             continue

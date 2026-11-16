@@ -5,10 +5,16 @@ approve its tool calls, so it lives inside the device home with owner-only
 permissions, exactly as the Claude channel socket does.
 
 A connection opens with one `hello` naming the pi session, its working
-directory and the branch it already holds. What happens next depends on what
-kind of pi is on the other end: an RPC child the device started is already
-being driven over its own stdin, so its link carries nothing but approvals,
-while a pi somebody started in a terminal is driven entirely from here.
+directory and its session file; an older extension sends the whole
+branch it holds as well. What happens next depends on what kind of pi is on the
+other end: an RPC child the device started is already being driven over its own
+stdin, so its link carries nothing but approvals, while a pi somebody started
+in a terminal is driven entirely from here.
+
+A line may be as long as `frames.MAX_FRAME_BYTES`, and one that is longer is
+skipped rather than taken for the end of the connection: with asyncio's 64 KiB
+default, a long session's `hello` failed, the extension dialled again a second
+later, and the next `hello` failed the same way, for as long as pi ran.
 """
 
 from __future__ import annotations
@@ -45,7 +51,10 @@ class Hello:
     thinking: str | None
     name: str | None
     session_file: str | None
+    # The branch the session holds, sent by an older extension; a current one sends
+    # `first_prompt` instead, and the branch is read from the session file when needed.
     entries: list[Any] = field(default_factory=list)
+    first_prompt: str | None = None
 
     @classmethod
     def parse(cls, frame: dict[str, Any]) -> Hello | None:
@@ -64,6 +73,7 @@ class Hello:
             name=_text(frame.get("name")),
             session_file=_text(frame.get("session_file")),
             entries=list(entries) if isinstance(entries, list) else [],
+            first_prompt=_text(frame.get("first_prompt")),
         )
 
 
@@ -176,7 +186,9 @@ class PiExtensionServer:
     async def start(self) -> None:
         self._prepare_directory()
         self._unlink_stale()
-        self._server = await asyncio.start_unix_server(self._serve, path=str(self.path))
+        self._server = await asyncio.start_unix_server(
+            self._serve, path=str(self.path), limit=frames.MAX_FRAME_BYTES
+        )
         os.chmod(self.path, 0o600)
         log.info("pi extension socket listening", path=str(self.path))
 
@@ -238,7 +250,7 @@ class PiExtensionServer:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         worker = asyncio.create_task(self._handle(link, queue))
         try:
-            async for line in reader:
+            while line := await _read_line(reader):
                 frame = frames.decode(line)
                 if frame is None:
                     continue
@@ -277,7 +289,11 @@ class PiExtensionServer:
         """The first frame must be a `hello` naming the session, or we hang up."""
         try:
             line = await asyncio.wait_for(reader.readline(), timeout=HELLO_TIMEOUT)
-        except (TimeoutError, OSError):
+        except (TimeoutError, OSError, ValueError) as exc:
+            if isinstance(exc, ValueError):
+                log.warning(
+                    "a pi hello was longer than a frame may be", limit=frames.MAX_FRAME_BYTES
+                )
             return None
         frame = frames.decode(line)
         hello = Hello.parse(frame) if frame and frame.get("type") == frames.HELLO else None
@@ -288,3 +304,18 @@ class PiExtensionServer:
             link.detach()
             return None
         return link
+
+
+async def _read_line(reader: asyncio.StreamReader) -> bytes:
+    """The next line, skipping any longer than a frame may be; empty at the end of the stream.
+
+    asyncio drops a line over the limit and says so with `ValueError`, which used
+    to end the connection with it.
+    """
+    while True:
+        try:
+            return await reader.readline()
+        except ValueError:
+            log.warning(
+                "skipped a pi frame longer than a frame may be", limit=frames.MAX_FRAME_BYTES
+            )

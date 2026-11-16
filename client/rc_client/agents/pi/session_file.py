@@ -111,6 +111,58 @@ def append_name(path: Path, name: str) -> None:
         raise RcError("unsupported", UNWRITABLE)
 
 
+def branch(session_id: str, path: str | None) -> list[dict[str, Any]]:
+    """The entries on the path the session is on, oldest first, as `getBranch()` returns them.
+
+    A `hello` from the extension names the session file rather than carrying the
+    branch, and the device reads it only when it first meets a session. The
+    file must be the session's own, under pi's sessions directory; the branch ends
+    at the last entry in file order, the leaf, and runs back through `parentId`.
+    Anything that cannot be read is an empty branch: the session is then shown
+    from its next word on, as before a branch could be replayed at all.
+    """
+    file = _session_path(session_id, path)
+    if file is None:
+        return []
+    by_id: dict[str, dict[str, Any]] = {}
+    leaf: str | None = None
+    try:
+        with file.open("rb") as handle:
+            for raw in handle:
+                entry = _parse(raw)
+                entry_id = entry.get("id") if entry is not None else None
+                if entry is None or entry.get("type") == "session" or not isinstance(entry_id, str):
+                    continue
+                by_id[entry_id] = entry
+                leaf = entry_id
+    except OSError:
+        return []
+    path_back: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    while leaf is not None and leaf in by_id and leaf not in seen:
+        seen.add(leaf)
+        entry = by_id[leaf]
+        path_back.append(entry)
+        parent = entry.get("parentId")
+        leaf = parent if isinstance(parent, str) else None
+    return list(reversed(path_back))
+
+
+def _session_path(session_id: str, path: str | None) -> Path | None:
+    """The session's own file at `path`, when it is one: inside pi's sessions, headed by its id."""
+    if not path:
+        return None
+    try:
+        file = Path(path).resolve()
+        root = runtime.sessions_dir().resolve()
+    except OSError:
+        return None
+    if root not in file.parents or not file.is_file():
+        return None
+    header = _header(file)
+    return file if header is not None and header.get("id") == session_id else None
+
+
 def _header(path: Path) -> dict[str, Any] | None:
     """The first line of the file when it is a session header."""
     try:
