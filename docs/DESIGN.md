@@ -480,6 +480,17 @@ The open or closed choice is kept per device id as well. A session that comes ba
 from a terminal, or written to from an app — leaves the Archive by itself: the device clears the
 flag as the turn starts (A15), and the row is back among Active rows before its first output lands.
 
+**What an app writes to stays Active until it is closed** (A58). Writing
+to a session in the Archive is the person picking it up again, the same as launching it from the
+app, so the device holds it as it holds a session it launched: the row stays among Active rows when
+the turn ends, when a terminal joins it and leaves again, and when the device restarts or updates,
+until the person presses Close (§ "Close, then the Archive"). Before this, a Codex or Grok thread a
+terminal had started dropped back into the Archive the moment its answer landed, and every session
+the device held fell into the Archive whenever the device restarted. Holding costs nothing for Codex
+and Grok, whose threads stay loaded anyway; a Claude Code or pi process the device holds is stopped
+after 30 minutes with nothing running, waiting or queued, to give its memory back, and the row
+stays Active while the next message starts it again.
+
 **A session that never held a message does not exist.** A CLI picks an id the moment it starts, and
 if the person then resumes another session or quits, that id never gets a transcript. The device
 removes it the instant the terminal leaves it (A16), so no list ever shows an "Untitled session" row
@@ -501,7 +512,11 @@ started on its own Codex — and neither when it is a subagent, which belongs to
 spawned it. The device tells them apart by the thread's `originator` and `source` and publishes
 nothing else (A18); a thread it published before the rule is removed. There is no "show
 everything" switch — a thread no terminal is in and the apps could only resume by taking it away from
-the application that owns it would be a row that misleads on both counts.
+the application that owns it would be a row that misleads on both counts. A `codex exec` run is not
+a session either (A59): it is a script or an automation driving Codex
+with nobody at a terminal, it ends when its task does, and one automation can leave thousands of
+them, which buried the Archive and slowed the device's every look at the machine. The device
+publishes none and removes the ones it published before.
 
 A non-empty search, or a status filter other than All states (§ "Agents are visible and
 filterable"), overrides both stored choices without writing either: it opens every device group that
@@ -523,9 +538,26 @@ first — "Close this session?" over "The agent is still working; what it has no
 with Close and Cancel — and an idle one closes on the tap, because there is nothing to lose. The
 web row's trailing button and the phone's swipe and context menu carry it, with a circled cross
 (lucide `CircleX`, SF `xmark.circle`); it is the row's only swipe action and the only control drawn
-on the row, Rename being in the row's context menu (§ "A session can be renamed"). A row a terminal
-holds (`terminal` or `shared`) offers no close at all: the terminal owns it, and it leaves Active by
-itself the moment the terminal exits. A row already in the Archive offers no Close either, and no
+on the row, Rename being in the row's context menu (§ "A session can be renamed").
+
+A row a terminal holds (`terminal` or `shared`) offers Close where its agent lists `close_terminal`
+and its device is online (A61). Closing it ends the agent's CLI in that
+terminal on the person's computer, so the app always asks first, idle or not: "Close this
+session?" over "This also quits {agent} in its terminal on {device}. Anything typed there and not
+sent is lost." (zh "{agent} 在 {device} 终端里的进程也会退出，终端里尚未发送的内容会丢失。"), with
+A39's working sentence after it while the session works, and Close and Cancel. The device
+interrupts a running turn, ends the CLI and moves the row to the Archive only once the process has
+exited; the window stays open at its shell prompt, unless the agent was the pane's own command. A
+CLI that does not exit within 10 s leaves everything as it was and reads as busy ("The session is
+busy. Try again later."). Where the device cannot end exactly that terminal's CLI — Claude Code
+running inside an IDE, or a Codex thread on the shared app-server when more than one Codex terminal
+sits in its folder — it answers `unsupported`, worded "This session can't be closed from here.
+Close it in its terminal." (这个会话无法从这里关闭，请在它的终端里关闭。). Closing a thread a terminal
+started never archives it in Codex, so the terminal's own `codex resume` still lists it. Without the
+capability a terminal's row offers no Close: the terminal owns it, and it leaves Active by itself the
+moment the terminal exits.
+
+A row already in the Archive offers no Close either, and no
 "unarchive" — writing to it, or a terminal coming back to it, is what brings it back (A15). There
 is no global "show archived" switch: it only ever toggled the hand-archived rows, which were
 already folded inside the collapsed Archive, so it read as a control that did nothing.
@@ -1178,6 +1210,36 @@ view the same way.
   submitted from the card.
 
 ## Reading position
+
+**A session opens where you left off reading.** Opening a long
+conversation at its newest line put the reader under the end of a long answer, far below the
+question it answered, with no way to tell where to start. So every app remembers, on that device,
+where you were reading in each session — the lowest row whose top is on screen, saved as you read
+and when you leave, together with the newest event the app held then — and opens the session at
+the start of your own message nearest above that point: you sent a reply, read part of the answer
+while the agent worked, and come back once it is done to that reply, with the whole answer below
+it; you scrolled back into an older turn and left, and come back to that turn. Your own message
+means one you wrote and that was delivered, not one another agent sent (A34) and not one still
+waiting in Up next. If you have written something since you left — from a terminal, or on another
+device — the session opens at your newest message instead, because you have moved on; with nothing
+remembered it opens at your newest message too; and with no message of yours within the newest
+page and two older ones it opens at the tail, as before. The
+message's top sits at the top of the transcript, a small margin below its edge, however tall the
+message is; when everything from there down fits on screen, the transcript is simply at its end
+and follows as usual. This happens on opening — from the list, a notification or a link, or by
+switching sessions — and never on a reconnect, a resync or a mended hole, which keep the reader
+where they are. The rows are placed once they exist, and kept in place while the rows above them
+settle their heights, so a touch during loading never leaves the transcript at its top; older pages
+load from the top only after the reader has scrolled. The remembered point stays on the device and
+is not shared between devices: the web keeps it with the account's settings, the native apps with
+their session cache, which signing out removes; each keeps the 500 sessions read most recently.
+
+**Opening is quick.** A page of history carries what the transcript draws (A60): a tool call
+arrives with its input cut to a short summary and without its output or patch, which the simple
+view never shows and which made up most of every page's weight. Expanding a tool row fetches the
+whole block, as "Open full output" always has. A copy cached on the device that is more than 300
+events behind is not walked forward page by page — the transcript starts from the newest page — and
+the newest page is asked for together with the subscription, not after its answer.
 
 Nothing moves under your eyes. The timeline auto-follows the newest content only while you are at
 the bottom, and "at the bottom" is read from the real scroll position, never guessed from a
