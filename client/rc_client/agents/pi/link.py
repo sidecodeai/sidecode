@@ -5,8 +5,8 @@ approve its tool calls, so it lives inside the device home with owner-only
 permissions, exactly as the Claude channel socket does.
 
 A connection opens with one `hello` naming the pi session, its working
-directory and its session file; an older extension sends the whole
-branch it holds as well. What happens next depends on what kind of pi is on the
+directory and its session file; an older extension sends the whole branch it
+holds as well. What happens next depends on what kind of pi is on the
 other end: an RPC child the device started is already being driven over its own
 stdin, so its link carries nothing but approvals, while a pi somebody started
 in a terminal is driven entirely from here.
@@ -51,7 +51,7 @@ class Hello:
     thinking: str | None
     name: str | None
     session_file: str | None
-    # The branch the session holds, sent by an older extension; a current one sends
+    # The branch the session holds, which an older extension sends; a current one sends
     # `first_prompt` instead, and the branch is read from the session file when needed.
     entries: list[Any] = field(default_factory=list)
     first_prompt: str | None = None

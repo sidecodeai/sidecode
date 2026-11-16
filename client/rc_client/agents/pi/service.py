@@ -180,8 +180,8 @@ class PiExtensionService:
     async def _replay(self, entry: SessionEntry, link: PiLink) -> None:
         """Publish what the session already held, once, in its own timestamps.
 
-        An older extension sent the branch in its `hello`; a current one
-        names the session file, which is read here instead, once per session.
+        An older extension sends the branch in its `hello`; a current one names
+        the session file, which is read here instead, once per session.
         """
         hello = link.hello
         entries = hello.entries or await asyncio.to_thread(
