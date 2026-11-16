@@ -63,13 +63,14 @@ export function restart(chat: ChatSession): ChatSession {
     historyHasMore: true,
     historyLoaded: false,
     historyLoading: false,
+    pagesAsked: 0,
     generation: chat.generation + 1,
     error: null,
   };
 }
 
 /**
- * §5.2: how far the session may have moved on past a copy kept from an earlier
+ * How far the session may have moved on past a copy kept from an earlier
  * visit before that copy is worth nothing. Walking forward to join more than
  * this is slower than reading the newest page, which is what the reader opens
  * on anyway.
@@ -87,7 +88,8 @@ export function isStale(chat: ChatSession, lastSeq: number | undefined): boolean
 
 /**
  * The conversation as an open finds it: its subscribe not answered yet, and a
- * stale copy started again from the newest page (§5.2), which a cold open reads.
+ * stale copy started again from the newest page, which a cold open reads
+ * (`docs/WEB.md` § "Opening a conversation").
  */
 export function reopen(chat: ChatSession, stale: boolean): ChatSession {
   return { ...(stale ? restart(chat) : chat), closedSeq: null, subscription: 'pending' };

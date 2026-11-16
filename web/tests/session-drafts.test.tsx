@@ -170,6 +170,7 @@ describe('a draft belongs to its session', () => {
           historyLoading: false,
           historyHasMore: false,
           historyLoaded: true,
+          pagesAsked: 1,
           repairing: false,
           generation: 0,
           error: null,

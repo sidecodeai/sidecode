@@ -1,6 +1,7 @@
 import { memo, useCallback, useMemo, type ReactNode } from 'react';
 import { ArrowDown } from 'lucide-react';
 import { strings } from '../../strings';
+import { useAuth } from '../../stores/auth';
 import { useSettings } from '../../stores/settings';
 import { selectView, type TimelineItem, type TimelineState } from '../../stores/timeline';
 import type {
@@ -25,6 +26,8 @@ import { ThinkingRow } from './blocks/ThinkingRow';
 import { ToolRow } from './blocks/ToolRow';
 import { AgentMessageRow } from './blocks/AgentMessageRow';
 import { UserMessageRow } from './blocks/UserMessageRow';
+import { useOlderSearch, useOpening } from './useOpening';
+import { useReadingTracker } from './useReadingTracker';
 import { useScrollFollow } from './useScrollFollow';
 
 export interface TimelineHandlers {
@@ -46,6 +49,17 @@ interface Props extends TimelineHandlers {
   error: string | null;
   onRetry: () => void;
   footer?: ReactNode;
+  /**
+   * The conversation, as `<device>/<session>`, under which its reading
+   * position is kept (`docs/DESIGN.md` § "Reading position"). The page keys
+   * the timeline by it as well, so the follow state, the scroll and the
+   * opening start again with every conversation.
+   */
+  sessionKey: string;
+  /** Whether the rows are this open's, which is when the opening is placed. */
+  current: boolean;
+  /** How many pages of the rows were asked for, the newest included. */
+  pagesAsked: number;
 }
 
 export function Timeline({
@@ -56,6 +70,9 @@ export function Timeline({
   repairing,
   error,
   footer,
+  sessionKey,
+  current,
+  pagesAsked,
   onOpenFull,
   onApprove,
   onAnswer,
@@ -63,13 +80,23 @@ export function Timeline({
   onRetry,
 }: Props) {
   const detail = useSettings((s) => s.timelineDetail);
+  const account = useAuth((s) => s.username);
   const view = useMemo(() => selectView(timeline, detail), [timeline, detail]);
 
   const onReachTop = useCallback(() => {
     if (historyHasMore && !historyLoading) onLoadOlder();
   }, [historyHasMore, historyLoading, onLoadOlder]);
 
-  const { ref, following, missed, scrollToBottom, onScroll } = useScrollFollow({
+  const { opening, looking } = useOpening({
+    account,
+    sessionKey,
+    timeline,
+    current,
+    historyHasMore,
+    pagesAsked,
+  });
+
+  const { ref, following, missed, settled, jumpToLatest, onScroll } = useScrollFollow({
     // A pending send carries no `seq`, so count it into the revision as well.
     revision: `${timeline.lastSeq}.${timeline.optimistic.length}`,
     redraw: detail,
@@ -78,7 +105,10 @@ export function Timeline({
     firstKey: view.roots[0]?.key ?? null,
     lastKey: view.roots.at(-1)?.key ?? null,
     onReachTop,
+    opening,
   });
+  useOlderSearch(looking && !settled, historyLoading, onLoadOlder);
+  useReadingTracker(ref, account, sessionKey);
 
   // Stable so memoised rows do not re-render on every streaming delta.
   const handlers = useMemo<TimelineHandlers>(
@@ -105,20 +135,25 @@ export function Timeline({
             <p className="timeline-empty hint">{strings.chat.emptyTimeline}</p>
           ) : null}
 
+          {/* The opening finds a row by its key and the reading position reads
+              its place; the wrapper draws no box of its own, so the rows lay
+              out as before. */}
           {view.roots.map((item) => (
-            <ItemView
+            <div
               key={item.key}
-              item={item}
-              handlers={handlers}
-              nested={view.children[item.key]}
-            />
+              className="timeline-row"
+              data-row-key={item.key}
+              data-row-seq={item.pending ? undefined : item.seq}
+            >
+              <ItemView item={item} handlers={handlers} nested={view.children[item.key]} />
+            </div>
           ))}
           {error === null ? null : <HistoryNotice message={error} onRetry={onRetry} />}
           {footer}
         </div>
       </div>
 
-      {following ? null : <BackToLatest missed={missed} onClick={() => scrollToBottom('smooth')} />}
+      {following ? null : <BackToLatest missed={missed} onClick={jumpToLatest} />}
     </div>
   );
 }

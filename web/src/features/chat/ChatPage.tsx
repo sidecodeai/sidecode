@@ -77,9 +77,10 @@ export function ChatPage() {
     [device, session?.agent],
   );
 
-  // §5.2: the conversation this page last opened. A run of the effect below for
+  // The conversation this page last opened. A run of the effect below for
   // another one is the person opening it; one for the same is the socket
-  // coming back, which keeps the copy and the reader's place.
+  // coming back, which keeps the copy and the reader's place (`docs/WEB.md`
+  // § "Opening a conversation").
   const openedKey = useRef<string | null>(null);
   useEffect(() => {
     if (!deviceId || !sessionId) return;
@@ -343,7 +344,16 @@ export function ChatPage() {
           />
         ) : null}
 
+        {/* Keyed by conversation like the header and the composer, so
+            the follow state, the scroll, the opening and the reading position
+            start again with every conversation the route moves to. */}
         <Timeline
+          key={`timeline/${key}`}
+          sessionKey={key}
+          current={
+            chat !== undefined && chat.subscription !== 'pending' && chat.historyLoaded
+          }
+          pagesAsked={chat?.pagesAsked ?? 0}
           timeline={timeline}
           historyLoading={chat?.historyLoading ?? false}
           historyHasMore={chat?.historyHasMore ?? false}

@@ -175,6 +175,15 @@
   gap: var(--sp-4);
 }
 
+/*
+ * What the opening and the reading position find a row by (`docs/DESIGN.md`
+ * § "Reading position"). It draws no box, so its row is a flex item of the
+ * timeline as before.
+ */
+.timeline-row {
+  display: contents;
+}
+
 .timeline-note,
 .timeline-empty {
   text-align: center;
@@ -381,6 +390,11 @@
 }
 
 .tool + .tool {
+  border-top-color: transparent;
+}
+
+/* The same between two rows of the timeline, each in its own `.timeline-row`. */
+.timeline-row:has(> .tool) + .timeline-row > .tool {
   border-top-color: transparent;
 }
 

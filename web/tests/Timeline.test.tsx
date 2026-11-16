@@ -90,6 +90,9 @@ function setup(initial: TimelineState) {
   const onLoadOlder = vi.fn();
   const element = (timeline: TimelineState) => (
     <Timeline
+      sessionKey="dev/ses"
+      current
+      pagesAsked={1}
       timeline={timeline}
       historyLoading={false}
       historyHasMore
@@ -115,7 +118,11 @@ function setup(initial: TimelineState) {
       scrollHeight = height;
       act(() => view.rerender(element(next)));
     },
+    /** The reader scrolls: a wheel, then the scroll it makes. */
     scrollTo: (top: number) => {
+      act(() => {
+        scroller.dispatchEvent(new Event('wheel'));
+      });
       scroller.scrollTop = top;
       act(() => {
         scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
@@ -365,6 +372,9 @@ describe('a conversation that is not read yet', () => {
     const onRetry = vi.fn();
     render(
       <Timeline
+        sessionKey="dev/ses"
+        current={false}
+        pagesAsked={0}
         timeline={emptyTimeline()}
         historyLoading={false}
         historyHasMore

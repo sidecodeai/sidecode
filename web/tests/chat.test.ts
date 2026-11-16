@@ -148,7 +148,7 @@ function openFresh(): Handlers {
  * that carries events or a cursor is a reconnect of: its transcript is what the
  * device sent, and nothing more is owed from it. The read is marked before the
  * open, with the socket down, so the open sends no newest page beside its
- * subscribe (§5.2).
+ * subscribe.
  */
 function openSession(): Handlers {
   socketUp = false;
@@ -495,10 +495,11 @@ describe('account scope', () => {
 });
 
 /**
- * §5.2: opening a conversation does not wait for one answer before asking the
- * next. The newest page goes out beside the subscribe, the two are merged by
- * block whichever answers first, and a copy kept from an earlier visit that the
- * session has moved far past is read again from the newest page.
+ * `docs/WEB.md` § "Opening a conversation": opening a conversation does not
+ * wait for one answer before asking the next. The newest page goes out beside
+ * the subscribe, the two are merged by block whichever answers first, and a
+ * copy kept from an earlier visit that the session has moved far past is read
+ * again from the newest page.
  */
 describe('opening a conversation', () => {
   const historyCalls = () => rpc.mock.calls.filter((c) => c[0] === 'session.history').map((c) => c[1]);

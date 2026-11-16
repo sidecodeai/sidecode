@@ -66,6 +66,9 @@ const stateOf = (...events: SessionEvent[]): TimelineState => events.reduce(appl
 const renderTimeline = (timeline: TimelineState) =>
   render(
     <Timeline
+      sessionKey="dev/ses"
+      current
+      pagesAsked={1}
       timeline={timeline}
       historyLoading={false}
       historyHasMore={false}
@@ -118,9 +121,11 @@ describe('the row another agent’s words are drawn in', () => {
 
     const block = document.querySelector('.agent-message');
     // `.user-row` is the flex row that pushes a bubble to the right; the block
-    // is a root of the timeline instead, as the agent's prose is.
+    // is a root of the timeline instead, as the agent's prose is. Its row's
+    // wrapper draws no box, so the timeline lays it out directly.
     expect(block?.closest('.user-row')).toBeNull();
-    expect(block?.parentElement?.className).toBe('timeline-inner');
+    expect(block?.parentElement?.className).toBe('timeline-row');
+    expect(block?.parentElement?.parentElement?.className).toBe('timeline-inner');
   });
 
   it.runIf(fixturesAvailable())('draws the frozen fixture the device sends', () => {

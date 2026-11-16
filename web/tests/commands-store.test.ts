@@ -107,7 +107,7 @@ describe('the command list', () => {
 describe('running one command', () => {
   const rows = () =>
     selectView(useChat.getState().sessions[KEY]?.timeline ?? emptyTimeline(), 'detailed').roots;
-  // The open asks for the newest page beside its subscribe (§5.2); the command is its own call.
+  // The open asks for the newest page beside its subscribe; the command is its own call.
   const commandCall = () => rpc.mock.calls.find((call) => call[0] === 'session.command') ?? [];
 
   beforeEach(() => {

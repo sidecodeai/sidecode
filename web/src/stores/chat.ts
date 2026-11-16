@@ -95,7 +95,7 @@ export interface ChatSession {
   /**
    * Where this open's `session.subscribe` stands. `close` puts it back to
    * `pending`, so a conversation opened again is not taken for current before
-   * its own subscribe has answered (§5.1 places the reader only then), and a
+   * its own subscribe has answered (the opening is placed only then), and a
    * newest page that reads well never clears the failure of a subscribe.
    */
   subscription: 'pending' | 'live' | 'failed';
@@ -107,6 +107,13 @@ export interface ChatSession {
    * the one the reader is told about.
    */
   historyLoaded: boolean;
+  /**
+   * How many pages of history were asked for since the rows were started, the
+   * newest included. An open looks for its anchor in no more than three
+   * (`docs/DESIGN.md` § "Reading position"), and a page that failed counts, so
+   * a device that cannot answer is not asked for ever.
+   */
+  pagesAsked: number;
   /**
    * Whether a repair is asking the device for what the transcript missed. A
    * conversation with no rows is not known to be empty while it runs.
@@ -147,6 +154,7 @@ function blank(deviceId: string, sessionId: string): ChatSession {
     historyLoading: false,
     historyHasMore: true,
     historyLoaded: false,
+    pagesAsked: 0,
     repairing: false,
     generation: 0,
     error: null,
@@ -196,7 +204,7 @@ interface ChatState {
    * is opening it — from a list, a notification, a link or another
    * conversation — rather than the app subscribing again after a reconnect:
    * only then is a stale copy from an earlier visit read again from the newest
-   * page (§5.2).
+   * page (`docs/WEB.md` § "Opening a conversation").
    */
   open: (deviceId: string, sessionId: string, options?: { fresh?: boolean }) => void;
   close: (deviceId: string, sessionId: string) => void;
@@ -275,7 +283,7 @@ export const useChat = create<ChatState>((set, get) => ({
     const socket = getSocket();
     const chat = get().sessions[key];
     if (!socket || !chat) return;
-    // §5.2: an unread newest page goes out beside the subscribe rather than
+    // An unread newest page goes out beside the subscribe rather than
     // after its reply, and the two are merged by block whichever answers first.
     const both = chat.historyLoaded ? null : countAfterBoth(set, key);
     socket.subscribe(sessionId, chat.timeline.lastSeq || undefined, {
@@ -380,7 +388,7 @@ export const useChat = create<ChatState>((set, get) => ({
     // What the device counted as its last event when the newest page was asked
     // for: the page holds everything stored up to it.
     const counted = isNewestPage ? (useSessions.getState().sessions[key]?.last_seq ?? 0) : 0;
-    patch(set, key, (c) => ({ ...c, historyLoading: true }));
+    patch(set, key, (c) => ({ ...c, historyLoading: true, pagesAsked: c.pagesAsked + 1 }));
     try {
       const oldest = chat.timeline.oldestSeq;
       const result = await rpc('session.history', {
@@ -402,7 +410,7 @@ export const useChat = create<ChatState>((set, get) => ({
           historyLoading: false,
           historyHasMore: result.has_more,
           historyLoaded: true,
-          // Read beside the subscribe (§5.2), the page clears no failure of it.
+          // Read beside the subscribe, the page clears no failure of it.
           error: first && c.subscription !== 'failed' ? null : c.error,
         };
       });
@@ -599,11 +607,12 @@ export const useChat = create<ChatState>((set, get) => ({
 type Setter = (fn: (s: ChatState) => Partial<ChatState>) => void;
 
 /**
- * §5.2: the newest page and the subscribe went out together, the subscribe
- * first, so the page holds at least everything up to the count the subscribe's
- * reply carries. Once both have answered, whichever came first, nothing up to
- * that count is missing (`docs/DESIGN.md` § "Keeping a transcript whole": what
- * the device never stored is not a hole).
+ * The newest page and the subscribe went out together (`docs/WEB.md`
+ * § "Opening a conversation"), the subscribe first, so the page holds at least
+ * everything up to the count the subscribe's reply carries. Once both have
+ * answered, whichever came first, nothing up to that count is missing
+ * (`docs/DESIGN.md` § "Keeping a transcript whole": what the device never
+ * stored is not a hole).
  */
 function countAfterBoth(
   set: Setter,

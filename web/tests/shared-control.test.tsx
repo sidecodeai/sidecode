@@ -701,6 +701,7 @@ describe.runIf(fixturesAvailable())('A19 a held message is a queue entry', () =>
       historyLoading: false,
       historyHasMore: false,
       historyLoaded: true,
+      pagesAsked: 1,
       repairing: false,
       generation: 0,
       error: null,
