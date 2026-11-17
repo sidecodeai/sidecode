@@ -25,7 +25,8 @@ from typing import Any
 from .migrations import Migration, apply_migrations
 
 #: Columns added since this table's first release; see rc_gateway/migrations.py. A deployment
-#: started before A41 has the switch alone, and gains the Settings preferences here.
+#: started before A41 has the switch alone, and gains the Settings preferences here; one started
+#: before A62 gains the task board's permission.
 MIGRATIONS: tuple[Migration, ...] = (
     ("preferences", "language", "TEXT"),
     ("preferences", "stt_language", "TEXT"),
@@ -33,6 +34,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ("preferences", "polish_model", "TEXT"),
     ("preferences", "polish_strength", "TEXT"),
     ("preferences", "timeline_detail", "TEXT"),
+    ("preferences", "task_board", "INTEGER"),
 )
 
 #: The preferences that are absent until they are set, in the order the schema lists them.
@@ -43,10 +45,14 @@ OPTIONAL_FIELDS: tuple[str, ...] = (
     "polish_model",
     "polish_strength",
     "timeline_detail",
+    "task_board",
 )
 
 #: Every preference the wire knows, so a PATCH body is validated against one list.
 FIELDS: tuple[str, ...] = ("resume_after_limit", *OPTIONAL_FIELDS)
+
+#: The preferences only the gateway and the apps act on: a device is never sent them (A62).
+APP_ONLY_FIELDS: frozenset[str] = frozenset({"task_board"})
 
 
 @dataclass(frozen=True)
@@ -70,6 +76,9 @@ class Preferences:
     polish_strength: str | None = None
     #: How much of a transcript is drawn: ``simple`` or ``detailed``.
     timeline_detail: str | None = None
+    #: Whether the gateway keeps task boards for the account (A62). Absent reads as off, and only
+    #: the person's turning the board on or off writes it; an app never writes it from its own.
+    task_board: bool | None = None
 
     def view(self) -> dict[str, Any]:
         """The wire object: the switch always, and every preference somebody has set."""
@@ -79,6 +88,15 @@ class Preferences:
             if value is not None:
                 view[name] = value
         return view
+
+    def device_view(self) -> dict[str, Any]:
+        """What a device is sent: the wire object without the preferences only apps read."""
+        return {name: value for name, value in self.view().items() if name not in APP_ONLY_FIELDS}
+
+    @property
+    def board_on(self) -> bool:
+        """Whether the account's task board is on: set, and set to true (A62)."""
+        return self.task_board is True
 
 
 DEFAULTS = Preferences()
@@ -125,7 +143,8 @@ class PreferenceStore:
                     polish_enabled INTEGER,
                     polish_model TEXT,
                     polish_strength TEXT,
-                    timeline_detail TEXT
+                    timeline_detail TEXT,
+                    task_board INTEGER
                 )
                 """
             )
@@ -178,6 +197,7 @@ def _from_row(row: sqlite3.Row | None) -> Preferences:
         polish_model=_text(row["polish_model"]),
         polish_strength=_text(row["polish_strength"]),
         timeline_detail=_text(row["timeline_detail"]),
+        task_board=_flag(row["task_board"]),
     )
 
 

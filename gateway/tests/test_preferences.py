@@ -2,7 +2,8 @@
 
 Four things are checked here — the store, the two REST paths, the fan-out to every app and device
 of the account, and the three pushes a ``resume`` event cues — plus the frozen fixtures for each.
-A41 added the Settings screen's own preferences to the object, each absent until it is set.
+A41 added the Settings screen's own preferences to the object, each absent until it is set. A62
+added the task board's permission, which the apps read and no device is sent.
 """
 
 from __future__ import annotations
@@ -173,9 +174,10 @@ def test_patch_sets_the_switch_and_returns_the_whole_object(
     patch = fixture("http", "preferences.patch.request.json")
     response = client.patch("/api/preferences", json=patch, headers=auth)
     assert response.status_code == 200
-    assert response.json() == {"preferences": {"resume_after_limit": True}}
+    assert response.json() == {"preferences": {"resume_after_limit": True, "task_board": True}}
     assert client.get("/api/preferences", headers=auth).json()["preferences"] == {
-        "resume_after_limit": True
+        "resume_after_limit": True,
+        "task_board": True,
     }
 
 
@@ -248,6 +250,9 @@ def test_a_non_boolean_switch_is_a_bad_request(client: TestClient, auth: dict[st
         {"stt_language": 3},
         {"polish_model": "m" * 129},
         {"polish_model": ["gpt-5.4-mini"]},
+        {"task_board": "on"},
+        {"task_board": 1},
+        {"task_board": None},
     ],
 )
 def test_a_value_the_schema_does_not_allow_is_refused_and_stores_nothing(
@@ -278,7 +283,9 @@ def test_a_deleted_account_takes_its_switches_with_it(
     client: TestClient, auth: dict[str, str]
 ) -> None:
     member = add_member(client, auth, "ada")
-    client.patch("/api/preferences", json={"resume_after_limit": True}, headers=member)
+    client.patch(
+        "/api/preferences", json={"resume_after_limit": True, "task_board": True}, headers=member
+    )
     assert client.delete("/api/users/ada", headers=auth).status_code == 200
     recreated = add_member(client, auth, "ada")
     assert client.get("/api/preferences", headers=recreated).json()["preferences"] == {
@@ -353,6 +360,45 @@ def test_a_change_reaches_every_app_and_device_of_the_account(
     assert pushed == fixture("device", "preferences.json")
     assert [frame["type"] for frame in quiet] == ["reply"]
     assert theirs["preferences"] == {"resume_after_limit": True}
+
+
+def test_the_task_board_switch_reaches_the_apps_and_never_a_device(
+    client: TestClient, auth: dict[str, str]
+) -> None:
+    """A62: absent reads as off, the apps are told when it changes, and devices ignore it."""
+    enrolled = enroll_device(client, auth)
+    headers = {"Authorization": f"Bearer {enrolled['device_token']}"}
+    assert "task_board" not in client.get("/api/preferences", headers=auth).json()["preferences"]
+    with client.websocket_connect("/ws/device", headers=headers) as device:
+        device.send_json(device_hello())
+        drain_until(device, "preferences")
+        with client.websocket_connect("/ws/app", headers=auth) as app:
+            drain_until(app, "hello")
+            # The device hears of the change the switch makes, and only of that one.
+            client.patch(
+                "/api/preferences",
+                json={"task_board": True, "timeline_detail": "detailed"},
+                headers=auth,
+            )
+            announced = drain_until(app, "preferences.updated")
+            pushed = drain_until(device, "preferences")
+    assert announced["preferences"]["task_board"] is True
+    assert pushed["preferences"] == {"resume_after_limit": False, "timeline_detail": "detailed"}
+    with client.websocket_connect("/ws/device", headers=headers) as device:
+        device.send_json(device_hello())
+        device.receive_json()
+        assert "task_board" not in device.receive_json()["preferences"]
+
+
+def test_the_task_board_turns_off_on_a_gateway_that_keeps_no_boards(
+    client: TestClient, auth: dict[str, str]
+) -> None:
+    """A62: turning it off is a preference write any signed-in account may make, boards or not."""
+    assert client.get("/api/config", headers=auth).json()["board"] == {"enabled": False}
+    client.patch("/api/preferences", json={"task_board": True}, headers=auth)
+    response = client.patch("/api/preferences", json={"task_board": False}, headers=auth)
+    assert response.status_code == 200
+    assert response.json()["preferences"]["task_board"] is False
 
 
 def test_a_one_field_change_announces_the_whole_object(

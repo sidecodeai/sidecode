@@ -101,7 +101,7 @@ async def device_socket(ws: WebSocket) -> None:
             },
             {
                 "type": "preferences",
-                "preferences": await state.preferences_view(record.username),
+                "preferences": await state.device_preferences_view(record.username),
             },
         )
         while True:

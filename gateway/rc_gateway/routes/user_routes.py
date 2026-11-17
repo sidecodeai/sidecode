@@ -192,6 +192,8 @@ async def _delete_account(state: GatewayState, account: UserRecord) -> None:
     await state.devices.drop_pairings_for_user(account.username)
     await state.push_store.remove_for_user(account.username)
     await state.preference_store.remove_for_user(account.username)
+    if state.board is not None:
+        await state.board.forget_account(account.username)
     await state.sessions.revoke_for_user(account.username)
     await state.users.delete(account.username)
     log.info("account deleted", username=account.username)

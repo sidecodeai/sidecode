@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse
 
 from .apns import ApnsProvider
 from .auth_store import AuthSessionStore
+from .board import mount_board
 from .config import Config, load_config
 from .devices import DeviceStore
 from .headers import SecurityHeaders
@@ -133,12 +134,15 @@ def create_app(state: GatewayState | None = None) -> FastAPI:
         await resolved.sessions.start()
         await resolved.hub.start()
         await resolved.push.start()
+        if resolved.board is not None:
+            await resolved.board.start()
         log.info(
             "gateway ready",
             version=VERSION,
             public_origin=resolved.config.public_origin,
             stt=resolved.config.stt.provider,
             polish=resolved.config.polish.enabled,
+            board=resolved.board is not None,
             ios_min=resolved.config.ios_minimum_version,
             macos_min=resolved.config.macos_minimum_version,
             android_min=resolved.config.android_minimum_version,
@@ -153,6 +157,9 @@ def create_app(state: GatewayState | None = None) -> FastAPI:
             if live is not None:
                 # Calls first: each closes both of its sockets while the hub can still answer.
                 await live.close()
+            if resolved.board is not None:
+                # The updates next: they ask the hub and write frames to its sockets.
+                await resolved.board.stop()
             # The hub first: it lets the notifications already on their way out finish, which
             # needs the push service still running. The index last, so the sequence numbers those
             # frames recorded reach the disk.
@@ -185,6 +192,7 @@ def create_app(state: GatewayState | None = None) -> FastAPI:
     app.include_router(app_ws.router)
     app.include_router(stt_ws.router)
     mount_live(app, resolved)
+    mount_board(app, resolved)
     app.include_router(static_routes.router)
 
     # Ahead of routing: FastAPI would otherwise spool the whole multipart body before the route's

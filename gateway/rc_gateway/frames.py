@@ -65,6 +65,11 @@ SESSION_RESULT_TYPES = frozenset(
         SESSION_ARCHIVE,
     }
 )
+#: A62: the task board's two requests, which the gateway answers itself, and the frame it pushes.
+BOARD_GET = "board.get"
+BOARD_REFRESH = "board.refresh"
+BOARD_UPDATED = "board.updated"
+BOARD_REQUESTS = frozenset({BOARD_GET, BOARD_REFRESH})
 #: A38: a terminal belongs to a machine, never to a session, so all five name the device.
 #: ``terminal.detach`` is deliberately absent: only the gateway sends it, on its own account.
 TERMINAL_OPEN = "terminal.open"

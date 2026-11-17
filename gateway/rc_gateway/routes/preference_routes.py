@@ -47,7 +47,7 @@ async def patch_preferences(
     after = await state.preference_store.patch(credential.username, values)
     if after != before:
         log.info("preferences changed", username=credential.username)
-        await state.publish_preferences(credential.username, after)
+        await state.publish_preferences(credential.username, before, after)
     return _response(after)
 
 
@@ -75,6 +75,7 @@ CHECKS: dict[str, Callable[[Any], bool]] = {
     "polish_model": _string(minimum=0, maximum=128),
     "polish_strength": _word("moderate", "strong"),
     "timeline_detail": _word("simple", "detailed"),
+    "task_board": _boolean,
 }
 
 

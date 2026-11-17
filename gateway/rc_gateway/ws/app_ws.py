@@ -49,6 +49,7 @@ async def app_socket(ws: WebSocket) -> None:
                 VERSION,
                 stt=state.stt_view(),
                 polish=state.polish_view(),
+                board=state.board_view(),
                 apps=state.apps_view(),
                 preferences=await state.preferences_view(credential.username),
             )

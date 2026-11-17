@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import __version__
 from .apns import ApnsProvider
@@ -29,6 +29,9 @@ from .rejects import RejectionLog
 from .session_registry import SessionRegistry
 from .stt import Transcriber
 from .users import UserStore
+
+if TYPE_CHECKING:
+    from .board.service import BoardService
 
 VERSION = __version__
 
@@ -52,6 +55,8 @@ class GatewayState:
     push: PushService = field(init=False)
     transcriber: Transcriber | None = None
     polisher: Polisher | None = None
+    #: The task boards (A62), when this gateway keeps them; mounted by ``board.mount_board``.
+    board: BoardService | None = None
     apns: ApnsProvider | None = None
     #: Refused `/ws/device` upgrades, so an orphaned daemon is visible without flooding the log.
     device_rejects: RejectionLog = field(default_factory=RejectionLog)
@@ -75,6 +80,10 @@ class GatewayState:
     def polish_view(self) -> dict[str, Any]:
         return {"enabled": self.config.polish.enabled}
 
+    def board_view(self) -> dict[str, Any]:
+        """A62: the `board` object of `GET /api/config` and of the app `hello`."""
+        return {"enabled": self.board is not None}
+
     def apps_view(self) -> dict[str, Any]:
         """A31, A45: the oldest build of each separately installed app this gateway works with."""
         return apps_view(self.config)
@@ -83,17 +92,27 @@ class GatewayState:
         """A35: the switches one account reads, whether it has ever set one or not."""
         return (await self.preference_store.get(username)).view()
 
-    async def publish_preferences(self, username: str, preferences: Preferences) -> None:
+    async def device_preferences_view(self, username: str) -> dict[str, Any]:
+        """The same for the account's devices, without what only the apps read (A62)."""
+        return (await self.preference_store.get(username)).device_view()
+
+    async def publish_preferences(
+        self, username: str, before: Preferences, preferences: Preferences
+    ) -> None:
         """Announce a change to everything the account has connected (A35).
 
         The apps need it to redraw the switch they did not flip; the devices need it to act on,
-        which is the whole point of storing it here rather than in an app.
+        which is the whole point of storing it here rather than in an app. The task board acts
+        on its own switch turning on or off (A62).
         """
-        view = preferences.view()
         await self.hub.broadcast_user(
-            username, {"type": "preferences.updated", "preferences": view}
+            username, {"type": "preferences.updated", "preferences": preferences.view()}
         )
-        await self.hub.send_to_devices(username, {"type": "preferences", "preferences": view})
+        await self.hub.send_to_devices(
+            username, {"type": "preferences", "preferences": preferences.device_view()}
+        )
+        if self.board is not None and before.board_on != preferences.board_on:
+            await self.board.on_preferences(username, preferences)
 
     def client_view(self) -> dict[str, Any] | None:
         """The served wheel (A22), or None in a checkout where none has been built."""
@@ -115,6 +134,7 @@ class GatewayState:
             "public_origin": self.config.public_origin,
             "stt": self.stt_view(),
             "polish": self.polish_view(),
+            "board": self.board_view(),
             "apps": self.apps_view(),
             "push": {
                 "web_enabled": self.push.web_enabled,

@@ -17,7 +17,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Any
+from typing import Any, Protocol
 
 from .auto_update import (
     UPDATE_PATIENCE_SECONDS,
@@ -42,6 +42,7 @@ from .catchup import (
 from .connections import AppConnection, DeviceConnection, SlowClientError, encode
 from .devices import UPDATE_FAILED, UPDATE_RUNNING, DeviceStore, normalize_pairing_code
 from .frames import (
+    BOARD_REQUESTS,
     CLOSE_DEVICE_REPLACED,
     CLOSE_FORBIDDEN,
     CLOSE_SLOW_CLIENT,
@@ -56,6 +57,7 @@ from .frames import (
     ERROR_NOT_FOUND,
     ERROR_TIMEOUT,
     ERROR_TOO_LARGE,
+    ERROR_UNSUPPORTED,
     FORWARDED_BY_DEVICE,
     FORWARDED_TYPES,
     MAX_ATTACHMENT_BYTES,
@@ -211,6 +213,23 @@ class SessionResumeNotice:
 ResumeHook = Callable[[SessionResumeNotice], Awaitable[None]]
 
 
+class BoardHooks(Protocol):
+    """The task board's hooks (A62). Only ``handle_app_frame`` is awaited, on an app's socket;
+    the others run on a device's read loop and touch nothing but memory."""
+
+    async def handle_app_frame(self, connection: AppConnection, frame: Frame) -> None: ...
+
+    def on_session_change(
+        self, previous: IndexedSession | None, indexed: IndexedSession, owner: str
+    ) -> None: ...
+
+    def on_session_dropped(self, session_id: str) -> None: ...
+
+    def on_device_online(self, device_id: str) -> None: ...
+
+    def on_app_detached(self, connection: AppConnection) -> None: ...
+
+
 @dataclass
 class _Pending:
     device_id: str
@@ -316,6 +335,8 @@ class Hub:
         update_patience: float = UPDATE_PATIENCE_SECONDS,
         served_build: Callable[[], str | None] | None = None,
     ) -> None:
+        #: The task board's hooks, when this gateway keeps boards (A62).
+        self.board: BoardHooks | None = None
         self.index = index
         self.device_store = device_store
         self.request_timeout = request_timeout
@@ -700,10 +721,24 @@ class Hub:
         # A36: a device behind the served wheel is brought to it without anyone pressing Update.
         self._auto_update.on_hello(connection, client_build, summaries)
         self._catchups.start(connection, summaries, known)
+        if self.board is not None:
+            self.board.on_device_online(connection.device_id)
         await self._advance_pairing(connection.device_id, "online")
         if has_available_agent(connection.agents):
             await self._advance_pairing(connection.device_id, "agents")
         return True
+
+    async def ask_device(self, device_id: str, request: Frame, timeout: float) -> Frame | None:
+        """Ask a device something on the gateway's own account (A9, A62).
+
+        As a forwarded request would be, it waits through the device's A13 grace. The reply, or
+        ``None`` when the device is offline, does not answer in time, or the link fails.
+        """
+        await self._await_device(device_id)
+        connection = self._connected_device(device_id)
+        if connection is None:
+            return None
+        return await self._ask_device(connection, request, timeout)
 
     async def _ask_device(
         self, connection: DeviceConnection, request: Frame, timeout: float | None = None
@@ -938,6 +973,8 @@ class Hub:
         connection.cancel_subscribing()
         async with self._lock:
             self._apps.pop(connection.id, None)
+        if self.board is not None:
+            self.board.on_app_detached(connection)
         # A close the device is still working on outlives the socket that asked for it: it is what
         # keeps the last words of the session from marking it (A39), whoever is listening.
         for key in [
@@ -957,6 +994,7 @@ class Hub:
         *,
         stt: Frame,
         polish: Frame,
+        board: Frame,
         apps: Frame,
         preferences: Frame,
     ) -> Frame:
@@ -983,6 +1021,8 @@ class Hub:
             "sessions": await self.index.list_sessions(device_ids=device_ids),
             "stt": stt,
             "polish": polish,
+            # A62: whether this gateway keeps task boards; absent before it, which means none.
+            "board": board,
             # A31: repeated here so a gateway upgraded under a connected app is caught at the
             # next connection, not only before sign-in.
             "apps": apps,
@@ -1007,6 +1047,9 @@ class Hub:
         if kind == "session.seen":
             await self._handle_seen(connection, frame)
             return
+        if kind in BOARD_REQUESTS:
+            await self._handle_board(connection, frame)
+            return
         if kind in FORWARDED_TYPES:
             await self._forward(connection, frame)
             return
@@ -1017,6 +1060,34 @@ class Hub:
             )
         else:
             log.debug("unknown app frame dropped", kind=kind)
+
+    async def _handle_board(self, connection: AppConnection, frame: Frame) -> None:
+        """`board.get` and `board.refresh` are the gateway's to answer, never a device's (A62)."""
+        if self.board is None:
+            identifier = request_id(frame)
+            if identifier:
+                await self._send_app(
+                    connection,
+                    error_reply(identifier, ERROR_UNSUPPORTED, "this gateway keeps no task boards"),
+                )
+            return
+        await self.board.handle_app_frame(connection, frame)
+
+    async def send_app(self, connection: AppConnection, frame: Frame) -> None:
+        """Send one frame to one app socket, held back like every other (A62's `board.updated`)."""
+        await self._send_app(connection, frame)
+
+    async def session_account(self, session_id: str) -> tuple[str, str] | None:
+        """The device and the account that own a session, or ``None`` when nobody does (A62)."""
+        device_id = await self._owner_of(session_id)
+        if device_id is None:
+            return None
+        username = await self.device_owner(device_id)
+        return (device_id, username) if username else None
+
+    def queue_snapshot(self, session_id: str) -> Frame | None:
+        """The newest `queue` event the gateway saw for a session (A6), or ``None``."""
+        return self._queues.get(session_id)
 
     async def broadcast_user(self, username: str, frame: Frame) -> None:
         """Publish to one account's sockets. Every device-derived frame goes through here (A24)."""
@@ -1694,6 +1765,8 @@ class Hub:
         # A36, A56: an automatic update waits for the device to be quiet, which its summaries say.
         self._auto_update.on_session_change(device_id, indexed.summary)
         self._cue_transition(previous, indexed, owner, closing=closing)
+        if self.board is not None:
+            self.board.on_session_change(previous, indexed, owner)
         return None if previous is None else previous.last_seq
 
     def _cue_transition(
@@ -1805,6 +1878,8 @@ class Hub:
         self._device_owners.pop(device_id, None)
 
     async def _drop_session(self, device_id: str, session_id: str, owner: str) -> None:
+        if self.board is not None:
+            self.board.on_session_dropped(session_id)
         self._catchups.forget(session_id)
         self._buffers.pop(session_id, None)
         self._queues.pop(session_id, None)
