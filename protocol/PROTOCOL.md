@@ -40,7 +40,7 @@ amended field names throughout.
 
 | Term | Meaning |
 | --- | --- |
-| gateway | The VPS service. Authenticates users and devices, routes frames, indexes sessions, buffers events for replay, proxies speech-to-text, dictation polish and push. It never runs an agent and never holds an agent's credentials; the only model keys it may hold are the operator's own for speech-to-text and for polishing dictation (A29). |
+| gateway | The VPS service. Authenticates users and devices, routes frames, indexes sessions, buffers events for replay, proxies speech-to-text, dictation polish and push, and keeps task boards (A62). It never runs an agent and never holds an agent's credentials; the only model keys it may hold are the operator's own for speech-to-text, for polishing dictation (A29) and for task boards (A62). |
 | device | A developer machine running `rc-client`. It drives the locally installed agents and is the source of truth for session history. |
 | app | The web UI or the iOS app. Apps never talk to devices directly. |
 | agent | `"claude"` (Claude Code), `"codex"` (Codex CLI), `"grok"` (Grok Build) or `"pi"` (the pi coding agent) (A25, A26). The field is an **extensible string**: a UI that meets an unknown agent renders it generically, using the id as the label. |
@@ -310,6 +310,11 @@ Passwords are stored hashed and never returned. `LoginRequest.username` is requi
 and its `url`; a device whose `client_build` differs is brought to it with `device.update` — by the
 gateway itself, as soon as it can (A36), or by an app retrying after a failure (A22).
 
+`board` (A62) says whether this gateway keeps a task board for each conversation (4.12, 6.2):
+`enabled` is true when its operator has configured a model for the boards. `hello` carries the same
+object. A gateway older than A62 sends neither, and an app then offers no board anywhere; with
+`enabled: false` an app draws no board in a conversation and shows the setting disabled with a note.
+
 `fixtures/http/config.response.json`
 
 ```json
@@ -323,6 +328,9 @@ gateway itself, as soon as it can (A36), or by an app retrying after a failure (
     "streaming": false
   },
   "polish": {
+    "enabled": true
+  },
+  "board": {
     "enabled": true
   },
   "apps": {
@@ -371,6 +379,15 @@ font size and which groups a list has folded. `hello` on `/ws/app` carries the o
 `preferences`; a gateway older than A35 sends none, and an app shows the resume switch disabled
 with a note. Only the caller's own preferences are readable or writable.
 
+`task_board` (A62) is the account's permission for the task board (4.12, 6.2). Absent reads as
+false, and unlike the fields of A41 an app never writes it from a local value: only the person's
+turning the board on, after the app has said what the board sends, or off writes it. It is
+account-wide, because the gateway keeps the boards for every app of the account, and an app does
+not clear it at sign-out. Turning it off deletes every board of the account at once. An app lets
+the person turn it off whenever it is on, whatever the plan or `board.enabled`, and writes `true`
+only when the account can use the board. A `PATCH` validates it as a boolean, needs a login alone
+like every preference, and devices ignore it.
+
 `fixtures/http/preferences.response.json`
 
 ```json
@@ -382,7 +399,8 @@ with a note. Only the caller's own preferences are readable or writable.
     "polish_enabled": true,
     "polish_model": "gpt-5.4-mini",
     "polish_strength": "moderate",
-    "timeline_detail": "detailed"
+    "timeline_detail": "detailed",
+    "task_board": true
   }
 }
 ```
@@ -460,8 +478,9 @@ the live partial text and sends no `partials`. Recognition on the phone itself n
 | GET | `/api/polish/models` | — | `PolishModelsResponse` | `503` with code `unsupported` when no polish model is configured; `502` with code `upstream` when the provider fails |
 | POST | `/api/polish` | `PolishRequest` | `PolishResponse` | `503` `unsupported`; `400` `bad_request` for an empty or over-long text, an unknown strength or a malformed context; `502` `upstream` when the provider fails or times out |
 
-Dictation polish (amendment A29) is the one place the gateway calls a language model, and it does so
-only on an app's request: the operator configures an OpenAI-compatible base URL and key for it, the
+Dictation polish (amendment A29) is one of two places the gateway calls a language model — the other
+is the task board (A62, 4.12), kept from the device's own history — and it does so only on an app's
+request: the operator configures an OpenAI-compatible base URL and key for it, the
 gateway lists that provider's models, and an app whose user turned the feature on sends the text a
 dictation produced together with the recent conversation and gets the same request back said
 cleanly. `hello` and `GET /api/config` report `polish.enabled` so an app can show or disable the
@@ -1331,6 +1350,97 @@ list.
 
 Apps render `/name` beside `description`, filter by prefix of `name` as the user types, and send
 `name` back unchanged.
+
+---
+
+### 4.12 Board
+
+A conversation's task board (A62): the requests the person made in a session, each with where it
+stands, kept by the gateway from the session's recent rounds (6.2). `fixtures/objects/board.json` is
+the worked example.
+
+`Board`
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `session_id` | string | yes | The session the board belongs to |
+| `device_id` | string | yes | The session's device |
+| `revision` | integer, at least 1 | yes | Every write of a board, an update that changed no item included, takes the next value of one counter the gateway keeps for all its boards, so a session's revision only grows, also after its board was deleted and made again, and the values are not consecutive. An app decodes it as a 64-bit integer and keeps the highest it has seen per session (6.2) |
+| `items` | `BoardItem[]`, at most 30 | yes | The `doing` items, then the `todo` items, each group in the order they were added, then the `done` items, the most recently done first |
+| `updated_at` | timestamp | yes | The last successful update |
+| `partial` | boolean | yes | True when older rounds of the conversation were not read into the board |
+
+`BoardItem`
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `id` | string | yes | `t` and a number (`^t[1-9][0-9]{0,5}$`) from a counter of the board that never gives an id twice, not even after a rebuild |
+| `text` | string, 1 to 120 characters | yes | One request in the person's language. Apps draw it as plain text: no Markdown, no links, no HTML |
+| `status` | `todo` \| `doing` \| `done` | yes | Asked for and not started; being worked on, partly done or waiting on the person; reported finished with nothing later saying otherwise |
+| `created_at` | timestamp | yes | When the gateway added it |
+| `updated_at` | timestamp | yes | The last change of its text or status |
+
+Every open item stays on the board until a later round shows it done or dropped, at most 25 of them;
+of the done items, the five most recently done are kept.
+
+`BoardStatus` carries `state`, `reason` and, for `stale`, an optional `retry_at`:
+
+| `state` | `reason` | Meaning |
+| --- | --- | --- |
+| `off` | null | The account's `task_board` is off (3.2) |
+| `unavailable` | `unsupported` \| `subscription_required` \| `quota_exceeded` \| `billing_not_configured` | The gateway will not update this board for this account now |
+| `current` | null | The board has read everything the session has, or nothing new happened |
+| `updating` | null | A run is in flight or scheduled |
+| `stale` | `device_offline` \| `history_unavailable` \| `model_failed` \| `invalid_output` \| `rate_limited` | Behind and not updating now; `retry_at` is when a back-off or a cap ends, or null |
+
+The four `unavailable` reasons are the interface a deployment's own policy fills in: `unsupported`,
+it keeps no board for this account; `subscription_required`, the account's subscription does not
+include the board; `quota_exceeded`, the account cannot use it for now; `billing_not_configured`, the
+deployment cannot do the work now. A gateway whose operator keeps every account's boards, as a
+self-hosted one does, answers none of them. An app reads an unknown `state` as `stale` and an
+unknown `reason` with its generic line.
+
+`fixtures/objects/board.json`
+
+```json
+{
+  "session_id": "ad2c9abb-4a1e-470a-835c-228778fc17f0",
+  "device_id": "c5efb1ec-2912-4619-90f7-93b5172fd712",
+  "revision": 4,
+  "items": [
+    {
+      "id": "t3",
+      "text": "Run the refresh test 20 times in a row",
+      "status": "doing",
+      "created_at": 1788944404400,
+      "updated_at": 1788944461100
+    },
+    {
+      "id": "t4",
+      "text": "Check the settings drawer for the same timing bug",
+      "status": "todo",
+      "created_at": 1788944461100,
+      "updated_at": 1788944461100
+    },
+    {
+      "id": "t2",
+      "text": "Fix the refresh window in tests/test_auth.py",
+      "status": "done",
+      "created_at": 1788944401100,
+      "updated_at": 1788944440000
+    },
+    {
+      "id": "t1",
+      "text": "Reproduce the flaky auth refresh test",
+      "status": "done",
+      "created_at": 1788944401100,
+      "updated_at": 1788944420000
+    }
+  ],
+  "updated_at": 1788944481100,
+  "partial": false
+}
+```
 
 ---
 
@@ -2255,7 +2365,7 @@ device is answered `not_found`, exactly as one naming nothing would be.
 
 | Type | Payload | When |
 | --- | --- | --- |
-| `hello` | `protocol`, `gateway_version`, `user`, `devices`, `sessions`, `stt`, `polish`, `apps`, `preferences`, `server_time` | First frame. `polish` (A29) may be absent on a gateway older than it, which means disabled; `apps` (A31) likewise, which means no minimum; `preferences` (A35) likewise, which means the switches it holds are not offered; `stt.streaming` (A57) likewise, which means live partials (3.5) |
+| `hello` | `protocol`, `gateway_version`, `user`, `devices`, `sessions`, `stt`, `polish`, `board`, `apps`, `preferences`, `server_time` | First frame. `polish` (A29) may be absent on a gateway older than it, which means disabled; `apps` (A31) likewise, which means no minimum; `preferences` (A35) likewise, which means the switches it holds are not offered; `stt.streaming` (A57) likewise, which means live partials (3.5); `board` (A62) likewise, which means no task board (3.2) |
 | `device.updated` | `device` | A device connects, disconnects, is renamed or re-detects agents |
 | `device.removed` | `device_id` | A device is deleted |
 | `session.updated` | `session` | Any change to a session summary |
@@ -2265,6 +2375,7 @@ device is answered `not_found`, exactly as one naming nothing would be.
 | `terminal.exited` | `terminal_id`, `device_id`, `code` | The shell ended; to the holder alone (A38) |
 | `pairing.progress` | `code`, `step`, `device?` | While a pairing code is outstanding. `step` is `waiting`, `enrolled`, `online` or `agents`. |
 | `preferences.updated` | `preferences` | The account's preferences changed, from this app or another (A35) |
+| `board.updated` | `session_id`, `device_id`, `board` (`Board` or null), `status` | A watched task board's content or status changed; only to the owner's sockets that watch it (6.2, A62) |
 | `ping` | – | Every 25 s; the app replies `pong` |
 | `reply` | `id`, `ok`, `result` or `error` | Answer to a request |
 
@@ -2386,6 +2497,9 @@ informational and for routing.
   "polish": {
     "enabled": true
   },
+  "board": {
+    "enabled": true
+  },
   "apps": {
     "ios": {
       "minimum_version": "0.1.0",
@@ -2495,6 +2609,8 @@ The device, session and option arrays are shortened here; the fixture holds the 
 | `session.subscribe` | `id`, `session_id`, `since_seq?` | `{session, events, resync, queue?}` |
 | `session.unsubscribe` | `session_id` | none |
 | `session.seen` | `id`, `session_id` | `{}` |
+| `board.get` | `id`, `session_id` | `{board, status}`: the stored `Board` or null, and its `BoardStatus` (A62) |
+| `board.refresh` | `id`, `session_id`, `rebuild?` | `{status}` (A62) |
 | `pong` | – | none |
 
 `events` are the buffered events with `seq > since_seq`. Omitting `since_seq` returns an empty array,
@@ -2548,6 +2664,114 @@ the account. It is idempotent; another account's session is `not_found`.
   "type": "session.seen",
   "id": "5b0e7d63-0a4f-4c1e-9d1b-7f3e8a2c6b44",
   "session_id": "ad2c9abb-4a1e-470a-835c-228778fc17f0"
+}
+```
+
+`board.get` and `board.refresh` (A62) concern a session's task board (4.12). The gateway answers
+both itself, for a session the socket's account owns: another account's session is `not_found`, as
+an unknown one is, and a gateway whose `board.enabled` is false answers `unsupported`. A missing
+`session_id` or a `rebuild` that is not a boolean is `bad_request`. A plan, quota or configuration
+refusal is never a reply error but the reply's `status`, so `/ws/app` never answers
+`subscription_required`. A gateway older than A62 answers `bad_request` ("unsupported type"); an app
+sends neither request unless `board.enabled` is true.
+
+An app sends `board.get` when a conversation opens, when its window or screen comes to the front and
+after a reconnect re-subscribed it, each time after the `session.subscribe` reply for that session. The reply carries the stored board, or null when there is none
+yet, with its status, from stored data and a quick check of the deployment's policy that asks
+nothing of the device or a billing service; whatever needs the device or the model happens
+afterwards and arrives as `board.updated`. A socket subscribed to the session watches its board
+from its first `board.get` or `board.refresh` until it unsubscribes or closes: it receives
+`board.updated` whenever the board's content or status changes, and only the owner's watching
+sockets do. While the account's `task_board` is on (3.2), both requests record that the
+conversation was opened; while it is off they record nothing and answer `off`, and no board exists.
+`board.refresh` asks for an update now, inside a back-off too, and answers `{status}`. With
+`rebuild: true` the board starts over: its items are cleared, their ids are never given again, and
+the newest rounds are read again. An app drops a reply or a `board.updated` whose non-null `board`
+has a lower `revision` than the one it holds, its `status` with it; a frame with `board: null`
+clears the board it holds for the session and applies the `status`; a `board.refresh` reply applies
+its `status`.
+
+The gateway reads a board's input from the device itself with `session.history` (6.4), `brief: true`
+(A60), on its own account: the newest pages, at most three of 200 events, 5 s and 4 MiB each, and
+one such read per device at a time. A round is a message the person sent — a `user_message` whose
+`source` is `remote`, `terminal` or `queue` — and everything after it, in display order, until the
+next one; a message from another agent (A30) or a resume (A35) starts none. A new board reads the
+newest ten rounds; a later update reads the rounds after the last one read and two before them for
+context, with the session's queued messages, at most 20,000 characters, never tool input or output,
+thinking or notices. The model receives the current board with them, and its answer is checked and
+merged by fixed rules: items keep their ids, an open item the model leaves out stays as it was, at
+most 25 are open and the five most recently done are kept; an answer that fails the checks changes
+nothing.
+
+A board is followed for seven days after an app last opened it while `task_board` was on: it is
+updated 20 s after each turn of its session ends, whether or not an app watches it, when its device
+says `hello` while the board is behind, and when an app opens it behind; at most once a minute per
+session and one update at a time, never when nothing new happened, and after a failure not again
+for 60 s, then 300 s, then 1,800 s. A session no app of the account opened in the last seven days is
+never read. While the device is offline the board stays as it is, `stale` with `device_offline`.
+Only the boards are stored, never the history or the text sent to the model. A board is deleted with
+its session, its device and its account, when the account's `task_board` is turned off (the watching
+sockets then receive `board.updated` with `board: null` and `state: off`), and when no app has
+opened it for 30 days and none watches it. An update that ends after its board was deleted, or
+after the account turned the board off, writes nothing and sends nothing. Devices change nothing
+for A62.
+
+`fixtures/app/board.get.json`
+
+```json
+{
+  "type": "board.get",
+  "id": "61e50c72-d2bc-4a64-be32-62fdd1ba4635",
+  "session_id": "ad2c9abb-4a1e-470a-835c-228778fc17f0"
+}
+```
+
+`fixtures/app/reply.board.get.off.json`
+
+```json
+{
+  "type": "reply",
+  "id": "61e50c72-d2bc-4a64-be32-62fdd1ba4635",
+  "ok": true,
+  "result": {
+    "board": null,
+    "status": {
+      "state": "off",
+      "reason": null
+    }
+  }
+}
+```
+
+`fixtures/app/reply.board.get.json` answers the same request with the board of
+`fixtures/objects/board.json` (4.12) and `state: updating`, and `fixtures/app/board.updated.json`
+carries that board, with `session_id` and `device_id`, and `state: current`.
+
+`fixtures/app/board.refresh.json`
+
+```json
+{
+  "type": "board.refresh",
+  "id": "a6d0c2f7-31e9-4856-8541-d5ece2b4a9c3",
+  "session_id": "ad2c9abb-4a1e-470a-835c-228778fc17f0",
+  "rebuild": false
+}
+```
+
+`fixtures/app/reply.board.refresh.json`
+
+```json
+{
+  "type": "reply",
+  "id": "a6d0c2f7-31e9-4856-8541-d5ece2b4a9c3",
+  "ok": true,
+  "result": {
+    "status": {
+      "state": "stale",
+      "reason": "device_offline",
+      "retry_at": null
+    }
+  }
 }
 ```
 
@@ -4174,6 +4398,16 @@ one app connection that asked. The gateway relays bytes and never reads them.
       `history forwarded`, with the device and session ids, `brief`, `ok`, the event count, the
       length of the reply's text as the device sent it and the milliseconds it took, never its
       content (A60).
+- [ ] Reports `board.enabled` in `hello` and `GET /api/config`; answers `board.get` and
+      `board.refresh` itself under session ownership (`not_found` otherwise) and `unsupported` when it
+      keeps no boards; never answers a plan or quota refusal as a reply error (A62).
+- [ ] Reads a board's input only with `session.history` (brief, newest pages, ≤ 3 × 200 events) on
+      its own account, and only for a session an app of the account opened in the last seven days
+      while `task_board` was on; updates such a session's board 20 s after each turn ends whether or
+      not an app watches it, and when an app opens it behind; sends `board.updated` only to the
+      owner's sockets watching that board; makes no model call when nothing new happened; deletes
+      boards with the session, the device, the account, the preference turned off, and after 30 days
+      unopened; logs no content (A62).
 
 ### 9.2 Device
 
@@ -4527,6 +4761,11 @@ one app connection that asked. The gateway relays bytes and never reads them.
       (offline, timeout, generic). A40's rule that a `conflict` from `session.set` or
       `session.command` is shown in the reply's words stays as it was for a settings change and a
       command; only a rename is worded by the app (A55).
+- [ ] Shows a board only when `board.enabled`; sends `board.get` on opening a conversation, on
+      bringing it to the front and after re-subscribing it, each after the subscribe reply; draws
+      item text as plain text; keeps the highest `revision`, decoded as a 64-bit integer, and
+      clears the board on a frame with `board: null`; never writes `task_board` from a local value,
+      and always lets the person turn it off while it is on (A62).
 
 - [ ] Decodes every fixture under `fixtures/` in its test suite.
 
@@ -4540,7 +4779,8 @@ one app connection that asked. The gateway relays bytes and never reads them.
 | `fixtures/device/` | One frame per device-socket type |
 | `fixtures/device/forwarded/` | All seventeen forwarded requests as the device receives them, plus the A9 backfill, A43 re-queue, A55 rename and A60 brief history variants |
 | `fixtures/events/` | One event per kind, and one `tool_call` per `tool_kind` |
-| `fixtures/objects/` | Bare `Session` and `AgentInfo` objects that no frame fixture carries, including the two attachable agents and the shared sessions |
+| `fixtures/objects/` | Bare `Session` and `AgentInfo` objects that no frame fixture carries, including the two attachable agents and the shared sessions, and the task board of A62 (`board.json`) |
+| `fixtures/app/board.*.json`, `fixtures/app/reply.board.*.json` | The task board's requests, replies and `board.updated` (A62) |
 | `fixtures/http/` | One body per HTTP request and response |
 | `fixtures/stt/` | The five speech-to-text text frames |
 | `fixtures/timelines/claude.json` | A complete Claude Code turn, 41 events |
@@ -5403,3 +5643,32 @@ the agent quits in its terminal and that anything typed there and not sent is lo
 `unsupported` and `conflict` itself (8, rule 21). A device from before A61 lists no
 `close_terminal`, and no app offers it this Close. `fixtures/objects/agent.*.json` list the
 capability. See 2.3, 4.2, 4.4, 6.3, 8 and 9.
+
+**2026-11-18 A62 — a task board for each conversation.** A long conversation had to be read again to
+know what was asked, what was done and what was left. The gateway now keeps, for each session an
+app of the account has opened, a short list of the person's requests and where each stands, made
+by the operator's language model from the conversation's recent rounds. `hello` and
+`GET /api/config` carry `board: {enabled}`; a gateway older than A62 sends none and an app offers
+no board. The account preference `task_board` (3.2) is the permission: absent is off, an app writes
+it only when the person turns the board on or off, and off deletes every board of the account. An
+app sends `board.get` (6.2) when a conversation opens, when it comes to the front and after a
+reconnect, and gets the stored board, or null, with its status; while the permission is on this
+records that the conversation was opened, and the socket watches that board while it stays
+subscribed. `board.refresh` asks for an update now, and with `rebuild: true` starts the board over.
+The gateway reads the conversation from the device itself with `session.history` (6.4), brief
+(A60), on its own account, at most three pages of 200 events: a round is a message the person sent
+(`source` `remote`, `terminal` or `queue`) and everything after it until the next one; a new board
+reads the newest ten rounds, and later updates the rounds after the last one read and two before
+them for context, at most 20,000 characters, never tool input or output, thinking or notices. A
+board is followed for seven days after an app last opened it: it is updated 20 s after each turn
+of its session ends, whether or not an app watches it, when its device reconnects behind, and when
+an app opens it behind, at most once a minute per session and one run at a time; a session not
+opened in an app in seven days is never read. The model's answer is checked and merged by fixed
+rules: items keep their ids, open items the model leaves out stay as they were, at most 25 are open
+and the five most recently done are kept. Each change reaches the watching sockets as
+`board.updated`, under a revision from one counter for all of the gateway's boards, so it only
+grows. A plan, quota or configuration refusal is a status, never a reply error. Boards
+are stored on the gateway until their session, device or account is deleted, the permission is
+withdrawn, or nobody has opened them for 30 days. Devices change nothing.
+`fixtures/app/board.*.json`, `fixtures/app/reply.board.*.json` and `fixtures/objects/board.json`
+are the worked examples. See 1.1, 3.2, 3.5, 4.12, 6.1, 6.2, 9 and 10.

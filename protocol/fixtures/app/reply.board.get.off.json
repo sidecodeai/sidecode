@@ -1,0 +1,12 @@
+{
+  "type": "reply",
+  "id": "61e50c72-d2bc-4a64-be32-62fdd1ba4635",
+  "ok": true,
+  "result": {
+    "board": null,
+    "status": {
+      "state": "off",
+      "reason": null
+    }
+  }
+}

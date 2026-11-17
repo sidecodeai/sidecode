@@ -151,7 +151,8 @@
         "polish_enabled": { "type": "boolean" },
         "polish_model": { "type": "string", "maxLength": 128 },
         "polish_strength": { "type": "string", "enum": ["moderate", "strong"] },
-        "timeline_detail": { "type": "string", "enum": ["simple", "detailed"] }
+        "timeline_detail": { "type": "string", "enum": ["simple", "detailed"] },
+        "task_board": { "type": "boolean" }
       }
     },
     "ConfigResponse": {
@@ -161,6 +162,7 @@
         "public_origin": { "type": "string", "minLength": 1 },
         "stt": { "$ref": "app_frames.json#/$defs/SttInfo" },
         "polish": { "$ref": "app_frames.json#/$defs/PolishInfo" },
+        "board": { "$ref": "app_frames.json#/$defs/BoardInfo" },
         "apps": { "$ref": "objects.json#/$defs/AppsInfo" },
         "push": {
           "type": "object",

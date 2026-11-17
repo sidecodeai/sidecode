@@ -132,6 +132,15 @@
         },
         {
           "$ref": "#/$defs/DeviceUpdate"
+        },
+        {
+          "$ref": "#/$defs/BoardGet"
+        },
+        {
+          "$ref": "#/$defs/BoardRefresh"
+        },
+        {
+          "$ref": "#/$defs/BoardUpdated"
         }
       ]
     },
@@ -271,6 +280,10 @@
         "polish": {
           "$ref": "#/$defs/PolishInfo"
         },
+        "board": {
+          "description": "Whether this gateway keeps task boards (A62); absent on a gateway older than A62, which offers no board.",
+          "$ref": "#/$defs/BoardInfo"
+        },
         "apps": {
           "$ref": "objects.json#/$defs/AppsInfo"
         },
@@ -305,6 +318,18 @@
         "enabled"
       ],
       "additionalProperties": false
+    },
+    "BoardInfo": {
+      "description": "Whether the gateway keeps a task board for each conversation (A62).",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled"
+      ]
     },
     "SttInfo": {
       "type": "object",
@@ -1996,6 +2021,148 @@
         "id",
         "session_id"
       ]
+    },
+    "BoardGet": {
+      "description": "App -> gateway, handled by the gateway (A62): the session's stored task board and its status. While the account's task_board is on it records that the conversation was opened, and the socket watches the board while it stays subscribed.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "board.get"
+        },
+        "session_id": {
+          "$ref": "objects.json#/$defs/Id"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "session_id"
+      ]
+    },
+    "BoardRefresh": {
+      "description": "App -> gateway, handled by the gateway (A62): update the board now; rebuild starts it over. Records and watches as board.get does.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/RequestBase"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "board.refresh"
+        },
+        "session_id": {
+          "$ref": "objects.json#/$defs/Id"
+        },
+        "rebuild": {
+          "type": "boolean",
+          "description": "Clear the items and read the newest rounds again; false when absent."
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "session_id"
+      ]
+    },
+    "BoardUpdated": {
+      "description": "Gateway -> app (A62): a watched board's content or status changed. Sent only to the owner's sockets that watch the board.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "board.updated"
+        },
+        "session_id": {
+          "$ref": "objects.json#/$defs/Id"
+        },
+        "device_id": {
+          "$ref": "objects.json#/$defs/Uuid"
+        },
+        "board": {
+          "anyOf": [
+            {
+              "$ref": "objects.json#/$defs/Board"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "objects.json#/$defs/BoardStatus"
+        }
+      },
+      "required": [
+        "type",
+        "session_id",
+        "device_id",
+        "board",
+        "status"
+      ]
+    },
+    "ResultBoardGet": {
+      "type": "object",
+      "properties": {
+        "board": {
+          "anyOf": [
+            {
+              "$ref": "objects.json#/$defs/Board"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "objects.json#/$defs/BoardStatus"
+        }
+      },
+      "required": [
+        "board",
+        "status"
+      ]
+    },
+    "ResultBoardRefresh": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "objects.json#/$defs/BoardStatus"
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "ReplyBoardGet": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReplyOk"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ResultBoardGet"
+        }
+      }
+    },
+    "ReplyBoardRefresh": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ReplyOk"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ResultBoardRefresh"
+        }
+      }
     }
   }
 }

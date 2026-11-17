@@ -7,6 +7,7 @@
     "polish_enabled": true,
     "polish_model": "gpt-5.4-mini",
     "polish_strength": "moderate",
-    "timeline_detail": "detailed"
+    "timeline_detail": "detailed",
+    "task_board": true
   }
 }

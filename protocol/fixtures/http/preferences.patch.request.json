@@ -1,3 +1,4 @@
 {
-  "resume_after_limit": true
+  "resume_after_limit": true,
+  "task_board": true
 }

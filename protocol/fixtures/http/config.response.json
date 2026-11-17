@@ -10,6 +10,9 @@
   "polish": {
     "enabled": true
   },
+  "board": {
+    "enabled": true
+  },
   "apps": {
     "ios": {
       "minimum_version": "0.1.0",

@@ -94,6 +94,9 @@ APP_FRAME_TYPES = (
     "terminal.close",
     "device.agents",
     "device.update",
+    "board.get",
+    "board.refresh",
+    "board.updated",
 )
 DEVICE_FRAME_TYPES = (
     "hello",
@@ -253,6 +256,10 @@ PATH_SCHEMAS = {
     "app/reply.terminal.attach.json": ("app_frames.json", "ReplyTerminalAttach"),
     "app/reply.device.agents.json": ("app_frames.json", "ReplyDeviceAgents"),
     "app/reply.device.update.json": ("app_frames.json", "ReplyDeviceUpdate"),
+    "app/reply.board.get.json": ("app_frames.json", "ReplyBoardGet"),
+    "app/reply.board.get.off.json": ("app_frames.json", "ReplyBoardGet"),
+    "app/reply.board.refresh.json": ("app_frames.json", "ReplyBoardRefresh"),
+    "objects/board.json": ("objects.json", "Board"),
 }
 # fixtures_invalid/<prefix>__<reason>.json -> (schema file, definition or None)
 INVALID_SCHEMAS = {
@@ -266,6 +273,7 @@ INVALID_SCHEMAS = {
     "http.login": ("http.json", "LoginRequest"),
     "http.preferences": ("http.json", "PreferencesPatchRequest"),
     "objects.agent": ("objects.json", "AgentInfo"),
+    "objects.board": ("objects.json", "Board"),
     "objects.user": ("objects.json", "User"),
 }
 

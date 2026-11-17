@@ -1,0 +1,12 @@
+{
+  "type": "reply",
+  "id": "a6d0c2f7-31e9-4856-8541-d5ece2b4a9c3",
+  "ok": true,
+  "result": {
+    "status": {
+      "state": "stale",
+      "reason": "device_offline",
+      "retry_at": null
+    }
+  }
+}

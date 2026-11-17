@@ -28,6 +28,9 @@ OPTIONAL_AGENT_FIELDS = {
     "speeds",
 }
 OPTIONAL_SESSION_FIELDS = {"speed", "resume"}
+# Object fixtures a device never decodes: a task board (A62) passes only between
+# the gateway and the apps.
+APP_ONLY_OBJECTS = frozenset({"board"})
 
 
 def assert_round_trip(
@@ -231,7 +234,11 @@ def test_timeline_fixtures_replay_through_the_registry_and_the_bounds(agent: str
         registry.close()
 
 
-@pytest.mark.parametrize("name", fixture_names("objects"))
+def device_object_names() -> list[str]:
+    return [name for name in fixture_names("objects") if name.split(".")[0] not in APP_ONLY_OBJECTS]
+
+
+@pytest.mark.parametrize("name", device_object_names())
 def test_every_object_fixture_decodes_with_the_device_types(name: str) -> None:
     payload = load_fixture(f"objects/{name}")
     if name.startswith("session."):

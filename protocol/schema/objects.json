@@ -1075,10 +1075,159 @@
             "detailed"
           ],
           "description": "How much of a transcript is drawn (A41)."
+        },
+        "task_board": {
+          "type": "boolean",
+          "description": "Whether the gateway keeps task boards for this account (A62). Absent is off; never written from an app's local value."
         }
       },
       "required": [
         "resume_after_limit"
+      ]
+    },
+    "BoardItem": {
+      "description": "One request on a conversation's task board (A62).",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^t[1-9][0-9]{0,5}$"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "status": {
+          "enum": [
+            "todo",
+            "doing",
+            "done"
+          ]
+        },
+        "created_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "status",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "Board": {
+      "description": "A conversation's task board, kept by the gateway (A62).",
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "device_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "items": {
+          "type": "array",
+          "maxItems": 30,
+          "items": {
+            "$ref": "#/$defs/BoardItem"
+          }
+        },
+        "updated_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "partial": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "session_id",
+        "device_id",
+        "revision",
+        "items",
+        "updated_at",
+        "partial"
+      ]
+    },
+    "BoardStatus": {
+      "description": "Whether and why a board is or is not being kept current (A62).",
+      "type": "object",
+      "oneOf": [
+        {
+          "properties": {
+            "state": {
+              "enum": [
+                "off",
+                "current",
+                "updating"
+              ]
+            },
+            "reason": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "state",
+            "reason"
+          ]
+        },
+        {
+          "properties": {
+            "state": {
+              "const": "unavailable"
+            },
+            "reason": {
+              "enum": [
+                "unsupported",
+                "subscription_required",
+                "quota_exceeded",
+                "billing_not_configured"
+              ]
+            }
+          },
+          "required": [
+            "state",
+            "reason"
+          ]
+        },
+        {
+          "properties": {
+            "state": {
+              "const": "stale"
+            },
+            "reason": {
+              "enum": [
+                "device_offline",
+                "history_unavailable",
+                "model_failed",
+                "invalid_output",
+                "rate_limited"
+              ]
+            },
+            "retry_at": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/Timestamp"
+                }
+              ]
+            }
+          },
+          "required": [
+            "state",
+            "reason"
+          ]
+        }
       ]
     }
   }
