@@ -6,7 +6,8 @@ import { create } from 'zustand';
 import { getSocket, setSocket } from '../lib/gateway';
 import { AppSocket, socketUrl, type SocketStatus } from '../lib/ws';
 import type { PairingStep, PushFrame } from '../protocol/frames';
-import type { Device, PolishInfo } from '../protocol/types';
+import type { BoardInfo, Device, PolishInfo } from '../protocol/types';
+import { useBoards } from './board';
 import { useChat } from './chat';
 import { useDevices } from './devices';
 import { usePreferences } from './preferences';
@@ -34,6 +35,11 @@ interface ConnectionState {
   stt: { enabled: boolean; streaming?: boolean };
   /** A29: whether this gateway can polish a dictation. Off until `hello` says so. */
   polish: PolishInfo;
+  /**
+   * A62: whether this gateway keeps task boards, or null until a `hello` says
+   * and on a gateway too old to say, where no board is offered anywhere.
+   */
+  board: BoardInfo | null;
   /** server_time minus the local clock at the last hello, in milliseconds. */
   clockSkewMs: number;
   pairing: PairingProgress | null;
@@ -62,6 +68,7 @@ function disconnected(): Disconnected {
     username: null,
     stt: { enabled: false },
     polish: { enabled: false },
+    board: null,
     clockSkewMs: 0,
     pairing: null,
   };
@@ -101,6 +108,8 @@ function handleFrame(frame: PushFrame, set: Setter): void {
     case 'hello': {
       useDevices.getState().replaceAll(frame.devices);
       useSessions.getState().replaceAll(frame.sessions);
+      // A62: boards kept for another account go before this one's preferences land.
+      useBoards.getState().forAccount(frame.user.username);
       // A35: the account's switches, or nothing at all on an older gateway.
       usePreferences.getState().fromHello(frame.preferences);
       set({
@@ -110,6 +119,7 @@ function handleFrame(frame: PushFrame, set: Setter): void {
         username: frame.user.username,
         stt: { enabled: frame.stt.enabled, streaming: frame.stt.streaming },
         polish: frame.polish ?? { enabled: false },
+        board: frame.board ?? null,
         clockSkewMs:
           typeof frame.server_time === 'number' ? frame.server_time - Date.now() : 0,
       });
@@ -133,6 +143,10 @@ function handleFrame(frame: PushFrame, set: Setter): void {
       return;
     case 'preferences.updated':
       usePreferences.getState().apply(frame.preferences);
+      return;
+    // A62: a board this socket watches changed; only its owner's watching sockets get it.
+    case 'board.updated':
+      useBoards.getState().apply(frame);
       return;
     // A38: bytes and the shell's end, for the one terminal page that asked.
     // The gateway sends them to this connection alone, so there is nobody to

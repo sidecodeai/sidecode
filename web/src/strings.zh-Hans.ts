@@ -377,6 +377,30 @@ export const zhHans: StringTable = {
     resumeDropped: '未继续',
     turnLimit: '本轮因用量限额结束',
     turnLimitResets: (when: string) => `本轮因用量限额结束 · ${when} 恢复`,
+
+    board: {
+      chip: '看板',
+      chipCount: (open: number) => `看板 ${open}`,
+      title: '任务看板',
+      doing: '进行中',
+      todo: '待做',
+      done: '最近完成',
+      empty: '还没有任务。你在这个对话里提出的要求会出现在这里。',
+      updated: (when: string) => `${when}更新`,
+      updating: '更新中…',
+      partial: '根据本对话最近几轮整理。',
+      refresh: '刷新',
+      startOver: '重新整理',
+      startOverAsk: '根据最近几轮重新整理看板？当前任务会被替换。',
+      turnOff: '在设置中关闭',
+      offline: '设备离线，暂时无法更新。',
+      failed: '暂时无法更新。',
+      paused: '更新已暂停，稍后会继续。',
+      quota: '此账户的任务看板暂时不可用，控制 Agent 与手动输入不受影响。',
+      unavailable: '任务看板暂时不可用，请稍后再试。',
+      offLead: '查看你在这个对话里提出的要求、正在做的和还剩下的。',
+      enable: '启用',
+    },
   },
 
   accountMenu: {
@@ -512,6 +536,21 @@ export const zhHans: StringTable = {
     languageNote: '只改应用自身的文案，agent 写的内容保持原样。',
     timelineDetail: '详细程度',
     timelineDetailNote: '简约只显示写给你的内容。详细会加上思考、工具调用和任务清单。',
+    taskBoard: '任务看板',
+    taskBoardNote:
+      '为每个对话列出你提出的要求、正在做的和还剩下的。对你最近 7 天打开过的对话，每轮结束后和你打开时，最近的消息会经由此网关发送给第三方 AI 模型。工具输出不会发送。关闭时不会发送任何内容，关闭后会删除所有看板。',
+    taskBoardUnsupported: '此网关未配置任务看板模型',
+    taskBoardConsent: {
+      title: '开启任务看板？',
+      lead: '任务看板会列出你在对话里提出的要求、正在做的和还剩下的，省去重读长对话。',
+      sends:
+        '对你最近 7 天打开过的对话，每轮结束后和你打开时，最近的消息（你的消息、Agent 的回复、它运行的工具名称和报错）会经由此网关发送给第三方 AI 模型。工具输出不会发送。',
+      keeps:
+        '网关只保存任务列表，不保存消息。对话、设备或账户被删除、你关闭看板，或对话 30 天未被打开时，网关会删除任务列表。',
+      caution: '回复可能包含 Agent 打印的任何内容，例如密钥。任务列表由 AI 生成，可能有误。',
+      agree: '同意并继续',
+      notNow: '暂不',
+    },
 
     versions: (gateway: string, protocol: string) => `网关 ${gateway} · 协议 ${protocol}`,
     connected: '已连接',

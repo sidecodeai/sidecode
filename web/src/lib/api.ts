@@ -1,5 +1,6 @@
 /** Thin fetch wrapper for the gateway HTTP API (PROTOCOL-FROZEN.md §2). */
 import type {
+  BoardInfo,
   Device,
   PolishInfo,
   PolishModelsResponse,
@@ -88,6 +89,8 @@ export interface ConfigResponse {
   stt: { enabled: boolean; languages: string[]; streaming?: boolean };
   /** A29: absent from a gateway too old to polish dictation, which is "off". */
   polish?: PolishInfo;
+  /** A62: absent from a gateway too old to keep task boards, which offers none. */
+  board?: BoardInfo;
   push: { web_enabled: boolean; apns_enabled: boolean };
   version: string;
   client?: ClientBuildInfo;

@@ -370,6 +370,8 @@ describe.runIf(fixturesAvailable())('protocol fixtures', () => {
     expect(files.length).toBeGreaterThan(0);
     for (const file of files) {
       const object = readFixture<Record<string, unknown>>(file.name);
+      // A62's example task board carries a `session_id` too; `board-fixtures.test.ts` reads it.
+      if ('revision' in object && 'items' in object) continue;
       if ('session_id' in object) assertSession(object as unknown as Session);
       else if ('agent' in object) assertAgent(object as unknown as AgentInfo);
       else throw new Error(`unknown object fixture ${file.name}`);

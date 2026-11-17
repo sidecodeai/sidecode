@@ -10,10 +10,18 @@
  * A41 put the Settings screen's own values in the same object. The ones this
  * app keeps are read from the settings store, which the whole app reads
  * already, so every object that arrives here is handed to it as well.
+ *
+ * A62's `task_board` is the account's permission for the task board. It is
+ * written only when the person turns the board on, after the disclosure, or
+ * off, never from a value this app holds, and it is not taken for on until the
+ * gateway's reply says so: a board request sent ahead of it would find the
+ * board still off. Off, or absent, means the gateway keeps none of the
+ * account's boards, which the board store is told every time.
  */
 import { create } from 'zustand';
 import { api } from '../lib/api';
 import type { Preferences } from '../protocol/types';
+import { useBoards } from './board';
 import { useSettings } from './settings';
 
 interface PreferencesState {
@@ -24,7 +32,14 @@ interface PreferencesState {
   apply: (preferences: Preferences) => void;
   /** Written at once and put back when the gateway refuses. */
   setResumeAfterLimit: (value: boolean) => Promise<void>;
+  /** A62: written, and held once the gateway answers; rejects when it refuses. */
+  setTaskBoard: (value: boolean) => Promise<void>;
   reset: () => void;
+}
+
+/** A62: the account's boards are gone on the gateway unless the board is on. */
+function followTaskBoard(preferences: Preferences | undefined): void {
+  if (preferences?.task_board !== true) useBoards.getState().turnedOff();
 }
 
 export const usePreferences = create<PreferencesState>((set, get) => ({
@@ -33,11 +48,13 @@ export const usePreferences = create<PreferencesState>((set, get) => ({
   fromHello: (preferences) => {
     set({ preferences });
     useSettings.getState().fromHello(preferences);
+    followTaskBoard(preferences);
   },
 
   apply: (preferences) => {
     set({ preferences });
     useSettings.getState().fromAccount(preferences);
+    followTaskBoard(preferences);
   },
 
   setResumeAfterLimit: async (value) => {
@@ -52,6 +69,12 @@ export const usePreferences = create<PreferencesState>((set, get) => ({
       set({ preferences: previous });
       throw err;
     }
+  },
+
+  setTaskBoard: async (value) => {
+    if (get().preferences === undefined) return;
+    const result = await api.setPreferences({ task_board: value });
+    get().apply(result.preferences);
   },
 
   reset: () => {

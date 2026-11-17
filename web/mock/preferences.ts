@@ -37,6 +37,8 @@ const FIELDS: Record<string, Check> = {
   polish_model: isText(128, true),
   polish_strength: isWord('moderate', 'strong'),
   timeline_detail: isWord('simple', 'detailed'),
+  // A62: the account's task board, off until the person turns it on.
+  task_board: isBoolean,
 };
 
 /**

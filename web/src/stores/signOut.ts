@@ -12,6 +12,7 @@
  */
 import { clearAppBadge } from '../push/appBadge';
 import { useAnswers } from './answers';
+import { useBoards } from './board';
 import { useChat } from './chat';
 import { useCommands } from './commands';
 import { useConnection } from './connection';
@@ -39,6 +40,8 @@ export function signOut(): void {
   useDevices.getState().reset();
   useUsers.getState().reset();
   usePreferences.getState().reset();
+  // A62: the task boards this tab heard of, which are the account's conversations in brief.
+  useBoards.getState().reset();
   // A38: the ids of this account's detached shells, so the next person in the
   // browser attaches to none of them.
   resetTerminals();

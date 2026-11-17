@@ -1,7 +1,8 @@
 /**
  * How the app reads: the words it uses for itself, and how much of a turn the
  * timeline draws. Two choices each, so both are segmented controls in the row
- * (`docs/DESIGN.md` § "The Settings screen").
+ * (`docs/DESIGN.md` § "The Settings screen"). Then A62's task board, the
+ * account's switch, on a gateway that knows of it.
  */
 import { Segmented } from '../../components/Segmented';
 import type { InterfaceLanguage, TimelineDetail } from '../../protocol/types';
@@ -10,6 +11,7 @@ import { INTERFACE_LANGUAGES, TIMELINE_DETAILS } from '../../stores/preferenceFi
 import { useSettings } from '../../stores/settings';
 import { SettingsGroup } from './SettingsGroup';
 import { SettingsRow } from './SettingsRow';
+import { TaskBoardRow } from './TaskBoardRow';
 
 export function ReadingGroup() {
   const language = useSettings((s) => s.language);
@@ -49,6 +51,7 @@ export function ReadingGroup() {
           />
         }
       />
+      <TaskBoardRow />
     </SettingsGroup>
   );
 }

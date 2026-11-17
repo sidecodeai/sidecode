@@ -1,0 +1,253 @@
+/*
+ * A62 — the task board's panel, under the Tasks chip: light and restrained,
+ * hairlines between its parts, no colour beyond the status tones the app already
+ * has and no motion beyond the spinner while it updates.
+ */
+.board-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 352px;
+  max-width: 100%;
+  max-height: 60vh;
+}
+
+.board-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 36px;
+  padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-3);
+  flex: none;
+}
+
+.board-title {
+  flex: 1;
+  margin: 0;
+  font-size: var(--fs-14);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.board-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.board-actions .icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Inside the panel, so a press on it is a press in the panel. */
+.board-menu {
+  position: absolute;
+  top: calc(100% - 2px);
+  right: var(--sp-1);
+  z-index: 1;
+  min-width: 200px;
+  margin: 0;
+  padding: var(--sp-1);
+  list-style: none;
+  background: var(--surface);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-pop);
+}
+
+.board-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: var(--sp-1);
+}
+
+.board-group + .board-group {
+  border-top: 1px solid var(--hairline);
+}
+
+.board-group-title {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3) 2px;
+  font-size: var(--fs-12);
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--ink-tertiary);
+}
+
+.board-items {
+  margin: 0;
+  padding: 0 0 var(--sp-1);
+  list-style: none;
+}
+
+.board-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: 4px var(--sp-3);
+  font-size: var(--fs-13);
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+.board-item.done {
+  color: var(--ink-secondary);
+}
+
+/* A file name or a command can be one long word: it wraps rather than widening the panel. */
+.board-item-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.board-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 13px;
+  height: 19.5px;
+  color: var(--ink-tertiary);
+}
+
+.board-glyph.doing::before,
+.board-glyph.todo::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+
+.board-glyph.doing::before {
+  background: var(--running);
+}
+
+.board-glyph.todo::before {
+  border: 1.5px solid var(--ink-tertiary);
+}
+
+.board-empty {
+  margin: 0;
+  padding: var(--sp-1) var(--sp-3) var(--sp-3);
+  font-size: var(--fs-13);
+  line-height: 1.5;
+  color: var(--ink-secondary);
+}
+
+/* Three still lines where a first board is being made. */
+.board-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+}
+
+.board-skeleton span {
+  height: 10px;
+  border-radius: var(--r-pill);
+  background: var(--surface-muted);
+}
+
+.board-skeleton span:nth-child(1) {
+  width: 78%;
+}
+
+.board-skeleton span:nth-child(2) {
+  width: 62%;
+}
+
+.board-skeleton span:nth-child(3) {
+  width: 70%;
+}
+
+.board-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-2) var(--sp-3);
+  border-top: 1px solid var(--hairline);
+  flex: none;
+}
+
+.board-foot-line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+  font-size: var(--fs-12);
+  line-height: 1.5;
+  color: var(--ink-tertiary);
+}
+
+.board-spinner {
+  width: 11px;
+  height: 11px;
+  border-width: 1.5px;
+}
+
+.board-retry {
+  margin-left: auto;
+  flex: none;
+}
+
+.board-off {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-1) var(--sp-3) var(--sp-3);
+}
+
+.board-off-lead {
+  margin: 0;
+  font-size: var(--fs-13);
+  line-height: 1.5;
+  color: var(--ink-secondary);
+}
+
+.board-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-1) var(--sp-3) var(--sp-3);
+}
+
+.board-confirm-ask {
+  margin: 0;
+  font-size: var(--fs-13);
+  line-height: 1.5;
+}
+
+.board-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
+/* The disclosure's three points, each a sentence or two, read top to bottom. */
+.board-consent {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.board-consent-points {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding-left: var(--sp-5);
+  font-size: var(--fs-13);
+  line-height: 1.55;
+  color: var(--ink-secondary);
+}
+
+/* A phone: the panel is as wide as the window allows, under the header. */
+@media (max-width: 480px) {
+  .board-panel {
+    width: calc(100vw - 40px);
+    max-height: 70vh;
+  }
+}

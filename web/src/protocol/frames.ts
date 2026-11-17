@@ -2,6 +2,9 @@
 import type {
   AgentId,
   AgentInfo,
+  Board,
+  BoardInfo,
+  BoardStatus,
   Command,
   Device,
   GitInfo,
@@ -47,10 +50,24 @@ export interface HelloFrame {
   polish?: PolishInfo;
   /** A35: absent from a gateway too old to hold the account's preferences. */
   preferences?: Preferences;
+  /** A62: absent from a gateway too old to keep task boards, which offers none. */
+  board?: BoardInfo;
   server_time: number;
 }
 
 export type PairingStep = 'waiting' | 'enrolled' | 'online' | 'agents';
+
+/**
+ * A62: a board this socket watches changed, its content or its status. Only the
+ * owner's sockets that asked for the board while subscribed to its session get it.
+ */
+export interface BoardUpdatedFrame {
+  type: 'board.updated';
+  session_id: string;
+  device_id: string;
+  board: Board | null;
+  status: BoardStatus;
+}
 
 export type PushFrame =
   | HelloFrame
@@ -71,6 +88,7 @@ export type PushFrame =
   | { type: 'terminal.output'; terminal_id: string; device_id: string; seq: number; data: string }
   // A38: that shell ended and the id is free.
   | { type: 'terminal.exited'; terminal_id: string; device_id: string; code: number }
+  | BoardUpdatedFrame
   | { type: 'ping' };
 
 export type ServerFrame = PushFrame | Reply;
@@ -184,6 +202,20 @@ export interface TerminalAttachResult {
   scrollback: string;
 }
 
+/**
+ * A62: the stored board, or null while the gateway holds none, and its status.
+ * Plan, quota and configuration refusals are a status here, never a reply error.
+ */
+export interface BoardGetResult {
+  board: Board | null;
+  status: BoardStatus;
+}
+
+/** A62: what the gateway does about the board now; the board itself follows as `board.updated`. */
+export interface BoardRefreshResult {
+  status: BoardStatus;
+}
+
 /** Request type -> (params, result) mapping used by the typed socket client. */
 export interface RequestMap {
   'session.subscribe': [{ session_id: string; since_seq?: number }, SubscribeResult];
@@ -289,6 +321,15 @@ export interface RequestMap {
   'terminal.attach': [{ device_id: string; terminal_id: string }, TerminalAttachResult];
   /** A38: end the shell. Idempotent. */
   'terminal.close': [{ device_id: string; terminal_id: string }, Record<string, never>];
+  /**
+   * A62: the conversation's task board. Handled by the gateway, never by a
+   * device. While the account's `task_board` is on it records that the
+   * conversation was opened, and the socket watches the board while it stays
+   * subscribed to the session. `unsupported` from a gateway that keeps none.
+   */
+  'board.get': [{ session_id: string }, BoardGetResult];
+  /** A62: update the board now; `rebuild: true` starts it over from the latest rounds. */
+  'board.refresh': [{ session_id: string; rebuild?: boolean }, BoardRefreshResult];
 }
 
 export type RequestType = keyof RequestMap;

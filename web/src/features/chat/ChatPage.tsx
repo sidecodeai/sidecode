@@ -15,6 +15,7 @@ import type { SendMode } from '../../protocol/frames';
 import type { Command, QuestionAnswers } from '../../protocol/types';
 import { polishContext } from '../voice/polish';
 import { NewSessionDrawer } from '../sessions/NewSessionDrawer';
+import { useBoardRequests } from './board/useBoardRequests';
 import { ChatHeader } from './ChatHeader';
 import { Composer } from './Composer';
 import { ResumeNotice } from './ResumeNotice';
@@ -92,7 +93,11 @@ export function ChatPage() {
   }, [deviceId, sessionId, key, socketStatus, openChat, closeChat]);
 
   // A47: an open conversation is a seen one only while the page is in front.
-  useFrontConversation(deviceId, sessionId);
+  const inFront = useFrontConversation(deviceId, sessionId);
+
+  // A62: the task board is asked for once the subscribe answers, when the page
+  // comes back in front, and when the account turns the board on.
+  useBoardRequests(deviceId, sessionId, inFront);
 
   // A conversation that could not be read is asked for again by itself: when its
   // device comes online, and on a short backoff while it is.

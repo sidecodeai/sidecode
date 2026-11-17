@@ -10,6 +10,7 @@ import { LiveEntry } from '../live/LiveEntry';
 import { SessionRenameDialog } from '../sessions/SessionRenameDialog';
 import { canRename } from '../sessions/rename';
 import { canInterruptShared } from './attach';
+import { BoardChip } from './board/BoardChip';
 import type { AgentInfo, Session, TodoItem } from '../../protocol/types';
 
 interface Props {
@@ -100,6 +101,9 @@ export function ChatHeader({
             )}
           </Popover>
         ) : null}
+
+        {/* A62: drawn in both details, whenever the gateway keeps task boards. */}
+        <BoardChip deviceId={session.device_id} sessionId={session.session_id} />
 
         {tokens > 0 || elapsed ? (
           <span className="pill quiet usage-chip">

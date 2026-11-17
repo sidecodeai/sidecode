@@ -100,11 +100,12 @@
 }
 
 /*
- * The voice assistant's entry (features/live) takes a button's width in this row. On a phone the
- * usage chip, the quietest thing in it, gives way so the title keeps its room.
+ * The voice assistant's entry (features/live) and the Tasks chip (A62) each take room in this row.
+ * On a phone the usage chip, the quietest thing in it, gives way so the title keeps its room.
  */
 @media (max-width: 480px) {
-  .chat-header-actions:has(.live-entry) .usage-chip {
+  .chat-header-actions:has(.live-entry) .usage-chip,
+  .chat-header-actions:has(.board-chip) .usage-chip {
     display: none;
   }
 }

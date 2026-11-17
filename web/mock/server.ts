@@ -78,6 +78,7 @@ import { planTerminalClose } from './closeTerminal';
 import { emptyPreferences, patchPreferences } from './preferences';
 import { FakeShell } from './shell';
 import { clearMark, moveState } from './unseen';
+import { CURRENT, OFF, RUN_MS, UPDATING, answerGet, forgetBoard, refusal, run } from './board';
 
 const PORT = Number(process.env.PORT ?? 8787);
 const PASSWORD = process.env.RC_PASSWORD ?? 'dev';
@@ -91,6 +92,9 @@ const COOKIE = 'rc_session';
  * words stream, as with the realtime backend.
  */
 const STT = { enabled: true, languages: ['auto'], streaming: process.env.RC_MOCK_STT !== 'batch' };
+
+/** A62: this mock keeps task boards (`mock/board.ts`), for every account. */
+const BOARD = { enabled: true };
 
 /* ----------------------------------------------------------------- state */
 
@@ -182,6 +186,8 @@ interface AppConn {
   subscriptions: Set<string>;
   /** A38: the terminals this connection holds, which it loses when it closes. */
   terminals: Set<string>;
+  /** A62: the boards it watches, asked for while subscribed to their sessions. */
+  boards: Set<string>;
 }
 
 const conns = new Set<AppConn>();
@@ -702,6 +708,7 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<vo
       public_origin: `http://127.0.0.1:5173`,
       stt: STT,
       polish: { enabled: true },
+      board: BOARD,
       push: { web_enabled: true, apns_enabled: false },
       version: GATEWAY_VERSION,
       client: { version: CLIENT_VERSION, build: CLIENT_BUILD, url: '/dist/rc_client-latest.whl' },
@@ -726,8 +733,11 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<vo
       return;
     }
     const next = outcome.preferences;
+    const boardWasOn = preferencesOf(account.username).task_board === true;
     state.preferences.set(account.username, next);
     broadcastTo(account.username, { type: 'preferences.updated', preferences: next });
+    // A62: off deletes every board of the account, and every socket watching one hears so.
+    if (boardWasOn && next.task_board !== true) forgetBoardsOf(account.username);
     json(res, 200, { preferences: next });
     return;
   }
@@ -988,6 +998,7 @@ function onAppSocket(socket: WebSocket, account: Account): void {
     username: account.username,
     subscriptions: new Set(),
     terminals: new Set(),
+    boards: new Set(),
   };
   conns.add(conn);
 
@@ -1000,6 +1011,7 @@ function onAppSocket(socket: WebSocket, account: Account): void {
     sessions: sessionsOf(account.username),
     stt: STT,
     polish: { enabled: true },
+    board: BOARD,
     // A35: absent here would be a gateway too old for the switch, which is what
     // the app draws disabled; this one holds them.
     preferences: preferencesOf(account.username),
@@ -1103,6 +1115,66 @@ function terminalOf(conn: AppConn, frame: Record<string, unknown>): FakeShell | 
   return conn.terminals.has(String(frame.terminal_id ?? '')) ? shell : null;
 }
 
+/* ------------------------------------------------------------ A62 task boards */
+
+/** Why the account's boards are not kept, or null: on. */
+const boardRefusal = (username: string) => refusal(preferencesOf(username).task_board === true);
+
+/** `board.updated` to every socket watching the session's board. */
+function sendBoardUpdate(sessionId: string, deviceId: string, board: unknown, status: unknown): void {
+  for (const conn of conns) {
+    if (conn.boards.has(sessionId)) {
+      send(conn.socket, { type: 'board.updated', session_id: sessionId, device_id: deviceId, board, status });
+    }
+  }
+}
+
+/** A run a moment later, unless the session went or the board was turned off meanwhile. */
+function runBoardSoon(session: Session, rebuild: boolean): void {
+  const timer = setTimeout(() => {
+    if (findSession(session.session_id) === undefined) return;
+    if (boardRefusal(state.deviceOwner.get(session.device_id) ?? '') !== null) return;
+    const board = run(session.session_id, session.device_id, rebuild);
+    sendBoardUpdate(session.session_id, session.device_id, board, CURRENT);
+  }, RUN_MS);
+  timer.unref();
+}
+
+/** The account turned the board off: every board of it goes, and every socket watching one hears so. */
+function forgetBoardsOf(username: string): void {
+  for (const session of sessionsOf(username)) {
+    forgetBoard(session.session_id);
+    sendBoardUpdate(session.session_id, session.device_id, null, OFF);
+  }
+}
+
+/**
+ * `board.get` and `board.refresh`, answered from what is kept and the account's
+ * verdict; a socket subscribed to the session watches the board from then on.
+ */
+function handleBoardFrame(conn: AppConn, type: string, frame: Record<string, unknown>): void {
+  const id = frame.id;
+  if (typeof frame.session_id !== 'string' || frame.session_id === '') {
+    return replyError(conn, id, 'bad_request', 'session_id is required');
+  }
+  if (frame.rebuild !== undefined && typeof frame.rebuild !== 'boolean') {
+    return replyError(conn, id, 'bad_request', 'rebuild must be a boolean');
+  }
+  const session = findSession(frame.session_id);
+  if (!session) return replyError(conn, id, 'not_found', 'no such session');
+  if (conn.subscriptions.has(session.session_id)) conn.boards.add(session.session_id);
+  const refused = boardRefusal(conn.username);
+  if (type === 'board.get') {
+    const { board, status, build } = answerGet(session.session_id, session.device_id, refused);
+    reply(conn, id, { board, status });
+    if (build) runBoardSoon(session, false);
+    return;
+  }
+  if (refused) return reply(conn, id, { status: refused });
+  reply(conn, id, { status: UPDATING });
+  runBoardSoon(session, frame.rebuild === true);
+}
+
 function handleAppFrame(conn: AppConn, frame: Record<string, unknown>): void {
   const id = frame.id;
   const type = String(frame.type ?? '');
@@ -1149,7 +1221,14 @@ function handleAppFrame(conn: AppConn, frame: Record<string, unknown>): void {
 
     case 'session.unsubscribe':
       conn.subscriptions.delete(sessionId);
+      conn.boards.delete(sessionId);
       return;
+
+    // A62: the gateway's own, never a device's. Off is a status rather than an
+    // error.
+    case 'board.get':
+    case 'board.refresh':
+      return handleBoardFrame(conn, type, frame);
 
     // A47 §6.2: the person has the conversation in front of them. Handled
     // here, never by a device; idempotent, and every socket of the account
@@ -1586,6 +1665,7 @@ function handleAppFrame(conn: AppConn, frame: Record<string, unknown>): void {
 
     case 'session.delete': {
       state.sessions = state.sessions.filter((s) => s.session_id !== sessionId);
+      forgetBoard(sessionId);
       const removed = findSession(sessionId);
       broadcast({
         type: 'session.removed',

@@ -54,6 +54,15 @@ describe('the mock gateway preferences', () => {
     });
   });
 
+  it('takes the A62 task board switch as a boolean, set or cleared', () => {
+    expect(patchPreferences(held(), { task_board: true })).toEqual({
+      preferences: { resume_after_limit: false, task_board: true },
+    });
+    expect(patchPreferences({ resume_after_limit: false, task_board: true }, { task_board: false })).toEqual({
+      preferences: { resume_after_limit: false, task_board: false },
+    });
+  });
+
   it('ignores a field the contract does not know', () => {
     expect(patchPreferences(held(), { terminal_font_size: 14 })).toEqual({
       preferences: { resume_after_limit: false },
@@ -69,6 +78,7 @@ describe('the mock gateway preferences', () => {
     ['polish_model', 'x'.repeat(129)],
     ['polish_enabled', 'yes'],
     ['resume_after_limit', 1],
+    ['task_board', 'on'],
   ])('refuses %s: %s', (field, value) => {
     expect(patchPreferences(held(), { [field]: value })).toEqual({ error: field });
   });

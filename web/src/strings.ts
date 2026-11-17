@@ -458,6 +458,38 @@ export const en = {
     /** How a turn the vendor's usage limit ended closes. */
     turnLimit: 'Ended at the usage limit',
     turnLimitResets: (when: string) => `Ended at the usage limit · resets ${when}`,
+
+    /**
+     * A62 — the task board: the chip in the conversation header, with the count
+     * of what is open, and the panel it opens. The items are the gateway's,
+     * drawn as plain text and never translated.
+     */
+    board: {
+      chip: 'Tasks',
+      chipCount: (open: number) => `Tasks ${open}`,
+      title: 'Task board',
+      doing: 'Doing',
+      todo: 'To do',
+      done: 'Done recently',
+      empty: 'No tasks yet. What you ask for in this conversation will show up here.',
+      /** `when` is the relative time of the last update: "4m ago", "yesterday". */
+      updated: (when: string) => `Updated ${when}`,
+      updating: 'Updating…',
+      partial: 'Built from the latest rounds of this conversation.',
+      refresh: 'Refresh',
+      startOver: 'Start over',
+      startOverAsk: 'Rebuild the board from the latest rounds? Its current tasks are replaced.',
+      turnOff: 'Turn off in Settings',
+      offline: "Can't update while the device is offline.",
+      failed: "Couldn't update just now.",
+      paused: 'Updates are paused for a while.',
+      quota:
+        'The task board is paused on this account for now. You can still control your agents and type messages.',
+      unavailable: "The task board isn't available right now. Try again in a moment.",
+      /** The account has the board off: what it is for, and the way to turn it on. */
+      offLead: 'See what you asked for in this conversation, what is being done and what is left.',
+      enable: 'Enable',
+    },
   },
 
   /**
@@ -633,6 +665,26 @@ export const en = {
     timelineDetail: 'Detail',
     timelineDetailNote:
       'Simple shows only what is written to you. Detailed adds thinking, tool calls and the task list.',
+    /**
+     * A62: the account's task board, and the sheet that says what it sends
+     * before it is turned on. One wording for every gateway; 7 and 30 days are
+     * how long the gateway follows and keeps a conversation's board.
+     */
+    taskBoard: 'Task board',
+    taskBoardNote:
+      'Lists what you asked for in each conversation, what is being done and what is left. For conversations you opened in the last 7 days, recent messages go through this gateway to a third-party AI model after each round and when you open them. Tool output is not sent. Nothing is sent while it is off, and turning it off deletes every board.',
+    taskBoardUnsupported: 'This gateway has no task board model configured',
+    taskBoardConsent: {
+      title: 'Turn on the task board?',
+      lead: "The task board lists what you asked for in a conversation, what is being done and what is left, so you don't have to read it all again.",
+      sends:
+        "For conversations you opened in the last 7 days, recent messages (yours, the agent's replies, the names of the tools it ran and its errors) go through this gateway to a third-party AI model after each round and when you open them. Tool output is not sent.",
+      keeps:
+        'The gateway keeps the task list, not the messages. It deletes the list when the conversation, the device or the account is deleted, when you turn the board off, or when the conversation has not been opened for 30 days.',
+      caution: 'Replies can include anything an agent printed, such as secrets. The list is made by AI and can be wrong.',
+      agree: 'Agree and continue',
+      notNow: 'Not now',
+    },
 
     /** The footer caption: the versions, whose numbers come from the running code. */
     versions: (gateway: string, protocol: string) =>

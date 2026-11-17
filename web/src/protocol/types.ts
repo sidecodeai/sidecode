@@ -336,6 +336,12 @@ export interface Preferences {
   polish_model?: string;
   polish_strength?: PolishStrength;
   timeline_detail?: TimelineDetail;
+  /**
+   * A62: whether the gateway keeps task boards for this account. Absent is off,
+   * and unlike the fields above it is never written up from this app's own
+   * value: only the person turning the board on, after the disclosure, or off.
+   */
+  task_board?: boolean;
 }
 
 export interface Session {
@@ -692,4 +698,65 @@ export interface PolishRequest {
 
 export interface PolishResponse {
   text: string;
+}
+
+/* --------------------------------------------------------- task board (A62) */
+
+/** Whether the gateway keeps task boards. Absent from a gateway older than A62. */
+export interface BoardInfo {
+  enabled: boolean;
+}
+
+export type BoardItemStatus = 'todo' | 'doing' | 'done';
+
+/** One request on a conversation's task board: plain text, in the person's language. */
+export interface BoardItem {
+  /** `t<n>`, never reused on the board, not even after it is started over. */
+  id: string;
+  text: string;
+  status: BoardItemStatus;
+  created_at: number;
+  updated_at: number;
+}
+
+/**
+ * A conversation's task board as the gateway keeps it, `doing` first, then `todo`,
+ * then the most recently done. `revision` rises with every write of the board.
+ */
+export interface Board {
+  session_id: string;
+  device_id: string;
+  revision: number;
+  items: BoardItem[];
+  /** The last successful update. */
+  updated_at: number;
+  /** Older rounds of the conversation were not read into it. */
+  partial: boolean;
+}
+
+export type BoardState = 'off' | 'unavailable' | 'current' | 'updating' | 'stale';
+
+export type BoardUnavailableReason =
+  | 'unsupported'
+  | 'subscription_required'
+  | 'quota_exceeded'
+  | 'billing_not_configured';
+
+export type BoardStaleReason =
+  | 'device_offline'
+  | 'history_unavailable'
+  | 'model_failed'
+  | 'invalid_output'
+  | 'rate_limited';
+
+/**
+ * Whether and why a board is or is not being kept current. A newer gateway may
+ * send a state or a reason this build does not know: an unknown state reads as
+ * `stale`, an unknown reason as the generic line of its state.
+ */
+export interface BoardStatus {
+  state: BoardState | (string & {});
+  reason: BoardUnavailableReason | BoardStaleReason | (string & {}) | null;
+  /** When a back-off or a cap ends, in ms; absent or null when none applies. */
+  retry_at?: number | null;
 }

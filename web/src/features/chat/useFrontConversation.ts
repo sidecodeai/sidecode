@@ -13,8 +13,11 @@ import { sessionKey, useSessions } from '../../stores/sessions';
  * open, when a `session.updated` marks it while it is on screen, and when the
  * socket comes back with it marked. The store sends only while its copy says
  * `unseen`, so each of those moments costs one request at most.
+ *
+ * Answers whether the page is in front, which is when the conversation's task
+ * board is asked for again (A62).
  */
-export function useFrontConversation(deviceId: string, sessionId: string): void {
+export function useFrontConversation(deviceId: string, sessionId: string): boolean {
   const key = sessionKey(deviceId, sessionId);
   const inFront = useInFront();
   const unseen = useSessions((s) => s.sessions[key]?.unseen === true);
@@ -30,4 +33,6 @@ export function useFrontConversation(deviceId: string, sessionId: string): void 
   useEffect(() => {
     if (inFront && unseen && connected) markSeen(deviceId, sessionId);
   }, [deviceId, sessionId, inFront, unseen, connected, markSeen]);
+
+  return inFront;
 }
