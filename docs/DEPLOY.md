@@ -286,10 +286,14 @@ container serving while the image is made, and one `--force-recreate` takes the 
 changed `.env` together (`restart` takes neither). What the apps and devices see across the swap is
 described under [What a restart looks like](#what-a-restart-looks-like).
 
-Each of the seven databases applies its own additive migrations when it is opened, so an existing
-`DATA_DIR` is brought up to the new schema in place and an upgrade needs no manual step. A release
-that adds a database — `preferences.sqlite3` in 1.4.0, `boards.sqlite3` with the task board (A62)
-— creates it on the first start and needs no manual step either, and brings no new environment variable with it; a release that adds a column —
+Each of the six databases (with the task board turned on also `boards.sqlite3`) applies its own
+additive migrations when it is opened, so an existing `DATA_DIR` is brought up to the new schema in
+place and an upgrade needs no manual step. A release that adds a database — `preferences.sqlite3`
+in 1.4.0 — creates it on the first start and needs no manual step either, and brings no new
+environment variable with it. The task board's `boards.sqlite3` (A62) is the exception: it is
+created on the first start of a gateway whose board is turned on, which takes `BOARD_MODEL` beside
+`POLISH_BASE_URL` and `POLISH_API_KEY` (the board uses the polish provider); without them the
+gateway creates no such file and keeps no boards. A release that adds a column —
 `devices.update_failed_build` in 1.4.7 (A36), `devices.terminal` in 1.5.0 (A38), the six Settings
 columns of `preferences` in 1.7.0 (A41) — is applied the
 same way. From 1.4.7 the gateway also

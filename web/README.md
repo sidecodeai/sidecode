@@ -46,8 +46,9 @@ The mock and the tests share `mock/fixtures.ts`, so a fixture change shows up in
 src/
   protocol/       Wire types (types.ts) and frame/request shapes (frames.ts)
   lib/            api.ts (HTTP), ws.ts (app socket), gateway.ts (socket handle), formatters
-  stores/         zustand stores: auth, connection, devices, sessions, chat, outbox, settings
+  stores/         zustand stores: auth, connection, devices, sessions, chat, outbox, settings, board
                   timeline.ts is the pure event -> renderable-items reducer
+                  board.ts holds each conversation's task board and its status (A62)
   components/     Buttons, modal/drawer, popover/menu, context menu, tooltip, segmented control, switch, status dots
   layout/         Top bar shell and the product mark
   features/
@@ -55,6 +56,7 @@ src/
     devices/      Device list, rename/revoke, Add device modal with live pairing steps
     sessions/     Session list, New session drawer, directory browser and probe
     chat/         Sidebar, header, timeline and blocks, composer, status line
+      board/      The task board (A62): the header's Tasks chip, its panel and every status it draws
     account-menu/ The account button and its menu, at the sidebar's foot and in the top bar
     voice/        Mic capture, 16 kHz PCM16 conversion, live transcription panel
     live/         Voice assistant: the entry, the panel, the call and its saved history

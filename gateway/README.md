@@ -25,7 +25,7 @@ failing, so the API stays usable during development.
 
 ## State in `DATA_DIR`
 
-Four SQLite files, each created 0600 in a directory created 0700, alongside the generated
+SQLite files, each created 0600 in a directory created 0700, alongside the generated
 `session_secret` and `vapid_private.pem`:
 
 | File | Contents |
@@ -34,6 +34,7 @@ Four SQLite files, each created 0600 in a directory created 0700, alongside the 
 | `devices.sqlite3` | enrolled devices and pairing codes, as hashes only; between a clean stop and the next start, the ids of the devices that were online (A56) |
 | `sessions.sqlite3` | the last known summary of every agent session, and the gateway's own `unseen` mark on it (A47) |
 | `push.sqlite3` | Web Push subscriptions, APNs tokens and the delivery journal, badge-only deliveries included |
+| `boards.sqlite3` | only on a gateway that keeps task boards (A62): one board per session an app opened with the account's `task_board` on, its items, the cursors and time of its last update, when it was last opened and its back-off, and one revision counter for all boards; never the conversation it was made from. A board is deleted with its session, its device or its account, when the account turns the board off, and after 30 days unopened unless an app is watching it |
 
 Schema changes are applied in place when a store opens: `rc_gateway/migrations.py` compares each
 table against the columns added since its first release and issues the missing `ALTER TABLE`
@@ -77,6 +78,7 @@ never reach the network: the STT backend, the Live API, Web Push and APNs sender
 | `rc_gateway/badge.py` | the A47 badge-only APNs push, sent once an account's count has been still for 3 s |
 | `rc_gateway/stt.py` | OpenAI-compatible transcription client |
 | `rc_gateway/live/` | the experimental voice assistant: `WS /ws/live`, the one WebSocket to the Live API, its tools, limits and policy (`docs/LIVE_ASSISTANT.md`) |
+| `rc_gateway/board/` | the task board (A62): `board.get` and `board.refresh`, the boards followed for seven days, the updates that read a session's history from its device and ask the operator's model, their pacing and policy, and `boards.sqlite3` (`docs/ARCHITECTURE.md` § "The task board") |
 
 ## Docker
 
