@@ -15,7 +15,7 @@ hand-written CSS with no framework. It talks only to the gateway and follows
 | `/pair` | Claims the token a host printed as a QR code and shows the same handshake (A23) |
 | `/sessions` | Every session across every device: one collapsible group per device, its active rows and then its own collapsed **Archive**, a search, a status filter, an agent filter and a device filter, and **New session** in a right-hand drawer; a right-click on a row offers **Rename** (A55) |
 | `/sessions/:deviceId/:sessionId` | The chat: sidebar, timeline, composer, status line; the title renames the session (A55) |
-| `/settings`, `/settings/<section>` | Settings (`docs/DESIGN.md` § "The Settings screen"), one page of sections, each at its own address: **General** (`general`: Reading — language, timeline detail; While you're away — Notify me, "Resume after the limit resets", A35), **Voice** (`voice`: Transcribe, which names the gateway and offers nothing to choose, A44; polish and its model and strength) and **Account** (`account`: the identity header — initials, name, `role · connection dot · host` — then Sign-in: Change password for every account but `admin`; then, under no caption, Users for the admin role and Sign out, which asks first). Wider than 760 px a nav of the sections sits beside the one on show, with the footer caption under it — the gateway and protocol versions — and `/settings` shows General; at 760 px and below `/settings` is the list of sections, which a section replaces, with a way back. An address that names no section leads to `/settings` |
+| `/settings`, `/settings/<section>` | Settings (`docs/DESIGN.md` § "The Settings screen"), one page of sections, each at its own address: **General** (`general`: Reading — language, timeline detail, the task board (A62); While you're away — Notify me, "Resume after the limit resets", A35), **Voice** (`voice`: Transcribe, which names the gateway and offers nothing to choose, A44; polish and its model and strength) and **Account** (`account`: the identity header — initials, name, `role · connection dot · host` — then Sign-in: Change password for every account but `admin`; then, under no caption, Users for the admin role and Sign out, which asks first). Wider than 760 px a nav of the sections sits beside the one on show, with the footer caption under it — the gateway and protocol versions — and `/settings` shows General; at 760 px and below `/settings` is the list of sections, which a section replaces, with a way back. An address that names no section leads to `/settings` |
 | `/users` | The admin's accounts screen: the registration switch, one row per account, Reset password / Disable / Delete, and **Add user** (A24). A member who types it lands on Sessions |
 
 ## Commands
@@ -142,6 +142,18 @@ amendment. A Close on a row a terminal holds (`mock/closeTerminal.ts`) quits the
 1.2 s and closes the session as A39 does; "Typecheck the web app" answers `unsupported` (two Codex
 terminals in its folder), "Refactor relay routing" answers `conflict` after 3 s (its `claude` does
 not exit), and an agent without the capability answers `unsupported`.
+
+The mock keeps task boards (A62, `mock/board.ts`) with no model behind them: `hello` and
+`GET /api/config` say `board: {enabled: true}`, `PATCH /api/preferences` takes `task_board` as a
+boolean, and `board.get` and `board.refresh` are answered by the mock itself, never by a device.
+With the board off it answers `off` and keeps nothing. On, "Fix flaky auth test" has the demo
+board: its first open answers `updating`, and the board arrives as `board.updated` 1.5 s later with
+the protocol's example items and ids; every other conversation's board is empty. Refresh and Start
+over answer `updating` and send the board again with a higher revision, Start over with new ids.
+As on the gateway, every board's revision comes from one counter, which starts from the clock, so
+a tab kept open across a restart of the mock never sees one go back. A socket watches a board it
+asked for while subscribed to the session, until it unsubscribes, and turning the board off sends
+every watching socket `board.updated` with no board and `off`.
 
 ## Structure
 
@@ -438,6 +450,96 @@ signs out, or the page is closed. Each call's conversation is kept in this brows
 under the signed-in account, the newest 20, and never goes to the gateway. The player (`player.ts`)
 is the only jitter buffer in the path, since the Live API's audio arrives at real time. Tests are in
 `tests/live/`; they run the panel against a fake socket and fake audio.
+
+## The task board (A62)
+
+The gateway keeps, for each conversation an app of the account has opened, a short list of what
+the person asked for and where each request stands, made by the operator's language model from the
+conversation's recent rounds (`protocol/PROTOCOL.md`, A62). The web shows it and asks for it; it
+makes nothing itself.
+
+- **Whether it is offered.** `hello.board` lands in the connection store as `board`: null before a
+  `hello` and on a gateway older than A62, which offers no board anywhere; `{enabled: false}` hides
+  the chip, and the Settings switch cannot be turned on there and says "This gateway has no task
+  board model configured" (此网关未配置任务看板模型), though a board that is on can still be turned
+  off. `GET /api/config` carries the same object.
+- **The copy.** `src/stores/board.ts` keeps each conversation's board and its status by session
+  key, in memory only. `board.get` is sent only once the conversation's `session.subscribe` has
+  answered, never beside it — on opening it and after a reconnect subscribed it again, because the
+  gateway lets a socket watch a board only while it is subscribed — and when the page comes back to
+  the front with it open
+  (`features/chat/board/useBoardRequests.ts`, with `useFrontConversation` answering whether the
+  page is in front); `board.refresh` is sent when the account's `task_board` turns on, here or in
+  another app, so the open conversation is followed at once. One `board.get` per conversation is
+  out at a time. The gateway numbers every write of any board from one counter, so a
+  conversation's `revision` only grows, by steps of any size, even across a board deleted and made
+  again. A reply or a `board.updated` whose board has a lower `revision` than the one held is
+  dropped whole, its status included; one with no board clears the copy and its status is taken,
+  since the gateway then holds none; `board.refresh` answers a status alone, which is taken. A
+  state the build does not know reads as `stale`,
+  and a reason it does not know as its state's generic line. An `unsupported` refusal takes the
+  chip away. A preference that is off, or absent, turns every copy `off`, because the gateway has
+  deleted every board of the account; sign-out empties the store, and so does a `hello` for
+  another account.
+- **The chip** (`BoardChip.tsx`) sits in the conversation header between the Todos chip and the
+  usage chip, in both timeline details: the Todos chip's look with a `ListChecks` glyph, "Tasks 3"
+  (看板 3) with the count of doing and to-do items, "Tasks" (看板) while the board is off,
+  unavailable or has nothing open. At 480 px and narrower the usage chip gives way to it.
+- **The panel** (`BoardPanel.tsx`) is the chip's popover, aligned to its end, about 360 px wide and
+  at most 60 % of the window tall with the items scrolling, nearly the window's width on a phone. It
+  is headed "Task board" (任务看板) and, while the gateway keeps the board (current, updating or
+  stale), offers Refresh (刷新) and a menu with Start over (重新整理) and Turn off in Settings
+  (在设置中关闭), which leads to `/settings/general`. The menu opens inside the panel, since a
+  popover of its own would close the panel; Start over asks first, in the panel, "Rebuild the board
+  from the latest rounds? Its current tasks are replaced." (根据最近几轮重新整理看板？当前任务会被替换。)
+  with Cancel focused, and only then sends `board.refresh` with `rebuild: true`. The items stand
+  under Doing (进行中), To do (待做) and Done recently (最近完成), in the gateway's order, a group
+  with nothing in it not drawn, each one line of plain text that wraps behind a quiet glyph: a dot
+  in the running tone for doing, a hollow circle for to do, a check for done, done items in the
+  secondary ink. Item text is never Markdown, a link or markup.
+- **The note** under the board follows the status:
+
+| Status | Drawn as | 中文 |
+| --- | --- | --- |
+| `off` | "See what you asked for in this conversation, what is being done and what is left." and **Enable** | 查看你在这个对话里提出的要求、正在做的和还剩下的。· 启用 |
+| `current`, no board or no items | "No tasks yet. What you ask for in this conversation will show up here." | 还没有任务。你在这个对话里提出的要求会出现在这里。 |
+| `current` | The board, "Updated 4m ago" (the relative time on the gateway's clock) | 4 分钟前更新 |
+| `updating` | The board as it is with a small spinner and "Updating…"; a first board three still lines | 更新中… |
+| `stale` / `device_offline` | The board, "Can't update while the device is offline." | 设备离线，暂时无法更新。 |
+| `stale` / `model_failed`, `invalid_output`, `history_unavailable` | The board, "Couldn't update just now." and **Retry**, a `board.refresh` | 暂时无法更新。· 重试 |
+| `stale` / `rate_limited` | The board, "Updates are paused for a while." | 更新已暂停，稍后会继续。 |
+| `unavailable` / `quota_exceeded` | The board if any, "The task board is paused on this account for now. You can still control your agents and type messages." | 此账户的任务看板暂时不可用，控制 Agent 与手动输入不受影响。 |
+| `unavailable` / `subscription_required`, `billing_not_configured` | The board if any, "The task board isn't available right now. Try again in a moment." | 任务看板暂时不可用，请稍后再试。 |
+| `unavailable` / `unsupported` | No chip | – |
+
+  A board built without the conversation's older rounds (`partial`) adds "Built from the latest
+  rounds of this conversation." (根据本对话最近几轮整理。). Before the gateway has answered the
+  panel shows the three still lines alone.
+- **Turning it on.** Enable in the panel closes it and opens the disclosure
+  (`BoardConsent.tsx`), the same one the Settings row opens: "Turn on the task board?" (开启任务看板？),
+  what it is for, then what is sent, what is kept and what to be careful of, as three points, and
+  **Not now** (暂不) beside **Agree and continue** (同意并继续). Only Agree writes, with
+  `PATCH /api/preferences` `{task_board: true}`; the account holds it once the gateway's reply says
+  so, never ahead of it, so the `board.refresh` that follows finds the board on. A refusal stays in
+  the dialog.
+- **Settings › General › Reading** ends with the **Task board** row (`settings/TaskBoardRow.tsx`): a
+  switch that shows the account's stored value, with the note that says what turning it on sends
+  and that turning it off deletes every board. Turning it off is always possible while it is on,
+  whatever the gateway says, and writes `{task_board: false}` at once, so the promise that turning
+  it off deletes every board can always be kept. Turning it on brings the disclosure first, and
+  only where the account can use the board: on a gateway that keeps none the off switch is disabled
+  with its note. The switch moves when the gateway answers, and a refusal is said in place of the
+  note.
+  `task_board` is not one of the A41 fields (`stores/preferenceFields.ts`): this browser never
+  writes it up from a value of its own, after a `hello` or at any other time, and never writes
+  `true` where the board cannot be had.
+
+Tests: `tests/board-store.test.ts` (the frames, the revision rule, off, sign-out and another
+account, and when a conversation asks), `tests/board-panel.test.tsx` (the chip, the groups, plain
+text, every state, Refresh, Start over, Turn off in Settings, Enable and the disclosure),
+`tests/board-settings.test.tsx` (the row, the disclosure before the write, off at once and on a
+gateway that keeps no boards, never written up), `tests/board-fixtures.test.ts` (the protocol's
+examples) and `tests/mock-board.test.ts`.
 
 ## No dictation language on the web (A44)
 

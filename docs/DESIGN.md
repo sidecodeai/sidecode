@@ -40,7 +40,8 @@ bottom bar, **New session**, exactly where Devices puts **Add device**; the list
 the first device group.
 
 **Chat.** A sidebar of sessions grouped by device, each device's Archive collapsed under it, a header
-with the title, `device:path · branch`, a Todos chip, usage and elapsed time, and a Stop button. The timeline runs down the middle on the
+with the title, `device:path · branch`, a Todos chip, a Tasks chip where the gateway keeps task
+boards (§ "The task board"), usage and elapsed time, and a Stop button. The timeline runs down the middle on the
 page's own canvas. The composer sits at the bottom with a row of controls beneath it: Up next
 while something is queued (A43), the dictation language where the phone recognises speech itself
 (A44), the model card (model, effort and speed in one control), then the permission-mode picker.
@@ -270,7 +271,7 @@ caption:
 | **Account** (its section's rows) | **Users** (admin role) — "Accounts on this gateway, and whether anyone can create one." · **Change password** (every account but the built-in `admin`) — "The current password and the new one." · **Sign out** — "Cached sessions and drafts leave this device. Nothing changes on your machines." |
 | **While you're away** | **Notify me** — "Which device and session needs you, and nothing else." · **Resume after the limit resets** (A35) — "When Claude Code or Codex stops at a usage limit, the device continues the session a minute after the limit resets." |
 | **Voice** | **Transcribe** — on the phone a menu, On this iPhone or Gateway, with the chosen backend's own sentence ("Audio is streamed to your gateway, which recognises the language itself." for Gateway); on the web, which only transcribes on the gateway, the word Gateway and "Your gateway transcribes and recognises the language itself.", or "This gateway has no transcription service configured." · **Dictation language** (the phone, only while it recognises speech itself, A44) — "The language you speak. The recogniser on this iPhone listens for one at a time." · **Polish dictation with AI** — "Sends what you dictated and the last few messages to this gateway's model. Nothing is sent while it is off." · while it is on, **Model** — "From the list this gateway serves." and **Strength** — "Moderate cleans up. Strong also restructures and resolves references." |
-| **Reading** | **Language** — "The app's own words only; what the agent wrote stays as written." · **Detail** — "Simple shows only what is written to you. Detailed adds thinking, tool calls and the task list." |
+| **Reading** | **Language** — "The app's own words only; what the agent wrote stays as written." · **Detail** — "Simple shows only what is written to you. Detailed adds thinking, tool calls and the task list." · **Task board** (where the gateway reports `board`, A62) — a switch under "Lists what you asked for in each conversation, what is being done and what is left. For conversations you opened in the last 7 days, recent messages go through this gateway to a third-party AI model after each round and when you open them. Tool output is not sent. Nothing is sent while it is off, and turning it off deletes every board." It shows the account's stored `task_board`; turning it off is always possible while it is on, whatever `board.enabled` says, and asks nothing; turning it on shows the disclosure first and happens only when the account can use the board (§ "The task board") |
 
 The versions close the caption that closes Settings (below), in the tertiary ink, and are not a
 group: `SideCode 1.5.1 · Gateway 1.5.0 · Protocol v1` on the phone, which is installed apart from
@@ -283,7 +284,7 @@ the web, which has no version of its own. There is no About group. In 中文 the
 web each section is at `/settings/<section>`, and an address that names no section leads to
 `/settings`.
 
-- **General**: **Reading** (Language, Detail), then **While you're away** (Notify me, Resume after
+- **General**: **Reading** (Language, Detail, Task board), then **While you're away** (Notify me, Resume after
   the limit resets).
 - **Voice**: the Voice rows on one surface under no caption, since the section's title says Voice.
 - **Account**: the identity header, then **Sign-in** (登录方式), which holds how the account signs
@@ -1668,6 +1669,91 @@ label stays the state word and its tooltip names the tone — "Working", "Waitin
 when the device is online and a grey ring when it is not.
 
 Colour is never the only signal: the dot always sits next to the word.
+
+## The task board
+
+**A list of what you asked for, kept by the gateway.** A long conversation had to be read again to
+know what was asked, what was done and what was left. The task board (A62) is the gateway's list, for
+each conversation, of the person's requests and where each stands, made by a language model from the
+conversation's recent rounds after each round ends; the apps only draw it and ask for it. Nothing is
+read or kept until the account turns it on, and it is never written from an app's own default.
+
+**The chip.** In the conversation header, after the Todos chip, a chip **Tasks** with the count of
+open items, doing and to do: `Tasks 3` (看板 3), in both timeline details, whenever the gateway
+reports `board.enabled`. It shows no count while the board is off, unavailable or empty, and is not
+drawn at all on a gateway that keeps no boards. The chip reads 看板 and never 任务, which the phone
+already uses for the agent's own Todos chip.
+
+**The panel.** The chip opens a panel titled **Task board** on the page's own canvas with hairline
+dividers: the groups **Doing**, **To do** and **Done recently**, an empty group left out, each item
+one line of plain text that wraps, with a quiet glyph before it (a filled dot for doing, a hollow
+circle for to do, a check for done, done items in the secondary ink). Item text is plain text in
+every app: no Markdown, no link, no HTML. The footer says **Updated** with the app's short relative
+time ("Updated 4m"; 中文 "4 分钟前更新"), and, when older rounds were not read into the board, "Built
+from the latest rounds of this conversation." The panel has **Refresh** as an icon button and a menu
+with **Start over**, which asks first ("Rebuild the board from the latest rounds? Its current tasks
+are replaced.", Start over and Cancel), and **Turn off in Settings**, which opens the Settings row.
+No colour beyond the status tones the app already has, and no motion beyond the spinner.
+
+**What the panel says.**
+
+| The board's status | Drawn as |
+| --- | --- |
+| `off` | "See what you asked for in this conversation, what is being done and what is left." and **Enable**, which shows the disclosure and, once agreed, turns the board on and asks for an update |
+| `current`, with no board or no items | "No tasks yet. What you ask for in this conversation will show up here." |
+| `updating` | The board as it is, the footer "Updating…" with a small spinner; a first build three skeleton lines |
+| `current` | The board, "Updated …" |
+| `stale`, `device_offline` | The board, "Can't update while the device is offline." |
+| `stale`, `model_failed`, `invalid_output` or `history_unavailable` | The board, "Couldn't update just now." and **Retry** |
+| `stale`, `rate_limited` | The board, "Updates are paused for a while." |
+| `unavailable`, `quota_exceeded` | The board if any, "The task board is paused on this account for now. You can still control your agents and type messages." |
+| `unavailable`, `subscription_required` or `billing_not_configured` | The board if any, "The task board isn't available right now. Try again in a moment." |
+| `unavailable`, `unsupported`, or `board.enabled` false | No chip; the Settings row disabled with "This gateway has no task board model configured" |
+
+An unknown status reads as `stale`, and an unknown reason with the app's generic line.
+
+**When an app asks.** `board.get` when a conversation opens, when its window or screen comes to the
+front and after a reconnect, each time after the `session.subscribe` reply for that session, since
+the gateway tells only subscribed sockets; `board.refresh` from Refresh and Retry, and with
+`rebuild` from Start over. An app keeps the boards in memory for each gateway, account and
+session, forgets them at sign-out and on an account switch, keeps the highest revision it has seen
+(a 64-bit integer), drops a frame whose board is older, its status with it, and clears its board on
+a frame whose board is null.
+
+**Settings.** The **Task board** row in General › Reading (table above) shows the stored value on
+every app of the account. Turning it off is always possible while it is on, even where the gateway
+no longer keeps boards, asks nothing, and deletes every board of the account. Turning it on happens
+only when the account can use the board, which is when the gateway reports `board.enabled`; on a
+gateway without boards the off switch is drawn disabled with the unsupported note, and nothing ever
+writes `task_board: true` there.
+
+**The disclosure.** Before the board is turned on, from Enable or from the switch, one sheet with one
+wording for every gateway: **Turn on the task board?**, the lead "The task board lists what you
+asked for in a conversation, what is being done and what is left, so you don't have to read it all
+again.", three bullets — what it sends ("For conversations you opened in the last 7 days, recent
+messages (yours, the agent's replies, the names of the tools it ran and its errors) go through this
+gateway to a third-party AI model after each round and when you open them. Tool output is not
+sent."), what it keeps ("The gateway keeps the task list, not the messages. It deletes the list
+when the conversation, the device or the account is deleted, when you turn the board off, or when
+the conversation has not been opened for 30 days.") and a caution ("Replies can include anything an
+agent printed, such as secrets. The list is made by AI and can be wrong.") — and **Agree and
+continue** and **Not now**.
+
+**On each app.** The web draws the panel as a popover from the chip, aligned to its end, about
+360 px wide and at most 60 % of the window's height, scrolling, and full width under the header on a
+narrow window; the phone draws it as a sheet. The web's mock gateway answers with a fixed board for
+one demo conversation and no model.
+
+**中文.** Tasks 看板 · Task board 任务看板 · Doing 进行中 · To do 待做 · Done recently 最近完成 ·
+Refresh 刷新 · Start over 重新整理 · Turn off in Settings 在设置中关闭 · the empty line 还没有任务。你在这个对话里提出的要求会出现在这里。 ·
+Updated 4m 4 分钟前更新 · the partial line 根据本对话最近几轮整理。 · offline 设备离线，暂时无法更新。 ·
+failed 暂时无法更新。 · paused 更新已暂停，稍后会继续。 · the quota notice
+此账户的任务看板暂时不可用，控制 Agent 与手动输入不受影响。 · unavailable 任务看板暂时不可用，请稍后再试。 ·
+unsupported 此网关未配置任务看板模型 · the disclosure's title 开启任务看板？. The disclosure's lead and
+bullets and the Settings note are in the web's string table (`web/src/strings.zh-Hans.ts`).
+
+**Not in v1.** Editing, adding, reordering or checking items by hand; a board in the session list;
+notifications about the board; a board across sessions; exporting it.
 
 ## Palette and type
 

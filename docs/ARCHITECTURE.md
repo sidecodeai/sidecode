@@ -661,8 +661,8 @@ sense with the screen in front of the speaker — "the green blinking thing" for
 status dot. Sent as-is it makes the agent guess. So the gateway can hold one more key of the
 operator's (A29): `POLISH_BASE_URL` and `POLISH_API_KEY` name an OpenAI-compatible provider, and
 with them set the gateway serves that provider's models at `GET /api/polish/models` and polishes a
-dictation at `POST /api/polish`. Apart from the voice assistant below, this is the only language
-model the gateway calls, it does so only when an app asks, and the request is the app's own words:
+dictation at `POST /api/polish`. Apart from the voice assistant and the task board below, this is
+the only language model the gateway calls, it does so only when an app asks, and the request is the app's own words:
 the dictated text, the model and strength the user chose in Settings, a language hint, and up to
 twenty of the conversation's most recent user and assistant messages exactly as the app shows them.
 The gateway never reads a device's history for this, stores nothing from the call, and hands the
@@ -696,6 +696,65 @@ microphone and speaker and the saved conversations, which stay on its device; th
 socket.
 Who may call, and what a call costs, are a policy the service is given (`live/policy.py`): the
 default is the `LIVE_ALLOWED_USERS` allowlist with a daily cap on call time, and nothing billed.
+
+## The task board
+
+A long conversation had to be read again to know what was asked, what was done and what was left.
+The task board (A62) is the gateway's answer: for each session an app of the account opened, a short
+list of the person's requests and where each stands, made by a language model from the
+conversation's recent rounds. It lives in `gateway/rc_gateway/board/`, and nothing of it runs on a
+device: `rc-client` did not change.
+
+*Where the input comes from.* The replay buffer cannot be the source: only sixteen sessions have one,
+it is empty after a restart, and it holds deltas and status. The gateway instead reads the
+conversation from the device itself, with the same `session.history` an app sends (brief, A60), on
+its own account as A56's catch-up does, through `Hub.ask_device`: the newest page of 200 events,
+then older ones only while the selection could still need them, at most three, 5 s and 4 MiB each,
+and one board read per device at a time. A round is a message the person sent (`source` `remote`,
+`terminal` or `queue`) and everything after it in display order (`first_seq ?? seq`) until the next
+one. A new board reads the newest ten rounds; a later update reads the rounds after the last one it
+read and two before them for context; the session's queued messages, from the hub's A6 snapshot,
+come last. The window is rendered as plain lines, at most 20,000 characters (context rounds dropped
+first, then the oldest new ones, never the newest), and every string in it is untrusted: flattened
+to one line, its angle brackets replaced so it can open no tag, and cut. Tool input and output,
+thinking and notices are never rendered at all.
+
+*What the model does.* One chat completion: a fixed system message that names both inputs as data,
+and a user message with the current board as JSON and the window. The answer is parsed leniently
+and checked strictly (`board/prompt.py`), then merged by fixed rules (`board/merge.py`): an item
+the answer names takes its status and text, one it leaves out stays as it was, `dropped` removes
+one, new items get ids from a counter that never gives one twice, at most 25 items are open, and the
+five most recently done are kept. An answer that fails the checks changes nothing and the same
+rounds are read again next time.
+
+*When it runs.* A board is followed for seven days after an app last opened it while the account's
+`task_board` preference was on. The hub's hooks run on a device's read loop, so they look only at an
+in-memory followed set (loaded from the store at start): a followed session's turn end asks for an
+update 20 s later, cancelled if the next turn starts first, whether or not an app watches the board;
+a device's `hello` asks for its followed boards that fell behind; an app's `board.get` asks when the
+board is behind, which is when the session's indexed `last_seq` passed the one the last update saw,
+or its queue changed. One update runs at a time per session, a minute apart, at most four model
+calls at once in the process and sixty per account per hour; failures back off for one, five and
+then thirty minutes; an update that finds nothing new calls nothing. Nothing else starts one: no
+timer, no pass over the list. A session nobody opened in an app in the last seven days is never
+read.
+
+*Who may, on whose model.* A policy the service is given (`board/policy.py`), as for the voice
+assistant: a self-hosted gateway's `OperatorPolicy` keeps boards for every account on the operator's
+polish provider with `BOARD_MODEL`. A deployment that passes a policy of its own may refuse an
+account with one of the four `unavailable` reasons (`protocol/PROTOCOL.md` § 4.12). A refusal is
+the board's status, never a reply error, so remote control and its replies are untouched.
+
+*What is kept.* Only the boards, in `boards.sqlite3`: the items, the cursors of the last update,
+when it was last updated and opened, and the back-off. The history read and the text sent live in
+memory for one update; the one log line an update writes (`board run`) holds ids, counts and
+timings. Every write of a board takes the next value of one counter kept in the same file, in the
+same transaction, so a session's revision only grows, even after its board was deleted and made
+again, and an app never mistakes a new board for an old one. A board goes with its session, its
+device and its account, when the account turns the board off, and after thirty days nobody opened
+it, unless a socket is watching it; an update still running when its board goes writes and sends
+nothing more. `board.updated` reaches only the owner's sockets that opened the board and are still
+subscribed to the session, through the hub's own send.
 
 ## A terminal on a device
 
@@ -889,17 +948,17 @@ sessions delivered to that person's phone.
 
 | Where | What |
 | --- | --- |
-| Gateway `DATA_DIR` | `auth.sqlite3` (issued login sessions), `devices.sqlite3` (devices, pairing codes — both hashed — and, between a clean stop and the next start, the ids of the devices that were online and when, A56), `sessions.sqlite3` (the latest summary per session, with its `unseen` mark in a column of its own, A47), `push.sqlite3` (Web Push subscriptions, APNs tokens, a delivery journal), `users.sqlite3` (the accounts and their hashed passwords), `preferences.sqlite3` (one row of preferences per account, A35, A41), `session_secret` and `vapid_private.pem`. The databases and both secrets are created at 0600 |
+| Gateway `DATA_DIR` | `auth.sqlite3` (issued login sessions), `devices.sqlite3` (devices, pairing codes — both hashed — and, between a clean stop and the next start, the ids of the devices that were online and when, A56), `sessions.sqlite3` (the latest summary per session, with its `unseen` mark in a column of its own, A47), `push.sqlite3` (Web Push subscriptions, APNs tokens, a delivery journal), `users.sqlite3` (the accounts and their hashed passwords), `preferences.sqlite3` (one row of preferences per account, A35, A41), `boards.sqlite3` (one task board per session an app opened with the account's board on, A62), `session_secret` and `vapid_private.pem`. The databases and both secrets are created at 0600 |
 | Gateway memory | Live connections, the per-session replay buffer, and a cache in front of the login-session store that also holds the event which closes a socket the moment its session is signed out |
 | Device `~/.rc-client` | `config.toml` at 0600 (gateway origin, device id, device token, name), `state/rc-client.sqlite3` (sessions, events, a key-value table, and request ids for `session.send` idempotency), `state/attachments/`, `state/channel.sock` and `state/claude-mcp.json` for the attachment, `state/daemon.lock` (the single-instance lock), `bin/claude` when the shim is installed, `logs/` |
 | Browser | The session cookie, plus whatever the service worker caches of the built app |
 
 Schema changes on the gateway are additive only: `CREATE TABLE IF NOT EXISTS` cannot add a column to
-a database that already exists, so each of the six stores declares the columns it has gained since
+a database that already exists, so each of the seven stores declares the columns it has gained since
 its first release and applies the missing ones every time it opens the file. An existing `DATA_DIR`
 is migrated in place, which is what makes an image update over a live volume safe. A new store is
-the other additive move: `preferences.sqlite3` appears beside the rest on the first start after the
-upgrade, with no migration to run. Nothing is dropped or renamed.
+the other additive move: `preferences.sqlite3`, and later `boards.sqlite3`, appeared beside the rest
+on the first start after the upgrade, with no migration to run. Nothing is dropped or renamed.
 
 A login session is a row rather than a process-local entry, so a token issued before a restart is
 still valid afterwards: the first request that presents it misses the memory cache, finds the row,

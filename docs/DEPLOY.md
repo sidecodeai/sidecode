@@ -138,6 +138,7 @@ names the missing one.
 | `POLISH_API_KEY` | empty | Bearer token for that provider. Both this and the base URL are needed to enable polish |
 | `POLISH_MODELS` | empty | Optional comma-separated allowlist of model ids: it narrows and orders the list the apps offer, stands in for a provider that serves no `/models`, and makes `POST /api/polish` refuse any other model with `400` |
 | `POLISH_TIMEOUT_SECONDS` | `20` | How long one polish request may take before the gateway answers `502` |
+| `BOARD_MODEL` | empty | The model task boards are made by (A62), on the polish provider above; with the provider and this set, `GET /api/config` reports `board.enabled: true`. Empty leaves the feature off |
 | `LIVE_ASSISTANT_ENABLED` | `false` | Switches on the experimental voice assistant, which also needs `LIVE_OPENAI_API_KEY`, and `LIVE_ALLOWED_USERS` to name who may use it; these and the other `LIVE_*` settings are described under [Voice assistant](#voice-assistant-experimental) |
 | `IOS_MIN_APP_VERSION` | the build's own constant | Overrides the oldest iOS app this gateway supports (`major.minor.patch`, A31). Normally left unset: the constant `IOS_MINIMUM_APP_VERSION` in `rc_gateway/compat.py` is raised in the release that breaks compatibility |
 | `IOS_UPDATE_URL` | empty | Where the iPhone app's "Update required" screen sends people, such as the app's App Store page, `https://` only |
@@ -285,10 +286,10 @@ container serving while the image is made, and one `--force-recreate` takes the 
 changed `.env` together (`restart` takes neither). What the apps and devices see across the swap is
 described under [What a restart looks like](#what-a-restart-looks-like).
 
-Each of the six databases applies its own additive migrations when it is opened, so an existing
+Each of the seven databases applies its own additive migrations when it is opened, so an existing
 `DATA_DIR` is brought up to the new schema in place and an upgrade needs no manual step. A release
-that adds a database — `preferences.sqlite3` in 1.4.0 — creates it on the first start and needs no
-manual step either, and brings no new environment variable with it; a release that adds a column —
+that adds a database — `preferences.sqlite3` in 1.4.0, `boards.sqlite3` with the task board (A62)
+— creates it on the first start and needs no manual step either, and brings no new environment variable with it; a release that adds a column —
 `devices.update_failed_build` in 1.4.7 (A36), `devices.terminal` in 1.5.0 (A38), the six Settings
 columns of `preferences` in 1.7.0 (A41) — is applied the
 same way. From 1.4.7 the gateway also
@@ -462,7 +463,27 @@ is the dictated text plus up to twenty of that conversation's most recent messag
 them, sent to your provider with the operator's key; the gateway stores nothing from the call. A
 provider that is down or slow answers the app with `502`, and the dictation stays as it was spoken;
 more than thirty polish requests a minute from one address answer `429`.
-Only the polish feature uses this key: the gateway still runs no agent and holds no agent credential.
+Only polish and the task board below use this key: the gateway still runs no agent and holds no
+agent credential.
+
+## Task board
+
+Off until `BOARD_MODEL` is set beside the polish provider (A62, [ARCHITECTURE.md](ARCHITECTURE.md)
+§ "The task board"):
+
+```
+BOARD_MODEL=gpt-4.1-mini
+```
+
+With it set, `GET /api/config` and every app's `hello` report `board.enabled: true`, and each
+account turns the board on in an app, after the app has said what it sends; it is off by default.
+From then on, for every conversation an app of that account opened in the last seven days, the
+gateway reads the newest rounds from the device after each round ends and when an app opens it,
+at most 20,000 characters and never tool output, and sends them with the current board to your
+provider with the operator's key. The boards are kept in `DATA_DIR/boards.sqlite3`; turning the
+board off deletes an account's boards, and the daily sweep deletes the ones nobody opened for 30
+days. Each update writes one `board run` log line, with ids and counts only. Calls are paced: one
+per session a minute, four at once per gateway, sixty per account an hour.
 
 ## Voice assistant (experimental)
 
