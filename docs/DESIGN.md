@@ -1159,7 +1159,10 @@ up to eight lines, then scrolls inside; the `+`, mic and Send controls sit on th
 it scrolls, the system scroll indicator runs down its trailing edge while the draft is being
 scrolled and fades when scrolling stops, exactly as it does in any scroll view — that is the whole
 cue that there is more above or below, and nothing is added around it: no expand button, no
-permanent bar, no line count.
+permanent bar, no line count. On the web the field grows the same way, and an empty field grows to
+show its whole placeholder: where "Message will be queued…" wraps beside the controls on a phone's
+width, the field takes the second line rather than cutting the hint to its first, and it fits again
+whenever its placeholder or its width changes.
 
 **While dictation runs, the field follows the words.** A dictation longer than the field's eight
 lines used to leave the field on its first screen until Done, so the person could not see what
@@ -1250,7 +1253,12 @@ whether or not anything new has arrived, because paging up through history needs
 too — and new content is counted on it, in blocks, not streaming deltas, so a long answer is one
 update rather than two hundred. Tapping it returns to the tail in one motion — to the very end of
 the transcript, however far away and however the list guessed the heights of rows it had not laid
-out yet — and resumes following; the button leaves only once the tail is really on screen. Loading
+out yet — and resumes following; the button leaves only once the tail is really on screen. It never
+covers a request that waits for an answer: in every app, while any part of a pending approval's
+buttons, or of a pending question's options, free-text field or Submit button, is inside the
+transcript's visible area as the real layout reports it, the control is not drawn; once they have
+all left, it returns under the rules above, its count including what arrived meanwhile. A request
+that has been answered, has expired or is not this person's to answer holds nothing back. Loading
 an earlier page prepends above the current anchor. Content appended below never drags the viewport. On the phone, a tap anywhere
 outside a text field puts the keyboard away without stealing the tap from a control.
 

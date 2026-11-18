@@ -342,11 +342,12 @@ growth, rest dimmed without a sweep, and the timer gives way to the label withou
 styles are `src/features/voice/voice.css`.
 
 **While dictation runs, the field follows the words** (`docs/DESIGN.md` § "The composer"). The
-field grows with its content to 220 px and scrolls inside after that, and a dictated write brings
-no caret with it, so a long transcript used to sit on its first screen until Done. Each transcript
-write — every partial, and the final one that lands as the run ends — now sets `followTail` in
-`Composer.tsx`, and the effect that measures the field reads the flag once and puts the last line
-in view by setting `scrollTop`, never animating it. Typing sets nothing, because a caret keeps
+field grows with its content to 220 px and scrolls inside after that (§ "Behaviour worth knowing",
+**The field fits what it shows**), and a dictated write brings no caret with it, so a long
+transcript used to sit on its first screen until Done. Each transcript write — every partial, and
+the final one that lands as the run ends — now sets `followTail` in `Composer.tsx`, and the effect
+that measures the field reads the flag once and puts the last line in view by setting `scrollTop`,
+never animating it. Typing sets nothing, because a caret keeps
 itself visible, and neither does a polished answer or an Undo: those are the person's draft again.
 A batch dictation (A57) writes once, at its end, and that write follows its tail the same way;
 while it listens there is nothing to follow.
@@ -1129,6 +1130,21 @@ Nothing of this reaches the gateway.
 - **Uncertain delivery** is never resent automatically. The composer offers a Retry that reuses the
   original request id.
 - **The composer is gated on `control`**, never on `state`.
+- **The field fits what it shows** (`src/features/chat/fieldFit.ts`). `fitField` sizes the
+  composer's textarea to its words, and while it has none to its placeholder, up to 220 px, past
+  which it scrolls inside. Browsers disagree on whether a placeholder counts in `scrollHeight`, so
+  the placeholder is measured as the words of a twin textarea — the field's class, its computed
+  width, `overflow: hidden` — put beside the field for the measurement and removed at once.
+  `Composer` fits the field in a layout effect whenever its words or its placeholder change, and
+  `useRefitOnResize` fits it again when its width changes: a `ResizeObserver` notices, and the fit
+  runs on the next animation frame, because resizing the field inside the observer's own callback
+  is a resize loop. The field used to be measured only when its words changed, so a placeholder or a
+  width that changed after the first render — "Device is offline" until the device's state is
+  known, for instance, and then "Message will be queued…" — kept the earlier one-line height, and at
+  390 px the field showed only "Message will be".
+  `.composer-input` also has `min-width: 0`: the field may shrink below a textarea's twenty columns,
+  so the controls beside it stay inside the composer at 320 px. `tests/composer-placeholder.test.tsx`
+  drives it on a simulated layout.
 - **A session's status dot** is toned by `dotTone(state, control, online)` in
   `src/components/dotTone.ts`, never by the state alone: a finished turn on a live session and a
   session whose CLI exited both report `idle`. The five tones and when each applies are the table in
@@ -1164,8 +1180,19 @@ Nothing of this reaches the gateway.
 - **Reading position** holds: the timeline auto-follows until you scroll away, then counts new
   blocks behind a "Back to latest" button, centred at the foot of the transcript above the composer
   and widening into a capsule around that centre when it carries a count. One click lands at the
-  very end of the transcript and the button leaves. Where a conversation opens is
-  § "Opening a conversation".
+  very end of the transcript and the button leaves. The button never lies over a request that waits
+  for an answer: while any part of a pending card's controls — an approval's buttons, a plan's
+  choices or its feedback field, a question's options, its free-text field and Submit — is inside
+  the transcript's visible area, it is not drawn, and once they have all left it comes back under
+  the same rules, with the count of what arrived meanwhile, which goes on counting while it is
+  hidden. Each card puts `usePendingControl`'s ref on those controls while its `status` is
+  `pending`, and `usePendingControls` (`src/features/chat/pendingControls.ts`) watches them with an
+  `IntersectionObserver` rooted at the timeline's scroller, so what is on screen comes from layout;
+  a sighting the observer queued for a control that has gone is dropped. An answered or expired card
+  is not watched, and a browser without `IntersectionObserver` keeps the button to its other rules.
+  `controlsOnScreen` and `showsBackToLatest` are pure (`tests/pendingControls.test.ts`), and
+  `tests/back-to-latest-pending.test.tsx` drives the timeline with a fake observer. Where a
+  conversation opens is § "Opening a conversation".
 - **Failed actions** surface in a dismissible banner above the composer rather than failing silently.
 
 ## Opening a conversation
@@ -1213,7 +1240,8 @@ sidebar — is quick and lands where the person left off, not at the bottom of a
   subscribe answered and the newest page read), and `useOlderSearch` reads the older pages.
 - **How it is placed.** `useScrollFollow` takes the opening: the row's top goes 12 px under the top
   of the transcript; when the rows from it to the end fit, the transcript sits at the bottom and
-  follows as before; otherwise following is off and "Back to latest" carries the count as usual.
+  follows as before; otherwise following is off and "Back to latest" carries the count as usual,
+  giving way while a pending card's controls are on screen (§ "Behaviour worth knowing").
   It places the opening again on every change to the rows and on a `ResizeObserver` callback —
   Markdown arriving lazily changes the height of rows above it — until the reader scrolls (a wheel,
   a swipe, the scroll keys, the scroll bar), touches or clicks the transcript, presses "Back to
@@ -1771,3 +1799,7 @@ sticks above the keyboard.
   Close on a row a terminal holds (A61) — are covered by the vitest suites and the mock, and have
   not been driven in a browser or against a device that speaks A60 or A61; jsdom lays nothing out,
   so how the opening settles while real Markdown arrives is untried.
+- "Back to latest" giving way to a pending card and the field that fits its placeholder are covered
+  by the vitest suites only: jsdom has no `IntersectionObserver` and no layout, so the suites drive
+  a fake observer and a simulated text width, and neither has been driven in a browser at 390 px or
+  320 px, in English or in 中文, or measured in Safari or Firefox.
