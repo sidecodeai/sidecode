@@ -54,6 +54,12 @@ the only thing that confirms a change actually happened. Stopping a turn takes
 the same route since amendment A42: Escape, the key the person would press.
 Attachments ride in the text as well (A49): a message's files are written when
 it is sent, and the words the CLI receives end with their paths.
+
+A turn the usage limit stopped may leave the CLI at a menu of its own, which
+`limit_dialog.py` reads and answers (A63): Escape for the person's message, a
+row's number only for a row the person picked. While it is up nothing is
+injected or typed; and until a minute after the limit resets, nothing held is
+injected either, since it would only stop at the limit again.
 """
 
 from __future__ import annotations
@@ -63,7 +69,7 @@ import json
 import re
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -74,14 +80,16 @@ from ..agents.claude.questions import QUESTION_TOOL, answers_for_tool, answers_f
 from ..agents.claude.subagents import SUBAGENT_STALE_S
 from ..agents.claude.tools import reads_session_file, tool_kind, tool_title
 from ..agents.questions import normalise_questions
-from ..channel.wire import AGENT_EVENTS
+from ..channel.versions import continues_after_limit
+from ..channel.wire import AGENT_EVENTS, LIMIT_EVENT
 from ..errors import RcError
 from ..logging_setup import logger
 from ..models import now_ms
 from . import titles
 from .agents_at_work import AGENT_HANDOFF, AgentsAtWork
 from .attach import Attachment, HookQuestion, TurnHook
-from .limits import TurnEnd
+from .limit_dialog import RESET_LEAD_MS, LimitDialogs, LimitEpisode
+from .limits import LimitStop, TurnEnd
 from .prompt_calls import (
     answered_by_result,
     bind_approvals,
@@ -268,6 +276,15 @@ class SharedState:
     # and the turn the apps were shown then, which its own row ends at the latest.
     inflight_at_stop: bool = False
     turn_at_stop: dict[str, Any] | None = None
+    # A63: the last usage-limit stop and the CLI's menu after it, until the menu
+    # goes; when the limit resets, in milliseconds, until the CLI goes on; and
+    # the stop the transcript last reported, which it reports on every read.
+    limit: LimitEpisode | None = None
+    limit_until_ms: int | None = None
+    limit_seen: LimitStop | None = None
+    # Until when the rows Claude Code records for a choice in that menu are the
+    # device's own key's, not a command the person typed (A63).
+    menu_rows_until: float = 0.0
 
     def mark_inflight(self, message_id: str, at_stop: bool = False) -> None:
         self.inflight = message_id
@@ -338,9 +355,11 @@ class SharedState:
 
         A question on screen is not an idle CLI: its dialog owns the prompt, and
         an injection would be read as an answer to it. Neither is a terminal the
-        device is in the middle of typing a command into (A40).
+        device is in the middle of typing a command into (A40), nor one whose
+        usage-limit menu is up or being looked for (A63).
         """
-        return not self.busy and self.question is None and not self.busy_typing
+        menu = self.limit is not None and self.limit.holds
+        return not self.busy and self.question is None and not self.busy_typing and not menu
 
     def lapse_prompt(self) -> None:
         """A prompt no `Stop` closed and no turn followed is not a turn any more."""
@@ -551,6 +570,10 @@ class SharedControl:
         # Set by the mirror while it runs. Turn state and every confirmation
         # come from what it reads; on its own the hub has no reader at all.
         self.reader: TranscriptReader | None = None
+        # A63: the CLI's usage-limit menu, and the clock its reset is read on,
+        # which a test replaces.
+        self.limits = LimitDialogs(self)
+        self.clock: Callable[[], int] = now_ms
 
     # ------------------------------------------------------------- lifecycle
 
@@ -567,6 +590,8 @@ class SharedControl:
             # and what the CLI said it holds: its process and its queue are the same.
             state.steers, state.handed = previous.steers, previous.handed
             state.held_by_cli, state.queue_seen_at = previous.held_by_cli, previous.queue_seen_at
+            # A63: the account's limit resets when it resets, whichever CLI asks.
+            state.limit_until_ms = previous.limit_until_ms
             if attachment.pid and previous.attachment.pid == attachment.pid:
                 self._carry_work(previous, state)
             else:
@@ -595,7 +620,8 @@ class SharedControl:
         finished" that goes with it, and as begun again at the next read, which
         can be ten seconds off. Only the same process has the same work: the
         turn, the subagents and the tasks it left running, and the prompts it
-        still waits on, which must stay answerable from the apps that show them.
+        still waits on, which must stay answerable from the apps that show them,
+        its usage-limit menu among them (A63).
         """
         state.hooked, state.running = previous.hooked, previous.running
         state.working, state.subagents = previous.working, previous.subagents
@@ -604,6 +630,7 @@ class SharedControl:
         state.agents = previous.agents
         state.approvals, state.by_channel = previous.approvals, previous.by_channel
         state.question = previous.question
+        state.limit, state.limit_seen = previous.limit, previous.limit_seen
 
     async def closed(self, entry: SessionEntry, attachment: Attachment, control: str) -> None:
         """Detach and hand the session back to the terminal, or to nobody."""
@@ -659,6 +686,7 @@ class SharedControl:
         for approval in approvals:
             await self._emit_approval(entry, approval, status="expired")
         await self._expire_question(entry, state)
+        await self.limits.expire(entry, state)
 
     async def ended(self, entry: SessionEntry) -> None:
         """An app's close ended the CLI (A61): what it asked expires, the rest goes quietly."""
@@ -681,6 +709,7 @@ class SharedControl:
             await state.question.hook.answer(None)
             state.question = None
         self._drop_typed(state)
+        self.limits.drop(state)
         for item in state.steers:
             await release(item)
         state.attachment.detach()
@@ -704,9 +733,11 @@ class SharedControl:
         out and is still in flight here, which is what `waiting` protects.
         `end` is how those rows say the turn ended: `completed` unless the
         person interrupted it (amendment A32) or the vendor's usage limit
-        stopped it (A35). A held message is handed over by the hub's drain
-        task, never from here: a settings change being typed holds the
-        session's lock until this reader confirms it (A40).
+        stopped it (A35), which is a stop that may leave the CLI at its menu
+        (A63); the rows say so on every read until the next turn, and it counts
+        once. A held message is handed over by the hub's drain task, never
+        from here: a settings change being typed holds the session's lock until
+        this reader confirms it (A40).
         """
         state = entry.shared
         if state is None:
@@ -717,6 +748,7 @@ class SharedControl:
             state.unconfirmed = None
         if running and not state.running and not state.waiting:
             state.trigger = trigger
+        began = running and not state.running
         if not running:
             # How the turn ended is judged by its own state, before that is let go.
             _halt_agents(state, end)
@@ -724,8 +756,15 @@ class SharedControl:
         state.running = running
         await self._recover_handed(entry, state)
         await self._recover_at_stop(entry, state)
+        if began:
+            await self.limits.moved_on(entry)
         await self._settle(entry, end)
-        if state.injectable and (entry.queue or state.steers):
+        # After the turn has ended with it, so the stop is the turn's (A35) before it is the menu's.
+        limit = end.limit if end is not None else None
+        if limit is not None and limit is not state.limit_seen:
+            state.limit_seen = limit
+            await self.limits.stopped(entry, limit)
+        if self.deliverable(state) and (entry.queue or state.steers):
             self.hub.schedule_drain(entry)
 
     async def _settle(self, entry: SessionEntry, end: TurnEnd | None = None) -> None:
@@ -737,12 +776,16 @@ class SharedControl:
         CLI (A51). Something waiting on the person outranks a running turn,
         and an approval outranks a question: it blocks the work the question
         was asked about. A turn that is over ends as `end` says, which only a
-        transcript read has anything to say about.
+        transcript read has anything to say about. The usage-limit menu comes
+        after a turn, never in one: the turn ends as the limit stopped it, and
+        the session then waits on the person (A63).
         """
         state = entry.shared
         if state is None:
             return
-        busy = state.shown_busy
+        # A63: a CLI at its usage-limit menu waits on the person, whatever it holds behind it.
+        asks = state.limit is not None and state.limit.asks and not state.running
+        busy = state.shown_busy and not asks
         if busy and entry.session.turn is None:
             await entry.channel.begin_turn(state.trigger)
         if state.approvals:
@@ -752,15 +795,20 @@ class SharedControl:
         elif busy:
             await entry.channel.set_state("running")
         else:
-            await self._end_turn(entry, end or TurnEnd())
+            await self._end_turn(entry, end or TurnEnd(), asks=asks)
 
-    async def _end_turn(self, entry: SessionEntry, end: TurnEnd) -> None:
+    async def _end_turn(self, entry: SessionEntry, end: TurnEnd, asks: bool = False) -> None:
+        """End the turn, if one is open, and say what the session does now: `asks` the person."""
         turn = entry.session.turn
-        if turn is None:
+        if turn is not None:
+            started = int(turn.get("started_at") or now_ms())
+            await entry.channel.end_turn(
+                end.stop_reason, max(0, now_ms() - started), limit=end.limit
+            )
+        if asks:
+            await entry.channel.set_state("needs_input")
+        elif turn is None:
             await entry.channel.set_state("idle")
-            return
-        started = int(turn.get("started_at") or now_ms())
-        await entry.channel.end_turn(end.stop_reason, max(0, now_ms() - started), limit=end.limit)
 
     async def echo_delivered(self, entry: SessionEntry, message_id: str) -> None:
         """The injected row reached the transcript: the CLI has the message.
@@ -778,6 +826,8 @@ class SharedControl:
                 state.inflight = None
                 state.inflight_at_stop = False
             state.held_by_cli.pop(message_id, None)
+            # A63: the CLI ran a message, so no menu of its own is up any more.
+            await self.limits.moved_on(entry)
         await self._took_after_all(entry, message_id)
         item = entry.sent.get(message_id)
         if item is None:
@@ -838,14 +888,21 @@ class SharedControl:
             await self._emit_message(entry, item, "delivered")
 
     async def echo_queued(self, entry: SessionEntry, message_id: str) -> None:
-        """The CLI queued an injection it has not started: it waits on the CLI (A51)."""
+        """The CLI queued an injection it has not started: it waits on the CLI (A51).
+
+        One written into what the device took for an idle CLI says something
+        holds the CLI's prompt, which may be its usage-limit menu (A63).
+        """
         state = entry.shared
-        if state is None or message_id not in entry.sent:
+        item = entry.sent.get(message_id)
+        if state is None or item is None:
             return
         state.held_by_cli[message_id] = None
         state.queue_seen_at = time.monotonic()
         for stale in list(state.held_by_cli)[:-MAX_HELD_BY_CLI]:
             state.held_by_cli.pop(stale, None)
+        if not item.get("at_stop"):
+            await self.limits.blocked(entry)
 
     async def queue_moved(self, entry: SessionEntry) -> None:
         """The transcript shows the CLI's queue or conversation moving (A51)."""
@@ -1128,6 +1185,11 @@ class SharedControl:
         if hook.event in AGENT_EVENTS:
             await self._subagent(entry, state, hook)
             return {}
+        if hook.event == LIMIT_EVENT:
+            # Not a step past anything written or handed over: a turn the limit stopped makes
+            # no message lost, and nothing is sent again for it (A63).
+            await self._stopped_at_limit(entry, hook)
+            return {}
         self._passed(entry, state, hook)
         if hook.event == "prompt":
             await self._prompted(entry, state, hook)
@@ -1200,6 +1262,8 @@ class SharedControl:
         now = time.monotonic()
         # Enter reached the CLI, so the prompt box was emptied.
         state.unconfirmed = None
+        # A63: a CLI that takes a prompt has no menu up, and is past the limit.
+        await self.limits.moved_on(entry)
         if hook.prompt_kind == "ours" and hook.message_id:
             state.held_by_cli.pop(hook.message_id, None)
             state.queue_seen_at = now
@@ -1213,6 +1277,16 @@ class SharedControl:
         state.background = 0
         await self._settle(entry)
 
+    async def _stopped_at_limit(self, entry: SessionEntry, hook: TurnHook) -> None:
+        """The main thread's `StopFailure` at the usage limit: the turn is over (A63).
+
+        How it ended is the transcript's to say, with the window and the reset,
+        so the turn stays as it is until its 429 row, which is read now; the
+        CLI may have put its menu up, which is looked for meanwhile.
+        """
+        await self.limits.hooked(entry, hook.said)
+        self.read_soon()
+
     def runs_tool_batch(self, state: SharedState) -> bool:
         """Whether this CLI was started with the `PostToolBatch` hook (A51).
 
@@ -1222,12 +1296,72 @@ class SharedControl:
         link = self.hub.ptys.get(state.attachment.pid)
         return link is not None and link.tool_batch
 
-    @staticmethod
-    def _owes_turn_end(entry: SessionEntry, state: SharedState) -> bool:
-        """Whether a turn's end has anything to write: a steer, or a held message."""
+    def _owes_turn_end(self, entry: SessionEntry, state: SharedState) -> bool:
+        """Whether a turn's end has anything to write: a steer, or a held message.
+
+        Nothing is, while the usage limit holds what waits (A63).
+        """
         if state.question is not None or state.busy_typing:
             return False
+        if self.limit_holds(state) or self.waiting_for_reset(state):
+            return False
         return bool(state.steers or entry.queue)
+
+    # ---------------------------------------------------------- usage limit
+
+    @staticmethod
+    def limit_holds(state: SharedState) -> bool:
+        """Whether the usage-limit menu holds messages back: driven, or looked for after a stop."""
+        return state.limit is not None and state.limit.holds
+
+    def waiting_for_reset(self, state: SharedState) -> bool:
+        """Whether the usage limit that stopped the CLI has not reset a minute ago yet (A63)."""
+        until = state.limit_until_ms
+        return until is not None and self.clock() < until + RESET_LEAD_MS
+
+    def deliverable(self, state: SharedState) -> bool:
+        """Whether a message can go in now: an idle CLI, and no limit it would stop at again."""
+        return state.injectable and not self.waiting_for_reset(state)
+
+    def resumes_after_limit(self) -> bool:
+        """The account's `resume_after_limit` (A35): "Wait here" is picked for the person (A63)."""
+        return self.hub.resumes.enabled
+
+    async def continues_by_itself(self, entry: SessionEntry) -> None:
+        """The CLI said it goes on by itself after the reset: no resume prompt of ours (A63).
+
+        Only a Claude Code that does (2.1.234 and later), and only once its own
+        transcript says so; a version the device cannot read keeps the resume.
+        """
+        state = entry.shared
+        if state is None or not continues_after_limit(state.attachment.claude_version):
+            return
+        await self.hub.resumes.continues_itself(entry.session.session_id)
+
+    def claim_menu_rows(self, entry: SessionEntry, seconds: float) -> None:
+        """Take the rows the usage-limit menu leaves for a while as the device's key's (A63)."""
+        state = entry.shared
+        if state is not None:
+            state.menu_rows_until = time.monotonic() + seconds
+
+    async def hold_steers(self, entry: SessionEntry) -> None:
+        """What was steered into the turn the limit stopped waits in the queue, where it shows."""
+        state = entry.shared
+        if state is None or not state.steers:
+            return
+        for item in state.steers:
+            hold(entry.queue, item, int(item["ts"]))
+        state.steers.clear()
+        await entry.channel.publish_queue(self.hub.queue_snapshot(entry))
+
+    async def limit_changed(self, entry: SessionEntry) -> None:
+        """The menu came, went or changed: the session says so, and what it held may go."""
+        state = entry.shared
+        if state is None:
+            return
+        await self._settle(entry)
+        if self.deliverable(state) and (entry.queue or state.steers):
+            self.hub.schedule_drain(entry)
 
     async def _tool_boundary(
         self, entry: SessionEntry, state: SharedState, deadline: float
@@ -1369,7 +1503,9 @@ class SharedControl:
         source: str = "remote",
         queue_ts: int | None = None,
         mode: str = "auto",
+        answer: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Inject a message now, or hold it; `answer` is the card answer it came as (A63)."""
         state = entry.shared
         if state is None:
             raise RcError("conflict", "the session is no longer attached")
@@ -1378,11 +1514,15 @@ class SharedControl:
         written = await attachments.store(entry.session.session_id, uploads)
         await self._announce(entry, text, source, written)
         item = pending_item(text, request_id, source, uploads, written, mode)
-        if (entry.queue or state.steers) and state.injectable:
+        if self.limits.drives(state, source):
+            # A63: the person's message closes the usage-limit menu with Escape, and goes as any
+            # other, held while the limit has not reset; a menu that cannot be closed now stays.
+            await self.limits.make_way(entry, answer)
+        if (entry.queue or state.steers) and self.deliverable(state):
             # A turn's end drains from a task of its own, so a message the turn
             # held may not have gone yet: it goes first, and this one after it.
             await self.drain_locked(entry)
-        if state.injectable and not entry.queue and not state.steers:
+        if self.deliverable(state) and not entry.queue and not state.steers:
             if await self._inject(entry, item):
                 return {"accepted": "sent"}
             # A bridge refuses only as it goes away; whatever delivers the
@@ -1407,10 +1547,14 @@ class SharedControl:
 
         False, with nothing written, when the CLI runs no turn hooks or no turn:
         the message is then sent as any other is. A steered message is no queue
-        entry and no block until the model has it, as A14 has it for Codex.
+        entry and no block until the model has it, as A14 has it for Codex. A
+        turn the usage limit stopped is not one to steer into, and a message
+        sent then waits where the person sees it (A63).
         """
         state = entry.shared
         if state is None or not state.hooked or not state.busy:
+            return False
+        if self.limit_holds(state) or self.waiting_for_reset(state):
             return False
         written = await attachments.store(entry.session.session_id, uploads)
         await self._announce(entry, text, source, written)
@@ -1443,10 +1587,11 @@ class SharedControl:
         is in the CLI and counts as in flight, so nothing overtakes it and
         nothing is injected into the turn it starts while its files are
         written (A19, A43). It is the turn's end a CLI without the turn hooks
-        has, and the one a turn ended without `Stop` has (A51).
+        has, and the one a turn ended without `Stop` has (A51). The usage limit
+        holds it until the limit resets and the CLI's menu is gone (A63).
         """
         state = entry.shared
-        if state is None or not state.injectable or not (entry.queue or state.steers):
+        if state is None or not self.deliverable(state) or not (entry.queue or state.steers):
             return
         state.inflight = None
         items, took = self._turn_end_batch(entry, state)
@@ -1680,6 +1825,9 @@ class SharedControl:
         is not a message at all.
         """
         state = entry.shared
+        if state is not None and self.limits.claims(state, text.split(" ", 1)[0]):
+            # A63: what the usage-limit menu records for a row the device pressed.
+            return True
         pending = state.typed if state is not None else None
         if pending is None or pending.expired:
             # A rename's `custom-title` row may be read before the command's own.
@@ -1692,7 +1840,11 @@ class SharedControl:
         return True
 
     async def command_output(self, entry: SessionEntry, text: str) -> None:
-        """What the CLI printed back: the only thing that confirms a change."""
+        """What the CLI printed back: the only thing that confirms a change.
+
+        It also says when "Wait here" was taken in the usage-limit menu (A63).
+        """
+        await self.limits.command_output(entry, text)
         state = entry.shared
         pending = state.typed if state is not None else None
         if pending is None or not pending.confirms or not pending.seen:
@@ -1892,6 +2044,10 @@ class SharedControl:
         state = entry.shared
         if state is None:
             raise RcError("conflict", "the session is no longer attached")
+        if self.limits.answers(state, request_id):
+            # A63: the usage-limit menu, answered by its key in the terminal.
+            await self.limits.answer(entry, request_id, answers)
+            return {}
         question = state.question
         if question is None or question.request_id != request_id:
             # Answered in the terminal, or from another app first; either way
@@ -1935,7 +2091,7 @@ class SharedControl:
             return
         await self._expire_question(entry, state)
         await self._settle(entry)
-        if state.injectable and (entry.queue or state.steers):
+        if self.deliverable(state) and (entry.queue or state.steers):
             self.hub.schedule_drain(entry)
 
     @staticmethod

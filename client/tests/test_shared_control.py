@@ -16,11 +16,27 @@ from rc_client.errors import RcError
 from rc_client.ids import block_uuid
 from rc_client.models import AgentInfo, Choice
 from rc_client.registry import Registry
-from rc_client.sessions.attach import Attachment, HookQuestion
+from rc_client.sessions import limit_dialog
+from rc_client.sessions.attach import Attachment, HookQuestion, TurnHook
 from rc_client.sessions.hub import SessionEntry, SessionHub
-from rc_client.sessions.limits import TurnEnd
+from rc_client.sessions.limits import LimitStop, TurnEnd
 from rc_client.sessions.shared import SharedState
-from tests.helpers import drained, tick
+from tests.helpers import drained, event_validator, tick
+from tests.limit_helpers import (
+    CONVERSATION,
+    CREDITS,
+    PROMPT_BOX,
+    SAID,
+    STOP_WAIT,
+    WAIT_AT,
+    WAIT_SHORTLY,
+    Clock,
+    LimitTerminal,
+    menu_text,
+    quick,
+    until,
+    write_record,
+)
 
 QUESTION_TOOL = "AskUserQuestion"
 QUESTION_INPUT = {
@@ -1492,3 +1508,761 @@ async def test_a_plan_from_the_hook_is_fitted_to_the_frame_again(harness: Harnes
     assert approval["plan_truncated"] is True
     assert len(json.dumps(approval["input"]["plan"]).encode("utf-8")) <= 48 * 1024
     assert [option["id"] for option in approval["options"]] == ["plan_shorten", "plan_keep"]
+
+
+# ------------------------------------------------- the usage-limit menu (A63)
+
+LIMIT_NOW = 1_800_000_000_000
+RESET = LIMIT_NOW + 60 * 60 * 1000
+# A held message goes a minute after the reset, as A35's resume does.
+AFTER_RESET = RESET + limit_dialog.RESET_LEAD_MS
+CLOSE_OPTION = {
+    "id": "close",
+    "label": limit_dialog.CLOSE_LABEL,
+    "description": limit_dialog.CLOSE_DESCRIPTION,
+}
+CONTINUES_OUTPUT = (
+    "<local-command-stdout>Claude Code will continue automatically when the limit resets"
+    "</local-command-stdout>"
+)
+
+
+@pytest.fixture
+def menu_timing(monkeypatch: pytest.MonkeyPatch) -> None:
+    quick(monkeypatch)
+
+
+async def limited(
+    harness: Harness, terminal: LimitTerminal | None = None, clock: Clock | None = None
+) -> SessionEntry:
+    """An attached session, its terminal if it has one, and the clock its reset is read on."""
+    entry = await harness.attach()
+    if terminal is not None:
+        harness.hub.ptys.add(terminal)
+    harness.hub.shared.clock = clock or Clock(LIMIT_NOW)
+    return entry
+
+
+async def stop_at_limit(
+    harness: Harness,
+    entry: SessionEntry,
+    *,
+    hook: bool = True,
+    row: bool = True,
+    resets: int | None = RESET,
+) -> None:
+    """A turn the usage limit stops: the `StopFailure` hook, then the transcript's 429 row."""
+    await tick(harness.hub, entry, running=True)
+    if hook:
+        await harness.hub.shared.turn_hook(
+            entry, TurnHook(session_id="sess-1", event="limit", said=SAID)
+        )
+    if row:
+        written = harness.hub.shared.clock()
+        limit = LimitStop(300, resets, said=SAID, at_ms=written)
+        await tick(harness.hub, entry, running=False, end=TurnEnd("error", limit))
+
+
+def cards(harness: Harness) -> list[dict[str, Any]]:
+    return harness.events("question")
+
+
+def options(card: dict[str, Any]) -> list[dict[str, Any]]:
+    return list(card["questions"][0]["options"])
+
+
+async def card_up(harness: Harness) -> dict[str, Any]:
+    await until(lambda: any(card["status"] == "pending" for card in cards(harness)))
+    return cards(harness)[-1]
+
+
+async def answer_card(harness: Harness, card: dict[str, Any], answer: Any) -> dict[str, Any]:
+    return await harness.hub.answer(
+        {"session_id": "sess-1", "request_id": card["request_id"], "answers": {"q0": answer}}
+    )
+
+
+def menu_over(entry: SessionEntry) -> bool:
+    return entry.shared is not None and entry.shared.limit is None
+
+
+def shown(entry: SessionEntry) -> str:
+    """The state the apps are shown, read afresh each time."""
+    return str(entry.session.state)
+
+
+def injected(harness: Harness) -> list[str]:
+    return [text for _, text in harness.attachment.injected]
+
+
+async def test_the_menu_is_a_card_of_its_free_rows_close_and_room_for_words(
+    harness: Harness, menu_timing: None
+) -> None:
+    terminal = LimitTerminal()
+    entry = await limited(harness, terminal)
+    await stop_at_limit(harness, entry)
+
+    card = await card_up(harness)
+    [question] = card["questions"]
+    assert question["prompt"] == f"{SAID}\n\n{limit_dialog.WAITING}"
+    # The free options on screen, in screen order, in the CLI's own words; never credits.
+    assert question["options"] == [
+        {"id": "stop_wait", "label": STOP_WAIT},
+        {"id": "wait", "label": WAIT_AT},
+        CLOSE_OPTION,
+    ]
+    assert (question["multi"], question["allow_text"]) == (False, True)
+    assert shown(entry) == "needs_input"
+    [ended] = harness.events("turn_completed")
+    assert (ended["stop_reason"], ended["limit"]["resets_at"]) == ("error", RESET)
+    assert terminal.typed == []
+
+
+async def test_a_row_the_person_picks_is_pressed_by_its_number_on_screen(
+    harness: Harness, menu_timing: None
+) -> None:
+    terminal = LimitTerminal()
+    entry = await limited(harness, terminal)
+    await stop_at_limit(harness, entry)
+    card = await card_up(harness)
+
+    assert await answer_card(harness, card, ["wait"]) == {}
+
+    assert terminal.typed == ["2"]
+    assert terminal.chosen == WAIT_AT
+    resolved = cards(harness)[-1]
+    assert (resolved["status"], resolved["by"], resolved["answers"]) == (
+        "resolved",
+        "remote",
+        {"q0": ["wait"]},
+    )
+    assert resolved["block_id"] == card["block_id"]
+    assert shown(entry) == "idle"
+    assert menu_over(entry)
+    # What Claude Code records for that choice is the device's key, not a command typed there.
+    assert await harness.hub.shared.typed_command(entry, "/rate-limit-options")
+    validator = event_validator()
+    if validator is not None:
+        for frame in harness.frames:
+            if frame.get("type") == "session.event":
+                validator.validate(frame["event"])
+
+
+async def test_close_is_a_lone_escape(harness: Harness, menu_timing: None) -> None:
+    terminal = LimitTerminal()
+    entry = await limited(harness, terminal)
+    await stop_at_limit(harness, entry)
+    card = await card_up(harness)
+
+    await answer_card(harness, card, ["close"])
+
+    assert terminal.typed == [limit_dialog.ESCAPE]
+    assert terminal.chosen == "escape"
+    resolved = cards(harness)[-1]
+    assert (resolved["by"], resolved["answers"]) == ("remote", {"q0": ["close"]})
+    assert menu_over(entry) and injected(harness) == []
+
+
+async def test_words_on_the_card_close_the_menu_and_go_as_a_message(
+    harness: Harness, menu_timing: None
+) -> None:
+    """The person writes "go on" where the card asks: that is a message, not a row."""
+    clock = Clock(AFTER_RESET)
+    terminal = LimitTerminal()
+    entry = await limited(harness, terminal, clock)
+    clock.now = LIMIT_NOW
+    await stop_at_limit(harness, entry)
+    card = await card_up(harness)
+    clock.now = AFTER_RESET
+
+    assert await answer_card(harness, card, "go on") == {}
+
+    assert terminal.typed == [limit_dialog.ESCAPE]
+    resolved = cards(harness)[-1]
+    assert (resolved["status"], resolved["by"], resolved["answers"]) == (
+        "resolved",
+        "remote",
+        {"q0": "go on"},
+    )
+    assert injected(harness) == ["go on"]
+    assert harness.events("user_message")[-1]["text"] == "go on"
+
+
+async def test_words_before_the_reset_close_the_menu_and_wait_a_minute_past_it(
+    harness: Harness, menu_timing: None
+) -> None:
+    clock = Clock(LIMIT_NOW)
+    terminal = LimitTerminal()
+    entry = await limited(harness, terminal, clock)
+    await stop_at_limit(harness, entry)
+    card = await card_up(harness)
+
+    await answer_card(harness, card, "go on")
+
+    assert terminal.typed == [limit_dialog.ESCAPE] and menu_over(entry)
+    assert injected(harness) == []
+    assert harness.events("queue")[-1]["pending"][0]["text"] == "go on"
+    clock.now = RESET
+    await tick(harness.hub, entry, running=False)
+    assert injected(harness) == [], "the reset itself is a minute too early"
+    clock.now = AFTER_RESET
+    await tick(harness.hub, entry, running=False)
+    assert injected(harness) == ["go on"]
+
+
+async def test_a_row_whose_words_changed_is_refused_and_the_card_shows_the_menu_now(
+    harness: Harness, menu_timing: None
+) -> None:
+    terminal = LimitTerminal()
+    entry = await limited(harness, terminal)
+    await stop_at_limit(harness, entry)
+    card = await card_up(harness)
+
+    terminal.redraw((STOP_WAIT, WAIT_SHORTLY, CREDITS))
+    with pytest.raises(RcError) as caught:
+        await answer_card(harness, card, ["wait"])
+
+    assert (caught.value.code, caught.value.message) == ("conflict", limit_dialog.CHANGED)
+    assert terminal.typed == []
+    refreshed = cards(harness)[-1]
+    assert (refreshed["status"], refreshed["request_id"]) == ("pending", card["request_id"])
+    assert {"id": "wait", "label": WAIT_SHORTLY} in options(refreshed)
+
+    await answer_card(harness, refreshed, ["wait"])
+    assert terminal.typed == ["2"] and terminal.chosen == WAIT_SHORTLY
+    assert menu_over(entry)
+
+
+async def test_a_key_the_menu_ignored_is_pressed_once_more(
+    harness: Harness, menu_timing: None
+) -> None:
+    """Claude Code refuses a choice within 250 ms of a draw or a key."""
+    terminal = LimitTerminal(swallow=1)
+    entry = await limited(harness, terminal)
+    await stop_at_limit(harness, entry)
+    card = await card_up(harness)
+
+    await answer_card(harness, card, ["stop_wait"])
+
+    assert terminal.typed == ["1", "1"]
+    assert terminal.chosen == STOP_WAIT
+    assert cards(harness)[-1]["by"] == "remote"
+    assert menu_over(entry)
+
+
+async def test_a_menu_that_ignores_both_keys_is_left_to_the_terminal(
+    harness: Harness, menu_timing: None
+) -> None:
+    terminal = LimitTerminal(swallow=2)
+    entry = await limited(harness, terminal)
+    await stop_at_limit(harness, entry)
+    card = await card_up(harness)
+
+    await answer_card(harness, card, ["stop_wait"])
+
+    assert terminal.typed == ["1", "1"]
+    assert cards(harness)[-1]["status"] == "expired"
+    assert harness.events("notice")[-1]["text"] == limit_dialog.FAILED
+    assert shown(entry) == "needs_input"
+
+
+async def test_an_answer_given_in_the_terminal_first_resolves_by_terminal(
+    harness: Harness, menu_timing: None
+) -> None:
+    terminal = LimitTerminal()
+    entry = await limited(harness, terminal)
+    await stop_at_limit(harness, entry)
+    card = await card_up(harness)
+
+    terminal.person_moves()
+    await asyncio.sleep(0.1)
+    assert cards(harness)[-1]["status"] == "pending", "moving the highlight answers nothing"
+
+    terminal.person_answers(1)
+    await until(lambda: cards(harness)[-1]["status"] == "resolved")
+    resolved = cards(harness)[-1]
+    assert resolved["by"] == "terminal" and "answers" not in resolved
+    assert shown(entry) == "idle"
+    # A late answer from an app changes nothing.
+    assert await answer_card(harness, card, ["stop_wait"]) == {}
+    assert terminal.typed == []
+
+
+async def test_a_terminal_that_goes_away_expires_the_card(
+    harness: Harness, menu_timing: None
+) -> None:
+    terminal = LimitTerminal()
+    entry = await limited(harness, terminal)
+    await stop_at_limit(harness, entry)
+    await card_up(harness)
+
+    harness.hub.ptys.remove(terminal)
+
+    await until(lambda: cards(harness)[-1]["status"] == "expired")
+    assert menu_over(entry)
+    assert terminal.typed == []
+
+
+async def test_a_menu_the_screen_no_longer_shows_is_left_to_the_terminal(
+    harness: Harness, menu_timing: None
+) -> None:
+    """Nothing to read the row's number from: the card expires and the person is told why."""
+    terminal = LimitTerminal()
+    entry = await limited(harness, terminal)
+    await stop_at_limit(harness, entry)
+    card = await card_up(harness)
+
+    terminal.text = "the screen has scrolled far past anything the menu drew\n"
+    await answer_card(harness, card, ["stop_wait"])
+
+    assert terminal.typed == []
+    assert cards(harness)[-1]["status"] == "expired"
+    assert harness.events("notice")[-1]["text"] == limit_dialog.FAILED
+
+
+async def test_an_option_the_card_did_not_offer_is_refused(
+    harness: Harness, menu_timing: None
+) -> None:
+    terminal = LimitTerminal()
+    entry = await limited(harness, terminal)
+    await stop_at_limit(harness, entry)
+    card = await card_up(harness)
+
+    for answer in (["credits"], ["escape"], ["wait", "stop_wait"], [], "  ", None):
+        with pytest.raises(RcError) as caught:
+            await answer_card(harness, card, answer)
+        assert caught.value.code == "bad_request"
+    assert terminal.typed == []
+    assert entry.shared is not None and entry.shared.limit is not None
+
+
+# ------------------------------------------------ messages while the menu is up
+
+
+async def test_a_message_closes_the_menu_with_a_lone_escape_and_waits_for_the_reset(
+    harness: Harness, menu_timing: None
+) -> None:
+    clock = Clock(LIMIT_NOW)
+    terminal = LimitTerminal()
+    entry = await limited(harness, terminal, clock)
+    await stop_at_limit(harness, entry)
+    await card_up(harness)
+
+    result = await harness.hub.send({"id": "req-1", "session_id": "sess-1", "text": "go on"})
+
+    # Escape on its own: nothing after it that would make it a sequence.
+    assert terminal.typed == [limit_dialog.ESCAPE]
+    resolved = cards(harness)[-1]
+    assert (resolved["by"], resolved["answers"]) == ("remote", {"q0": ["close"]})
+    assert result == {"accepted": "queued", "queued_id": "req-1"}
+    assert injected(harness) == []
+    assert harness.events("queue")[-1]["pending"][0]["text"] == "go on"
+
+    clock.now = AFTER_RESET
+    await tick(harness.hub, entry, running=False)
+    assert injected(harness) == ["go on"]
+
+
+async def test_a_message_past_the_reset_closes_the_menu_and_goes(
+    harness: Harness, menu_timing: None
+) -> None:
+    clock = Clock(LIMIT_NOW)
+    terminal = LimitTerminal()
+    entry = await limited(harness, terminal, clock)
+    await stop_at_limit(harness, entry)
+    await card_up(harness)
+
+    clock.now = AFTER_RESET
+    result = await harness.hub.send({"id": "req-1", "session_id": "sess-1", "text": "go on"})
+
+    assert result == {"accepted": "sent"}
+    assert terminal.typed == [limit_dialog.ESCAPE]
+    assert injected(harness) == ["go on"]
+    assert menu_over(entry)
+
+
+async def test_a_message_with_no_known_reset_goes_once_the_menu_is_closed(
+    harness: Harness, menu_timing: None
+) -> None:
+    """The CLI named no time: nothing is held for a reset nobody knows."""
+    terminal = LimitTerminal()
+    entry = await limited(harness, terminal)
+    await stop_at_limit(harness, entry, resets=None)
+    await card_up(harness)
+
+    result = await harness.hub.send({"id": "req-1", "session_id": "sess-1", "text": "go on"})
+
+    assert terminal.typed == [limit_dialog.ESCAPE]
+    assert result == {"accepted": "sent"} and injected(harness) == ["go on"]
+
+
+async def test_the_messages_held_before_go_first(harness: Harness, menu_timing: None) -> None:
+    clock = Clock(LIMIT_NOW)
+    entry = await limited(harness, LimitTerminal(), clock)
+    await stop_at_limit(harness, entry)
+    await card_up(harness)
+    await harness.hub.send({"id": "req-1", "session_id": "sess-1", "text": "first"})
+
+    clock.now = AFTER_RESET
+    result = await harness.hub.send({"id": "req-2", "session_id": "sess-1", "text": "second"})
+
+    assert result == {"accepted": "queued", "queued_id": "req-2"}
+    assert injected(harness) == ["first"]
+
+
+async def test_a_message_while_the_person_types_there_leaves_the_menu_to_them(
+    harness: Harness, menu_timing: None
+) -> None:
+    """Escape is only pressed into a terminal whose keyboard has been still for two seconds."""
+    terminal = LimitTerminal()
+    entry = await limited(harness, terminal)
+    await stop_at_limit(harness, entry)
+    await card_up(harness)
+
+    terminal.person_types()
+    result = await harness.hub.send({"id": "req-1", "session_id": "sess-1", "text": "go on"})
+
+    assert result["accepted"] == "queued"
+    assert terminal.typed == [] and terminal.open
+    assert cards(harness)[-1]["status"] == "pending"
+    assert shown(entry) == "needs_input"
+
+
+async def test_a_screen_that_moved_between_the_look_and_the_key_takes_no_escape(
+    harness: Harness, menu_timing: None
+) -> None:
+    """The proxy types only while the screen ends as the device read it: here it no longer does."""
+    terminal = LimitTerminal()
+    entry = await limited(harness, terminal)
+    await stop_at_limit(harness, entry)
+    await card_up(harness)
+
+    terminal.drawn_before_key = PROMPT_BOX
+    result = await harness.hub.send({"id": "req-1", "session_id": "sess-1", "text": "go on"})
+
+    assert terminal.withheld == [limit_dialog.ESCAPE]
+    assert terminal.typed == []
+    assert result["accepted"] == "queued" and injected(harness) == []
+    assert cards(harness)[-1]["status"] == "pending"
+
+
+# ------------------------------------------------ what the device presses itself
+
+
+async def test_a_message_never_presses_a_row_whatever_the_first_row_is(
+    harness: Harness, menu_timing: None
+) -> None:
+    """Under an experiment the first row costs money; the device's own key is Escape, always."""
+    clock = Clock(LIMIT_NOW)
+    terminal = LimitTerminal((CREDITS, WAIT_AT, STOP_WAIT))
+    entry = await limited(harness, terminal, clock)
+    await stop_at_limit(harness, entry)
+    card = await card_up(harness)
+    assert [option["id"] for option in options(card)] == ["wait", "stop_wait", "close"]
+
+    clock.now = AFTER_RESET
+    await harness.hub.send({"id": "req-1", "session_id": "sess-1", "text": "go on"})
+
+    assert terminal.typed == [limit_dialog.ESCAPE]
+    assert terminal.chosen == "escape"
+
+
+async def test_resuming_after_the_limit_picks_wait_here_by_its_words(
+    harness: Harness, menu_timing: None
+) -> None:
+    """A35's switch: never a fixed number, and never the paid row above it."""
+    await harness.hub.resumes.set_enabled(True)
+    terminal = LimitTerminal((CREDITS, WAIT_AT, STOP_WAIT))
+    entry = await limited(harness, terminal)
+    await stop_at_limit(harness, entry)
+
+    await until(lambda: terminal.chosen is not None)
+    assert terminal.typed == ["2"]
+    assert terminal.chosen == WAIT_AT
+    await until(lambda: menu_over(entry))
+    assert cards(harness) == []
+    assert WAIT_AT in harness.events("notice")[-1]["text"]
+    assert shown(entry) == "idle"
+
+
+async def test_wait_here_the_screen_broke_is_not_picked_and_the_card_goes_up(
+    harness: Harness, menu_timing: None
+) -> None:
+    await harness.hub.resumes.set_enabled(True)
+    terminal = LimitTerminal()
+    terminal.text = CONVERSATION + menu_text((STOP_WAIT, "Wait here, then contin e automatically"))
+    entry = await limited(harness, terminal)
+    await stop_at_limit(harness, entry)
+
+    card = await card_up(harness)
+    assert [option["id"] for option in options(card)] == ["stop_wait", "wait", "close"]
+    await asyncio.sleep(0.1)
+    assert terminal.typed == []
+    assert entry.shared is not None and entry.shared.limit is not None
+
+
+async def test_resuming_after_the_limit_without_wait_here_raises_the_card(
+    harness: Harness, menu_timing: None
+) -> None:
+    await harness.hub.resumes.set_enabled(True)
+    terminal = LimitTerminal((STOP_WAIT, CREDITS))
+    entry = await limited(harness, terminal)
+    await stop_at_limit(harness, entry)
+    card = await card_up(harness)
+    assert [option["id"] for option in options(card)] == ["stop_wait", "close"]
+    await asyncio.sleep(0.1)
+    assert terminal.typed == []
+    assert entry.shared is not None and entry.shared.limit is not None
+
+
+async def test_claude_code_saying_it_continues_by_itself_cancels_the_device_s_resume(
+    harness: Harness, menu_timing: None
+) -> None:
+    """Only its own word after "Wait here" does: a second continue is what is avoided."""
+    await harness.hub.resumes.set_enabled(True)
+    terminal = LimitTerminal()
+    entry = await limited(harness, terminal)
+    await stop_at_limit(harness, entry)
+    await until(lambda: terminal.chosen is not None)
+    assert [event["status"] for event in harness.events("resume")] == ["scheduled"]
+
+    assert await harness.hub.shared.typed_command(entry, "/rate-limit-options")
+    await harness.hub.shared.command_output(entry, CONTINUES_OUTPUT)
+
+    cancelled = harness.events("resume")[-1]
+    assert (cancelled["status"], cancelled["reason"]) == (
+        "cancelled",
+        "Claude Code continues by itself once the limit resets",
+    )
+    assert entry.session.resume is None
+
+
+async def test_without_claude_code_s_word_the_device_s_resume_stays(
+    harness: Harness, menu_timing: None
+) -> None:
+    await harness.hub.resumes.set_enabled(True)
+    entry = await limited(harness, LimitTerminal((STOP_WAIT, CREDITS)))
+    await stop_at_limit(harness, entry)
+    await card_up(harness)
+    await harness.hub.shared.command_output(
+        entry, "<local-command-stdout>Done</local-command-stdout>"
+    )
+    assert [event["status"] for event in harness.events("resume")] == ["scheduled"]
+    assert entry.session.resume is not None
+
+
+# ------------------------------------------------------------------- seeing it
+
+
+async def test_the_hook_and_the_transcript_row_of_one_stop_raise_one_card(
+    harness: Harness, menu_timing: None
+) -> None:
+    entry = await limited(harness, LimitTerminal())
+    await stop_at_limit(harness, entry)
+    await card_up(harness)
+    await tick(harness.hub, entry, running=False, end=TurnEnd("error", LimitStop(300, RESET)))
+    assert len({card["request_id"] for card in cards(harness)}) == 1
+    state = entry.shared
+    assert state is not None and state.limit is not None and state.limit.resets_at_ms == RESET
+
+
+async def test_the_transcript_row_alone_raises_the_card(
+    harness: Harness, menu_timing: None
+) -> None:
+    """A Claude Code without the hook, or one whose hook was not heard: the 429 row is enough."""
+    entry = await limited(harness, LimitTerminal())
+    await stop_at_limit(harness, entry, hook=False)
+    card = await card_up(harness)
+    assert card["questions"][0]["prompt"].startswith(SAID)
+    # The stop is the turn's first: it ends with the limit, which A35 schedules from.
+    [ended] = harness.events("turn_completed")
+    assert (ended["stop_reason"], ended["limit"]["resets_at"]) == ("error", RESET)
+    assert shown(entry) == "needs_input"
+
+
+async def test_an_injection_the_cli_queued_where_it_looked_idle_finds_the_menu(
+    harness: Harness, menu_timing: None
+) -> None:
+    """No stop was heard, yet the CLI queued what went into an idle prompt: a dialog holds it."""
+    terminal = LimitTerminal()
+    entry = await limited(harness, terminal)
+    assert await harness.hub.send({"id": "req-1", "session_id": "sess-1", "text": "go"}) == {
+        "accepted": "sent"
+    }
+    [(message_id, _)] = harness.attachment.injected
+
+    await harness.hub.shared.echo_queued(entry, message_id)
+
+    card = await card_up(harness)
+    assert card["questions"][0]["prompt"].startswith(limit_dialog.LIMIT_REACHED)
+    assert shown(entry) == "needs_input"
+    assert terminal.typed == []
+
+
+async def test_a_queued_injection_with_no_menu_on_screen_says_nothing(
+    harness: Harness, menu_timing: None
+) -> None:
+    entry = await limited(harness, LimitTerminal(("Allow", "Deny"), shows=True))
+    await harness.hub.send({"id": "req-1", "session_id": "sess-1", "text": "go"})
+    [(message_id, _)] = harness.attachment.injected
+
+    await harness.hub.shared.echo_queued(entry, message_id)
+
+    await until(lambda: menu_over(entry))
+    assert cards(harness) == [] and harness.events("notice") == []
+
+
+async def test_a_menu_with_rows_nobody_knows_is_said_and_never_typed_into(
+    harness: Harness, menu_timing: None
+) -> None:
+    terminal = LimitTerminal(("Something new", "Something else"))
+    entry = await limited(harness, terminal)
+    await stop_at_limit(harness, entry)
+
+    await until(lambda: bool(harness.events("notice")))
+    notice = harness.events("notice")[-1]
+    assert (notice["level"], notice["text"]) == ("warn", limit_dialog.NOTICE)
+    assert cards(harness) == []
+    assert shown(entry) == "needs_input"
+    assert terminal.typed == []
+    with pytest.raises(RcError) as caught:
+        await harness.hub.shared.set_settings(entry, "opus", None)
+    assert caught.value.code == "conflict"
+
+
+async def test_a_session_with_no_terminal_of_the_device_s_is_told_and_given_no_card(
+    harness: Harness, menu_timing: None
+) -> None:
+    """Claude Code's own record says a dialog is open; nothing can be typed into it."""
+    entry = await limited(harness)
+    write_record(4242, "sess-1", status="waiting", waitingFor="dialog open")
+    await stop_at_limit(harness, entry, hook=False)
+
+    await until(lambda: bool(harness.events("notice")))
+    assert harness.events("notice")[-1]["text"] == limit_dialog.NOTICE
+    assert cards(harness) == []
+    assert shown(entry) == "needs_input"
+
+    write_record(4242, "sess-1", status="idle")
+    await until(lambda: menu_over(entry))
+    assert shown(entry) == "idle"
+
+
+async def test_a_stop_with_no_menu_after_it_raises_nothing(
+    harness: Harness, menu_timing: None
+) -> None:
+    """Claude Code had a continue left: it waits for the reset and goes on by itself."""
+    terminal = LimitTerminal(shows=False)
+    entry = await limited(harness, terminal)
+    await stop_at_limit(harness, entry)
+
+    await until(lambda: menu_over(entry))
+    assert cards(harness) == []
+    assert harness.events("notice") == []
+    assert shown(entry) == "idle"
+    assert terminal.typed == []
+
+
+async def test_a_stop_read_long_after_it_was_written_opens_no_menu(
+    harness: Harness, menu_timing: None
+) -> None:
+    entry = await limited(harness, LimitTerminal())
+    old = LimitStop(300, RESET, said=SAID, at_ms=LIMIT_NOW - 60 * 60 * 1000)
+    await tick(harness.hub, entry, running=False, end=TurnEnd("error", old))
+    state = entry.shared
+    assert state is not None and state.limit is None
+    assert state.limit_until_ms == RESET
+
+
+async def test_nothing_held_goes_in_until_a_minute_after_the_reset(
+    harness: Harness, menu_timing: None
+) -> None:
+    """It would only stop at the limit again, and bring the menu back."""
+    clock = Clock(LIMIT_NOW)
+    entry = await limited(harness, LimitTerminal(shows=False), clock)
+    await stop_at_limit(harness, entry)
+    await until(lambda: menu_over(entry))
+
+    result = await harness.hub.send({"id": "req-1", "session_id": "sess-1", "text": "go on"})
+    assert result["accepted"] == "queued"
+    clock.now = RESET
+    await tick(harness.hub, entry, running=False)
+    assert injected(harness) == []
+
+    clock.now = AFTER_RESET
+    await tick(harness.hub, entry, running=False)
+    assert injected(harness) == ["go on"]
+
+
+async def test_a_stop_at_the_limit_sends_nothing_again(harness: Harness, menu_timing: None) -> None:
+    """The limit hook is no step past what was handed over: nothing is re-sent for a 429."""
+    entry = await limited(harness, LimitTerminal(shows=False))
+    await tick(harness.hub, entry, running=True)
+    state = entry.shared
+    assert state is not None
+    handed = shared_item("also this")
+    state.handed[str(handed["message_id"])] = handed
+
+    await harness.hub.shared.turn_hook(
+        entry, TurnHook(session_id="sess-1", event="limit", said=SAID)
+    )
+
+    assert "passed_at" not in handed
+
+
+async def test_what_was_steered_into_the_stopped_turn_waits_in_the_queue(
+    harness: Harness, menu_timing: None
+) -> None:
+    entry = await limited(harness, LimitTerminal(shows=False))
+    await tick(harness.hub, entry, running=True)
+    state = entry.shared
+    assert state is not None
+    state.steers.append(shared_item("also this"))
+
+    await harness.hub.shared.turn_hook(
+        entry, TurnHook(session_id="sess-1", event="limit", said=SAID)
+    )
+
+    assert state.steers == []
+    assert [item["text"] for item in entry.queue] == ["also this"]
+    assert harness.events("queue")[-1]["pending"][0]["text"] == "also this"
+
+
+async def test_a_turn_the_cli_begins_ends_the_menu_and_the_wait(
+    harness: Harness, menu_timing: None
+) -> None:
+    """The person chose in the terminal and went on, or the CLI continued by itself."""
+    entry = await limited(harness, LimitTerminal())
+    await stop_at_limit(harness, entry)
+    await card_up(harness)
+
+    await tick(harness.hub, entry, running=True)
+
+    assert cards(harness)[-1]["by"] == "terminal"
+    state = entry.shared
+    assert state is not None and state.limit is None and state.limit_until_ms is None
+
+
+async def test_a_detachment_expires_the_menu_s_card(harness: Harness, menu_timing: None) -> None:
+    entry = await limited(harness, LimitTerminal())
+    await stop_at_limit(harness, entry)
+    await card_up(harness)
+
+    await harness.hub.attach_closed(harness.attachment)
+
+    assert cards(harness)[-1]["status"] == "expired"
+    assert entry.shared is None
+
+
+def shared_item(text: str) -> dict[str, Any]:
+    from rc_client.sessions.shared import pending_item
+
+    return pending_item(text, f"req-{text}")
+
+
+def test_the_menu_text_helper_draws_what_the_device_reads() -> None:
+    """The fake terminal's menu is one the device recognises, so the flows above test it."""
+    from rc_client.sessions.limit_menu import read_menu
+
+    menu = read_menu(menu_text((STOP_WAIT, WAIT_AT, CREDITS)))
+    assert menu is not None and [row.kind for row in menu.rows] == ["stop_wait", "wait", "credits"]

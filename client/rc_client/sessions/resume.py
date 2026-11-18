@@ -67,6 +67,7 @@ PERSON_SENT = "you sent a message"
 ALREADY_RUNNING = "the session is running again"
 SWITCHED_OFF = "resuming after the limit reset was switched off"
 OUT_OF_ATTEMPTS = "the usage limit was reached three times"
+CONTINUES_ITSELF = "Claude Code continues by itself once the limit resets"
 
 
 @dataclass(slots=True)
@@ -248,6 +249,17 @@ class ResumeScheduler:
         if record is not None:
             await self._forget(record, "cancelled" if record.pending else None, "")
         return {"session": entry.session.to_dict()}
+
+    async def continues_itself(self, session_id: str) -> None:
+        """The CLI said it goes on by itself once the limit resets: no prompt of the device's (A63).
+
+        Its own transcript says so after "Wait here" is taken in its usage-limit
+        menu; a prompt then would be a second continue.
+        """
+        record = self._records.get(session_id)
+        if record is None or not record.pending:
+            return
+        await self._forget(record, "cancelled", CONTINUES_ITSELF)
 
     async def cancelled_by_person(self, session_id: str) -> None:
         """A message or a command the person sent: they got there first (6.3)."""

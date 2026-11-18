@@ -338,6 +338,12 @@ class PtyProxy:
         draft, idle_for = self.keyboard.draft, self.keyboard.idle_for
         if kind == wire.KEYS:
             data = str(message.get("data") or "").encode("utf-8")
+            shown = message.get("if_ends_with")
+            if isinstance(shown, str) and not self.screen.ends_with(shown):
+                # A63: the screen moved since the daemon read it, so the key
+                # would land on something else; it is not typed.
+                link.send(wire.typed(request_id, draft, idle_for, sent=False))
+                return
             if message.get("clear"):
                 self.screen.reset()
             if data:

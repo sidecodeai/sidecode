@@ -19,6 +19,7 @@ from rc_client.channel import paths, pty, turnhook, versions, wire
 from rc_client.channel.settings import STOP_TIMEOUT, TURN_TIMEOUT, settings, write_settings
 from rc_client.channel.versions import runs_tool_batch_hooks
 from rc_client.config import ensure_dirs
+from rc_client.sessions import attach as attach_module
 
 from .test_attach_channel import short_dir  # noqa: F401  (fixture)
 
@@ -38,7 +39,9 @@ def payload(event: str, **extra: Any) -> dict[str, Any]:
 
 def test_the_hook_spells_the_frames_as_the_wire_does() -> None:
     assert (turnhook.TURN, turnhook.TURN_REPLY) == (wire.TURN, wire.TURN_REPLY)
-    assert set(turnhook.EVENTS.values()) | turnhook.AGENT_EVENTS == set(wire.TURN_EVENTS)
+    named = set(turnhook.EVENTS.values()) | turnhook.AGENT_EVENTS | {turnhook.LIMIT}
+    assert named == set(wire.TURN_EVENTS)
+    assert (turnhook.LIMIT, turnhook.MAX_SAID) == (wire.LIMIT_EVENT, wire.MAX_SAID)
     assert set(wire.AGENT_EVENTS) == turnhook.AGENT_EVENTS
     assert set(turnhook.BUDGETS) == set(wire.TURN_EVENTS)
     kinds = {turnhook.prompt_kind(text)["prompt_kind"] for text in ("/x", "a", CHANNEL_PROMPT)}
@@ -304,6 +307,68 @@ def test_an_api_error_that_ends_a_subagent_is_its_end() -> None:
 def test_the_main_threads_own_api_error_says_nothing_to_the_device() -> None:
     """It has no `agent_id`, and the transcript is what tells how its turn ended."""
     assert turnhook.frame(payload("StopFailure", error="overloaded")) is None
+    assert turnhook.frame(payload("StopFailure")) is None
+
+
+LIMIT_SAID = "You've hit your 5-hour limit \u00b7 resets 6:30pm (UTC)"
+
+
+def test_the_main_thread_stopping_at_the_usage_limit_reaches_the_device() -> None:
+    """Claude Code may now hold the session at its menu; the CLI's own sentence comes along."""
+    frame = turnhook.frame(
+        payload(
+            "StopFailure",
+            error="rate_limit",
+            error_details="429 the secret details",
+            last_assistant_message=LIMIT_SAID,
+        )
+    )
+    assert without_deadline(frame) == {
+        "type": "turn",
+        "event": "limit",
+        "session_id": "sess-1",
+        "said": LIMIT_SAID,
+    }
+    assert "secret" not in json.dumps(frame)
+    assert frame is not None
+    assert abs(float(str(frame["deadline"])) - (turnhook.WALL_STARTED + 1.0)) < 0.01
+
+
+def test_the_limit_sentence_goes_on_one_short_line() -> None:
+    frame = turnhook.frame(
+        payload("StopFailure", error="rate_limit", last_assistant_message="word\n" * 200)
+    )
+    assert frame is not None
+    said = str(frame["said"])
+    assert "\n" not in said and len(said) == turnhook.MAX_SAID and said.endswith("\u2026")
+    bare = turnhook.frame(payload("StopFailure", error="rate_limit"))
+    assert bare is not None and bare["said"] == ""
+
+
+def test_a_subagent_stopping_at_the_usage_limit_is_still_only_its_end() -> None:
+    frame = turnhook.frame(
+        payload("StopFailure", agent_id="a1", error="rate_limit", last_assistant_message="x")
+    )
+    assert without_deadline(frame) == {
+        "type": "turn",
+        "event": "agent_stop",
+        "session_id": "sess-1",
+        "agent_id": "a1",
+    }
+
+
+def test_the_daemon_reads_a_limit_frame_and_only_its_sentence() -> None:
+    hook = attach_module._turn_hook(
+        {"type": "turn", "event": "limit", "session_id": "sess-1", "said": " a  b\nc " + "x" * 400}
+    )
+    assert hook is not None and hook.event == "limit"
+    assert hook.said.startswith("a b c") and len(hook.said) == wire.MAX_SAID
+    other = attach_module._turn_hook(
+        {"type": "turn", "event": "stop", "session_id": "sess-1", "said": "words"}
+    )
+    assert other is not None and other.said == ""
+    odd = attach_module._turn_hook({"type": "turn", "event": "limit", "session_id": "s", "said": 7})
+    assert odd is not None and odd.said == ""
 
 
 def test_a_subagents_own_tool_batch_is_none_of_the_devices_business() -> None:
@@ -479,6 +544,24 @@ def test_a_subagent_hook_reaches_the_daemon_and_prints_nothing(
     assert (done.returncode, done.stdout, done.stderr) == (0, "", "")
     assert [without_deadline(frame) for frame in daemon.frames] == [
         {"type": "turn", "event": named, "session_id": "sess-1", "agent_id": "a1"}
+    ]
+
+
+def test_a_usage_limit_stop_reaches_the_daemon_and_prints_nothing(
+    short_dir: Path,  # noqa: F811
+) -> None:
+    path = short_dir / "c.sock"
+    daemon = Daemon(path, wire.turn_reply(context="never printed"))
+    try:
+        done, _ = run_hook(
+            path, payload("StopFailure", error="rate_limit", last_assistant_message=LIMIT_SAID)
+        )
+        daemon.thread.join(timeout=2)
+    finally:
+        daemon.close()
+    assert (done.returncode, done.stdout, done.stderr) == (0, "", "")
+    assert [without_deadline(frame) for frame in daemon.frames] == [
+        {"type": "turn", "event": "limit", "session_id": "sess-1", "said": LIMIT_SAID}
     ]
 
 

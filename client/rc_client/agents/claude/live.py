@@ -9,6 +9,10 @@ what the hook said, by when each was said: the later word names the session.
 The format is Claude Code's and is not documented, so a file that does not look as expected says
 nothing, and fields this module does not read are ignored.
 
+The record also says what the CLI is doing: `status` is `busy`, `idle` or `waiting`, and
+`waitingFor` says on what. While any dialog of its own is open, its usage-limit menu among them, it
+is `waiting` for `dialog open` (A63).
+
 A record belongs to the process it was written for, and its pid may be somebody else's by now.
 `procStart` is that process's start time as `ps -o lstart=` prints it in UTC and the C locale,
 which is how `procscan` reports every start time on macOS. Elsewhere the two are written
@@ -27,6 +31,8 @@ from . import runtime
 
 MAX_RECORD_BYTES = 64 * 1024
 _SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
+WAITING = "waiting"
+DIALOG_OPEN = "dialog open"
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,18 +82,39 @@ def verified(records: Mapping[int, LiveRecord], pid: int, started: str | None) -
     return record if record.started == _plain(started) else None
 
 
-def _parse(path: Path) -> LiveRecord | None:
+def dialog_open(pid: int, session_id: str) -> bool | None:
+    """Whether this CLI's record says a dialog of its own is open, or None when it says nothing.
+
+    Only the record of this pid that names this session counts, and only one that says what the
+    CLI is doing: a Claude Code that writes no `status` has nothing to say here.
+    """
+    payload = _load(sessions_dir() / f"{pid}.json")
+    if payload is None or payload.get("pid", pid) != pid:
+        return None
+    status = payload.get("status")
+    if payload.get("sessionId") != session_id or not isinstance(status, str) or not status:
+        return None
+    return status == WAITING and payload.get("waitingFor") == DIALOG_OPEN
+
+
+def _load(path: Path) -> dict[str, object] | None:
+    """A record's JSON, or None for anything that is not one."""
     # A regular file only: opening a pipe left under a record's name would wait for a writer.
     if not path.stem.isdigit() or not path.is_file():
         return None
-    pid = int(path.stem)
     try:
         with path.open("rb") as handle:
             raw = handle.read(MAX_RECORD_BYTES + 1)
         payload = json.loads(raw) if len(raw) <= MAX_RECORD_BYTES else None
     except (OSError, ValueError, RecursionError):
         return None
-    if not isinstance(payload, dict) or payload.get("pid", pid) != pid:
+    return payload if isinstance(payload, dict) else None
+
+
+def _parse(path: Path) -> LiveRecord | None:
+    payload = _load(path)
+    pid = int(path.stem) if path.stem.isdigit() else 0
+    if payload is None or payload.get("pid", pid) != pid:
         return None
     session_id, started = payload.get("sessionId"), payload.get("procStart")
     if not isinstance(session_id, str) or not _SESSION_ID.fullmatch(session_id):

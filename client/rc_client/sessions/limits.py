@@ -16,7 +16,8 @@ joins by adding a reader here, with no change to the wire.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -44,11 +45,15 @@ class LimitStop:
 
     `resets_at_ms` is null when the vendor named no time, and `window_minutes`
     absent when it named no window; both happen, and neither stops a resume
-    from being scheduled.
+    from being scheduled. A Claude Code transcript row also gives what the CLI
+    said, verbatim, and when the row was written (A63); neither goes on the wire
+    nor counts when two stops are compared.
     """
 
     window_minutes: int | None = None
     resets_at_ms: int | None = None
+    said: str = field(default="", compare=False)
+    at_ms: int | None = field(default=None, compare=False)
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {}
@@ -92,10 +97,33 @@ def claude_row_limit(row: dict[str, Any]) -> LimitStop | None:
         return None
     quota = row.get("quotaLimits")
     quota = quota if isinstance(quota, dict) else {}
+    message = row.get("message")
     return LimitStop(
         window_minutes=CLAUDE_WINDOWS.get(str(quota.get("rateLimitType") or "")),
         resets_at_ms=_seconds_to_ms(quota.get("resetsAt")),
+        said=_row_text(message.get("content") if isinstance(message, dict) else None),
+        at_ms=_written_at(row.get("timestamp")),
     )
+
+
+def _row_text(content: Any) -> str:
+    """The words of a row's content, a string or a list of text blocks, as the CLI wrote them."""
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+    texts = [str(block.get("text") or "") for block in content if isinstance(block, dict)]
+    return "\n".join(text for text in texts if text).strip()
+
+
+def _written_at(stamp: Any) -> int | None:
+    """When a transcript row was written, in milliseconds, from its ISO `timestamp`."""
+    if not isinstance(stamp, str):
+        return None
+    try:
+        return int(datetime.fromisoformat(stamp).timestamp() * 1000)
+    except ValueError:
+        return None
 
 
 def claude_result_limit(api_error_status: Any) -> LimitStop | None:

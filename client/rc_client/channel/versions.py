@@ -26,6 +26,9 @@ VERSIONS_NAME = "claude-versions.json"
 # changelog nor the hooks reference dates the event, so this is the oldest
 # build checked on a machine.
 TOOL_BATCH_VERSION = (2, 1, 291)
+# The oldest Claude Code that continues a turn the usage limit stopped by itself
+# once the limit resets (A63), so the device sends no resume prompt of its own.
+AUTO_CONTINUE_VERSION = (2, 1, 234)
 PROBE_TIMEOUT = 3.0
 MAX_REMEMBERED = 32
 # A probe that failed is asked again after this long, not kept for good.
@@ -47,6 +50,15 @@ def runs_tool_batch_hooks(version: str | None) -> bool:
     """
     numbers = version_numbers(version)
     return numbers is not None and numbers >= TOOL_BATCH_VERSION
+
+
+def continues_after_limit(version: str | None) -> bool:
+    """Whether a Claude Code of this version goes on by itself once the usage limit resets.
+
+    A version that cannot be read counts as older, which keeps the device's own resume.
+    """
+    numbers = version_numbers(version)
+    return numbers is not None and numbers >= AUTO_CONTINUE_VERSION
 
 
 def binary_version(binary: str, remembered: Path) -> str | None:

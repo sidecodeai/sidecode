@@ -11,6 +11,7 @@ import pytest
 from rc_client.agents.base import Emit
 from rc_client.agents.claude import transcripts
 from rc_client.agents.codex.translate import CodexTranslator
+from rc_client.channel.versions import continues_after_limit
 from rc_client.errors import RcError
 from rc_client.events import HISTORY_KINDS, dedup_key, should_store
 from rc_client.models import AgentInfo, Session, SessionResume
@@ -29,6 +30,7 @@ from rc_client.sessions.limits import (
 )
 from rc_client.sessions.resume import (
     ALREADY_RUNNING,
+    CONTINUES_ITSELF,
     MAX_DEFERRALS,
     OUT_OF_ATTEMPTS,
     PERSON_SENT,
@@ -38,6 +40,7 @@ from rc_client.sessions.resume import (
     ResumeScheduler,
 )
 from tests.helpers import event_validator, load_fixture
+from tests.limit_helpers import quick, until
 from tests.test_hub import FakeRunner
 from tests.test_hub import agent_info as hub_agent_info
 
@@ -742,6 +745,83 @@ async def test_a_shared_session_ends_at_the_limit_and_is_resumed_by_injection(
             if frame.get("type") == "session.event":
                 validator.validate(frame["event"])
     built.registry.close()
+
+
+CONTINUES_OUTPUT = (
+    "<local-command-stdout>Claude Code will continue automatically when the limit resets"
+    "</local-command-stdout>"
+)
+
+
+async def shared_resume_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version: str | None
+) -> tuple[Any, Clock, Any]:
+    """A shared session of this Claude Code, stopped at the limit with a resume pending.
+
+    The look for a menu after the stop finds none, as it has long before any resume falls due.
+    """
+    from tests.test_shared_control import Harness as SharedHarness
+
+    quick(monkeypatch)
+    built = SharedHarness(tmp_path)
+    built.attachment.claude_version = version
+    clock = Clock()
+    built.hub.resumes = ResumeScheduler(built.hub, clock)
+    await built.hub.resumes.set_enabled(True)
+    entry = await built.attach()
+    await built.hub.shared.tick(entry, True, "terminal", TurnEnd())
+    limit = LimitStop(FIVE_HOURS, NOW + HOUR)
+    await built.hub.shared.tick(entry, False, "terminal", TurnEnd("error", limit))
+    assert built.events("resume")[-1]["status"] == "scheduled"
+    await until(lambda: entry.shared is not None and entry.shared.limit is None)
+    return built, clock, entry
+
+
+@pytest.mark.parametrize("version", ["2.1.234", "2.1.326"])
+async def test_claude_code_s_own_word_that_it_continues_cancels_the_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version: str
+) -> None:
+    """A63: after "Wait here" the CLI goes on by itself; a prompt would be a second continue."""
+    built, clock, entry = await shared_resume_pending(tmp_path, monkeypatch, version)
+
+    await built.hub.shared.command_output(entry, CONTINUES_OUTPUT)
+
+    cancelled = built.events("resume")[-1]
+    assert (cancelled["status"], cancelled["reason"]) == ("cancelled", CONTINUES_ITSELF)
+    assert entry.session.resume is None
+    clock.advance(HOUR + 2 * MINUTE)
+    await built.hub.resumes.tick()
+    assert built.attachment.injected == []
+    if entry.shared is not None:
+        built.hub.shared.limits.drop(entry.shared)
+    built.registry.close()
+
+
+@pytest.mark.parametrize("version", ["2.1.326", "2.1.200", None])
+async def test_without_the_cli_s_word_or_a_version_that_says_so_the_resume_is_sent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version: str | None
+) -> None:
+    """The version alone proves nothing, and one that cannot be read keeps the resume as it was."""
+    built, clock, entry = await shared_resume_pending(tmp_path, monkeypatch, version)
+    if version != "2.1.326":
+        await built.hub.shared.command_output(entry, CONTINUES_OUTPUT)
+
+    clock.advance(HOUR + 2 * MINUTE)
+    await built.hub.resumes.tick()
+
+    assert [event["status"] for event in built.events("resume")] == ["scheduled", "fired"]
+    assert [text for _, text in built.attachment.injected] == [RESUME_PROMPT]
+    if entry.shared is not None:
+        built.hub.shared.limits.drop(entry.shared)
+    built.registry.close()
+
+
+def test_the_cli_goes_on_by_itself_from_2_1_234() -> None:
+    assert not continues_after_limit("2.1.233")
+    assert continues_after_limit("2.1.234 (Claude Code)")
+    assert continues_after_limit("2.2.0")
+    assert not continues_after_limit(None)
+    assert not continues_after_limit("unknown")
 
 
 async def test_every_event_a_resume_publishes_validates_against_the_schema(

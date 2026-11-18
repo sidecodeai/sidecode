@@ -2000,6 +2000,22 @@ side then sees the block `resolved` with `by` saying who answered, and the CLI's
 withdrawn when the app was first. A question the device could not raise this way — an older shim
 without the hook — stays what it was before: a running `tool_call` the terminal answers alone.
 
+A block may also stand for a menu the agent puts up in its own terminal, which the device answers
+through the terminal it owns (amendment A63): Claude Code's usage-limit menu, on an attached
+session. Such a block comes after the turn the limit stopped, never inside one, and has one
+question. Its `prompt` is the CLI's own sentence about the limit, then a line saying that Claude Code
+is waiting in its terminal for a choice and that words written instead close the menu and are sent
+as a message. Its `options` are the free options the menu shows, in the menu's order and its own
+words (`wait`, `stop_wait`, `stop`, `no_auto`), and then `close`; `multi` is false and `allow_text`
+true. An option that costs money or opens a browser is never offered. The device presses a row's
+number only for an option an app chose, and only while the screen shows that row in the card's
+words; `close`, and words, are a lone Escape, which closes the menu and changes nothing else in
+Claude Code, and the words then go to the session as a message. `resolved` with `by: "remote"`
+means a key the device pressed closed the menu, with `answers` naming the option or `close`, or
+carrying the words; `by: "terminal"` means the menu went without the device, with no `answers`;
+`expired` means nobody can answer it from an app any more: the terminal went away, or the screen no
+longer shows the menu, in which case a `notice` says to answer it in the terminal.
+
 Grok Build asks with a request of its own, `_x.ai/ask_user_question`, and the device raises the
 block from it on a session it drives and on one a TUI shares through the leader alike (A52). A
 question past the fourth is not shown and goes unanswered. When another client answered first,
@@ -3192,10 +3208,10 @@ an app never draws two controls for one thing. Terminal ergonomics — `/vim`, `
 
 | Request | Behaviour |
 | --- | --- |
-| `session.send` | Accepted whatever `mode` says. When the CLI's own turn is idle — whatever its subagents and background workflows are doing (A51) — the device injects at once, replies `accepted: "sent"` and emits `user_message {delivery: "delivered"}` — at once when the CLI holds no earlier message, otherwise when the terminal shows the message's own row, so the bubbles keep the order they were sent in (A51). While a turn runs, `mode: "auto"` is steered when the session's CLI runs the device's turn hooks and was started with `PostToolBatch` among them, which the terminal proxy gives a CLI only when its version can load it: the device replies `accepted: "steered"`, hands the message to the model at the turn's next batch of tool calls — or, when the turn has none left, writes it into the channel as the turn ends, so that it starts the next turn — and emits the block when it does (A14, A51). Steering is thus decided per session, not by `shared_steer` (4.2), which the device reports by the version of the `claude` it detects; `accepted` says which way a message went. `mode: "queue"` and `mode: "interrupt"`, and `mode: "auto"` on a session whose CLI started without that hook, are held locally: the device replies `accepted: "queued"` with a `queued_id` and emits a `queue` event listing it — no `user_message` yet (A19) — then injects the oldest held message as the turn ends, one per turn, and emits the block with `delivery: "delivered"`. `session.queue_remove` works on held items. A message the CLI absorbs, removes from its queue without running it, or goes past without its own row (a later turn hook ran, and neither its row nor the CLI's queue showed it; time alone never counts) goes in again — an `auto` one at the running turn's next batch of tool calls when the session steers, any other at the next turn's end — at most three times, and is then reported with an `error` under its bubble's `block_id` (A51). One written at a turn's end and absorbed by that turn going on is sent again outside those three: at the turn's next batch of tool calls whatever its `mode`, uncounted, when the session steers, and when it cannot, at the next turn's end, at most ten times before the same `error`. One the person pulls back into the terminal's input box is theirs and is not sent again. Attachments are delivered as files the words name (4.8, A49), held, steered or not, when the agent reports `shared_attachments: true`, and are refused with `unsupported` ("attachments cannot be delivered to a terminal session") when it does not. |
+| `session.send` | Accepted whatever `mode` says. When the CLI's own turn is idle — whatever its subagents and background workflows are doing (A51) — the device injects at once, replies `accepted: "sent"` and emits `user_message {delivery: "delivered"}` — at once when the CLI holds no earlier message, otherwise when the terminal shows the message's own row, so the bubbles keep the order they were sent in (A51). While a turn runs, `mode: "auto"` is steered when the session's CLI runs the device's turn hooks and was started with `PostToolBatch` among them, which the terminal proxy gives a CLI only when its version can load it: the device replies `accepted: "steered"`, hands the message to the model at the turn's next batch of tool calls — or, when the turn has none left, writes it into the channel as the turn ends, so that it starts the next turn — and emits the block when it does (A14, A51). Steering is thus decided per session, not by `shared_steer` (4.2), which the device reports by the version of the `claude` it detects; `accepted` says which way a message went. `mode: "queue"` and `mode: "interrupt"`, and `mode: "auto"` on a session whose CLI started without that hook, are held locally: the device replies `accepted: "queued"` with a `queued_id` and emits a `queue` event listing it — no `user_message` yet (A19) — then injects the oldest held message as the turn ends, one per turn, and emits the block with `delivery: "delivered"`. `session.queue_remove` works on held items. A message the CLI absorbs, removes from its queue without running it, or goes past without its own row (a later turn hook ran, and neither its row nor the CLI's queue showed it; time alone never counts) goes in again — an `auto` one at the running turn's next batch of tool calls when the session steers, any other at the next turn's end — at most three times, and is then reported with an `error` under its bubble's `block_id` (A51). One written at a turn's end and absorbed by that turn going on is sent again outside those three: at the turn's next batch of tool calls whatever its `mode`, uncounted, when the session steers, and when it cannot, at the next turn's end, at most ten times before the same `error`. One the person pulls back into the terminal's input box is theirs and is not sent again. Attachments are delivered as files the words name (4.8, A49), held, steered or not, when the agent reports `shared_attachments: true`, and are refused with `unsupported` ("attachments cannot be delivered to a terminal session") when it does not. While Claude Code's usage-limit menu is up and the device drives it (A63, 5.8), nothing is injected or steered. A message from the person, and the resume of 7.2, first closes that menu with a lone Escape, sent only while the screen still shows the menu and the terminal's keyboard has been still for two seconds; the message is then delivered as on an idle CLI, or held, `accepted: "queued"`, until a minute after the limit resets when that is still to come. A menu that cannot be closed so stays, with its block, and the message is held. Held messages are not injected until a minute after the limit resets, menu or none (A63). |
 | `session.approve` | Relays the option the block offered. An `option_id` the block did not offer, `elsewhere` included, is `bad_request`. Replying to a request the terminal already answered is a no-op returning `{}`. A plan card (A54) offers its own options and takes `message` for `plan_keep`. |
-| `session.answer` | Supported for a `question` block the device raised through its `PermissionRequest` hook (A20): the answer goes to the CLI as the tool's own answers and the block resolves with `by: "remote"`. Answering a question the terminal already answered is a no-op returning `{}`. A question the device did not raise has no block to answer. |
-| `session.stop` | `unsupported` unless the agent lists capability `interrupt` **and** reports `shared_interrupt: true`. Message: "stop it in the terminal". Claude reports it since A42: the device types Escape into the CLI's terminal while a turn runs; with an approval or a question on screen it answers `conflict` ("answer the prompt first"), and with no turn running it returns `{}` and types nothing. |
+| `session.answer` | Supported for a `question` block the device raised through its `PermissionRequest` hook (A20): the answer goes to the CLI as the tool's own answers and the block resolves with `by: "remote"`. Answering a question the terminal already answered is a no-op returning `{}`. A question the device did not raise has no block to answer. For the block of Claude Code's usage-limit menu (A63, 5.8): an option is pressed as its row's number once the screen shows that row in the card's words and has been still past Claude Code's own guard, and once more if the menu ignored it; `close` is a lone Escape; words are a message, sent as `session.send` sends one. The reply is `{}` once the block has resolved or expired; `bad_request` for an option the block did not offer; `conflict` ("the menu in the terminal has changed; choose again") when the row no longer says what the card said, the block then pending again with the menu as it is now; `conflict` ("the terminal is busy; try again in a moment") while the person is using that terminal. |
+| `session.stop` | `unsupported` unless the agent lists capability `interrupt` **and** reports `shared_interrupt: true`. Message: "stop it in the terminal". Claude reports it since A42: the device types Escape into the CLI's terminal while a turn runs; with an approval, a question or the usage-limit menu's block on screen it answers `conflict` ("answer the prompt first"), and with no turn running it returns `{}` and types nothing. |
 | `session.set` | `unsupported` for `model`, `permission_mode`, `effort` and `speed` ("change it in the terminal"). `title` renames the session (A55): the device types `/rename` into the terminal under the same gates as A40, answers `conflict` while the terminal is busy, and replies once the transcript shows the new name, or `timeout` when it does not within 8 s; an unconfirmed rename may leave its text in the prompt box, and the device then answers `conflict` to every further typed request until a person uses the terminal, a turn starts or the attachment ends. |
 | `session.takeover` | `conflict` ("already attached"). |
 | `session.archive` | With `archived: true`, a close (A61): when the agent lists `close_terminal` the device interrupts a running turn, ends the CLI in its terminal, waits at most 10 s for it to exit, and then replies `{session}` and publishes it once archived, `none` and `stopped`, as the close after `fixtures/app/session.takeover.json` below says; `unsupported` for an agent without the capability or a CLI the device cannot end precisely, and `conflict` when the CLI is still there at the deadline, both leaving the session as it was. `archived: false` only clears the flag. |
@@ -4095,6 +4111,14 @@ turn whatever the account prefers (`turn_completed` with `limit`, 5.9), and when
   `The usage limit has reset. Continue where you left off, and let any subagents you started continue their work.`
 - **Again.** When the resumed turn ends with `limit` once more, the device reschedules from the new
   `resets_at` (`rescheduled`, `attempts` + 1); after the third such turn it drops the resume.
+- **Claude Code going on by itself.** Claude Code 2.1.234 and later continue a turn the limit
+  stopped by themselves once it resets when "Wait here" is taken in the usage-limit menu, which the
+  transcript records as `/rate-limit-options` and "Claude Code will continue automatically …"
+  (A63). When a `shared` session's transcript says so and its CLI is such a version, the device
+  cancels its pending resume, `cancelled` with `reason: "Claude Code continues by itself once the
+  limit resets"`; without that word, or for a version the device cannot read, the resume stays as
+  above. With `resume_after_limit` on, the device takes "Wait here" in that menu for the person, as
+  A63 says.
 - **Cancelling.** A `session.send` or `session.command` from a person on a session with a pending
   resume cancels it; so does turning `resume_after_limit` off, which cancels every pending resume on
   every device of the account, each with `resume {status: "cancelled"}`. Turning it on schedules
@@ -4486,6 +4510,13 @@ one app connection that asked. The gateway relays bytes and never reads them.
       hook reports on an attached Claude session, answers the hook from the first `session.answer`,
       and resolves the block with `by: "terminal"` when the transcript shows the terminal answered
       first (A20).
+- [ ] Raises Claude Code's usage-limit menu on an attached session it owns the terminal of as a
+      `question` block with `needs_input`, offering the free options on screen and `close` with
+      `allow_text`; presses a row's number only for an option an app chose and only while the
+      screen shows that row in the card's words, and otherwise only a lone Escape; injects and
+      types nothing while the menu is up, and injects no held message until a minute after the
+      limit resets; and never offers or presses an option that costs money or opens a browser
+      (A63).
 - [ ] Raises a `question` block with `needs_input` for every `_x.ai/ask_user_question` Grok Build
       sends, on a private child and on the leader, and hands Grok the first `session.answer`;
       resolves the block `by: "terminal"` from the tool's own result when another client answered
@@ -5672,3 +5703,48 @@ are stored on the gateway until their session, device or account is deleted, the
 withdrawn, or nobody has opened them for 30 days. Devices change nothing.
 `fixtures/app/board.*.json`, `fixtures/app/reply.board.*.json` and `fixtures/objects/board.json`
 are the worked examples. See 1.1, 3.2, 3.5, 4.12, 6.1, 6.2, 9 and 10.
+
+**2026-11-18 A63 — Claude Code's usage-limit menu is answered from an app.** Claude Code continues a
+turn the usage limit stopped by itself, at most three times after the person last typed in its
+terminal; a message from an app does not count as typing, so a session driven from a phone meets the
+fourth stop with a menu in the terminal ("What do you want to do?"), and stays there, whatever the
+phone sends, even after the limit has reset, until somebody chooses there. Nothing changes on the
+wire. On an attached session the device now learns of the stop from the main thread's `StopFailure`
+hook with `rate_limit`, or from the transcript's 429 row, and of a menu holding the CLI from an
+injection the CLI queued where it looked idle; it then looks at the screen of the terminal it owns
+(A40) for at most five seconds. The menu is the menu only when its title, its footer ("Enter to
+confirm · Esc to cancel") and at least one row only the usage-limit menu has are on screen together,
+read by the stable start of each row's wording, so the same title at the end of a free trial is not
+taken for it. The turn ends as A35 has it, with `limit`; the menu then becomes a `question` block
+with `needs_input` (5.8): the free options on screen in the menu's order and words, never one that
+costs money or opens a browser, then `close`, and room for words. Escape is the device's own key: it
+closes the menu and changes nothing else in Claude Code, its continue included. The device presses a
+row's number only for an option an app chose, after reading the menu again and finding that row in
+the card's words — a row whose words changed is refused with `conflict` and the block shows the menu
+as it is now — once the menu has been still past Claude Code's guard against keys within 250 ms of a
+draw or a key, and once more if the menu ignored it. Every key goes on the condition that the screen
+still ends as the device read it, which the terminal proxy checks before typing, so a menu that
+closes in between takes no key meant for it; a proxy from before A63 types regardless. The block
+resolves `by: "remote"` once the screen, the CLI taking a prompt or Claude Code's own record
+(`status`, `waitingFor`) shows the menu gone, and `by: "terminal"` when it goes without the device.
+It expires when the terminal goes, and when the screen no longer shows the menu at answer time, with
+a `notice` to answer it in the terminal. While the menu is up nothing is injected and nothing is
+typed, Stop never presses Escape there, and a typed setting or command answers `conflict`. A message
+from the person, words on the card, `close`, and the resume of 7.2 close the menu with a lone
+Escape, only while the screen shows the menu and the terminal's keyboard has been still for two
+seconds; the block resolves `by: "remote"`, and the message is delivered then, or held until a
+minute after the limit resets when that is still to come. A menu that cannot be closed so stays,
+with its block, and the message is held. A message another agent sends never closes it. Until a
+minute after the limit resets no held message is injected, menu or none, and a stop at the limit
+makes the device send nothing again. With `resume_after_limit` on and "Wait here" whole on screen,
+the device takes that row, found by its words and never by its place, once the keyboard has been
+still for two seconds, with a `notice` and no block; and when the transcript then says "Claude Code
+will continue automatically" on Claude Code 2.1.234 or later, the device cancels its pending resume,
+since the CLI goes on by itself (7.2). A menu the device cannot read whole after a stop, and one on
+a terminal it does not own where Claude Code's own record says a dialog is open, are a `notice` and
+`needs_input`, with no block and no key; messages are not held for such a menu, since nothing would
+tell the device when it went, and the CLI keeps what it is sent behind its menu and runs it once the
+person has answered there. Known limits: the menu is read from the text the terminal proxy keeps,
+which a long stretch of other output can push the menu out of, and that menu is then answered in the
+terminal; a device that restarts while the menu is up expires its block and does not raise it again.
+See 5.8, 6.3, 7.2 and 9.

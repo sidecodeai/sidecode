@@ -1167,6 +1167,7 @@ time fires on waking.
 | The resumed turn hits the limit again | `rescheduled` with `attempts + 1`; after the third such turn, `dropped` |
 | The time passes, and the send is refused as the terminal's (`conflict`), or because a live terminal CLI holds the session and its bridge has not reconnected, or because the process table could not be read (`timeout`) | `fired`, then `rescheduled` a minute on, and again, up to three times; the next refusal is `dropped`, with that refusal's own message |
 | The person sends a message or runs a command | `cancelled` ("you sent a message") |
+| A `shared` session's transcript says "Claude Code will continue automatically" (after "Wait here" in the usage-limit menu), on Claude Code 2.1.234 or later | `cancelled` at once ("Claude Code continues by itself once the limit resets"): the CLI goes on by itself after the reset, and a prompt would be a second continue (A63). Without those words, or for a version the device cannot read, the resume stays |
 | The switch goes off | every pending resume `cancelled`, on every session |
 
 A resume is not asked for again by anybody, and just after a daemon restart every session reads as
@@ -1690,7 +1691,11 @@ kind its task list holds — numbers, never what they run; shells are not counte
 end — and waits while the daemon writes what it held for the turn's end; `SubagentStart`,
 `SubagentStop` and a subagent's `StopFailure` say which subagent, by the `agent_id` the payload
 names, began or ended, print nothing whatever the daemon answers (anything printed would be read as
-the subagent's context), and hold the subagent back no longer than a second. Each keeps to its
+the subagent's context), and hold the subagent back no longer than a second. The main thread's own
+`StopFailure` says nothing unless its `error` is `rate_limit`: then it sends a `limit` frame with
+the CLI's own sentence about the limit (`last_assistant_message`, on one line, at most 300
+characters, the one the transcript's 429 row records too) and never the error's details, and the
+daemon looks for the usage-limit menu (A63, below). Each keeps to its
 budget — a second, two for `Stop`, counted from its start — and sends the moment it stops waiting,
 so the daemon begins nothing it could not answer in time; it answers at once when the daemon has
 nothing, and a `Stop` with nothing to deliver does not wait for the session at all. The timeouts in
@@ -1732,7 +1737,8 @@ This table is the Claude channel. Codex on the shared daemon does more; see the 
 | Send a message | Yes. Injected at once while the CLI's own turn is idle; during a turn `auto` steers it in at the next batch of tool calls, or as the turn ends, and `queue` holds it until the turn ends (A51) |
 | Approve or deny a tool call | Yes, `allow` and `deny` only — the relay offers no session-scoped grant |
 | Answer a question | Yes, through the `PermissionRequest` hook; the terminal's dialog and the card are one question |
-| Stop the turn | Yes since A42: Escape typed into the terminal while a turn runs (or a just-injected message is still on its way into the transcript); `conflict` ("answer the prompt first") while an approval or a question is on screen; nothing typed when no turn runs |
+| Stop the turn | Yes since A42: Escape typed into the terminal while a turn runs (or a just-injected message is still on its way into the transcript); `conflict` ("answer the prompt first") while an approval, a question or the usage-limit menu's card is on screen; nothing typed when no turn runs |
+| Answer the usage-limit menu | Yes since A63: a card with the menu's free options, Close and room for words; a row is pressed by its number only when the person picks it, Close and words are Escape; see "The usage-limit menu (A63)" |
 | Change model or effort | Yes since A40, typed into the terminal through its pickers, this session only; `conflict` while the terminal is busy, and the reply waits for the transcript to confirm; a model whose effort is capped takes the nearest level it has, which the reply reports |
 | Change permission mode | No, `unsupported`: change it in the terminal. The value is shown, read from the transcript (A17) |
 | `/compact` | Yes since A40, typed into the terminal; other commands are `unsupported` |
@@ -1985,6 +1991,115 @@ types nothing and answers `{}`. Claude reports `shared_interrupt: true` on the s
 draws it as a value (A17). On a `remote` (SDK) Claude session the one command, `/compact`, is sent
 as prompt text with the same echo. A `shared` session started by an older shim has no proxy: the
 device answers `conflict` until the CLI is started again.
+
+### The usage-limit menu (A63)
+
+Claude Code continues a turn the usage limit stopped by itself once the limit resets, at most three
+times after the person last typed in its terminal. A message the device injects is not typing, so a
+session driven from a phone meets the fourth stop with a menu in the terminal — "What do you want to
+do?", "Stop and wait for limit to reset", "Wait here, then continue automatically …", "Switch to
+usage credits" and the like — and waits there until somebody chooses, even after the limit has
+reset, whatever the phone sends: the CLI files a channel message behind the menu. The device now
+answers that menu from the apps (`sessions/limit_menu.py` reads it, `sessions/limit_dialog.py`
+drives it).
+
+- **Seeing it.** The main thread's `StopFailure` hook with `rate_limit` (above) is the signal; the
+  transcript's 429 row is the second, for a CLI without the hook, and the two of one stop are one
+  menu. The third is an injection the CLI queued where the device took it for idle: any dialog
+  holding the prompt does that. Each starts one look of at most five seconds at the screen the proxy
+  keeps; a look the queued injection started holds nothing back and says nothing unless it reads the
+  menu. The menu is the menu only when its title, its footer ("Enter to confirm · Esc to cancel")
+  and at least one row only the usage-limit menu has ("Wait here…", "Stop and wait…", "Don't
+  continue automatically", "Switch to usage credits") are on screen together, with nothing drawn
+  after them. Rows are read word by word against the stable start of each option's wording, in
+  order: the options, their order and the time a row names change with the plan and Claude Code's
+  experiments (under one of them the first row is "Switch to usage credits" or "Upgrade your
+  plan"), a narrow terminal cuts or wraps a row, and Claude Code redraws only the cells that
+  changed, so a word it half redrew reads "confi m". A plain "Stop" is a row of its own, never "Stop
+  and wait". The end of a free trial asks under the same title and footer, but with none of those
+  rows, and is not the menu. No menu within the five seconds means the CLI had a continue left and
+  goes on by itself. A 429 row written more than ten minutes before it is read opens no menu.
+- **Showing it.** The turn ends as A35 has it, with `limit`. The menu then becomes a `question`
+  block, `needs_input`, and the gateway's "waiting for your answer" push. Its one question is the
+  CLI's sentence and a line saying Claude Code waits in its terminal and that words written instead
+  close the menu and go as a message; its options are the free rows on screen in the menu's order
+  and words — ids `wait`, `stop_wait`, `stop`, `no_auto` — then Close (`close`), and it takes free
+  text. "Switch to usage credits", "Upgrade your plan", "Add funds…", "Ask your admin…" and any row
+  the device does not know are never offered and never pressed: they open a browser or a sign-in,
+  which only the computer can finish.
+- **Escape is the device's own key.** It closes the menu, writes nothing into the transcript and
+  leaves Claude Code's own continue as it was; the CLI is idle again and runs at once whatever it
+  had queued, which is never sent again. "Stop and wait for limit to reset", the first row, cancels
+  a continue that is queued or due, and under that experiment the first row costs money, so the
+  device never presses a row for the person on its own account.
+- **A row the person picks.** `session.answer` with an option takes the session's lock, reads the
+  menu on screen again and looks for that option's row in the words the card showed. A row whose
+  words changed — the time moved, the option went — is `conflict` ("the menu in the terminal has
+  changed; choose again"), and the card is drawn again from the menu on screen. Otherwise its
+  number is pressed, which picks it without Enter, once the screen has been still, and the keyboard
+  quiet, for 0.4 s: Claude Code ignores a choice within 250 ms of drawing the menu or of a key. A
+  person typing there makes it `conflict` and the card stays.
+- **Every key on a condition.** The proxy types a key only while its screen still ends as the
+  device read it (`keys` carries `if_ends_with`, the last 200 characters read, and the reply says
+  `sent: false` when it held the key back), so a menu that closes in between — and a turn that
+  starts — never takes a key meant for it. A proxy started before this version types regardless;
+  the device has read the screen a moment before.
+- **Confirming it.** The key goes with the proxy's screen cleared, so what the CLI draws next is
+  what the key did: anything that is not the menu is the menu gone, as are the CLI taking a prompt
+  (its `UserPromptSubmit` hook, or a turn in the transcript) and Claude Code's own record no longer
+  saying a dialog is open once it said one was. "Wait here" also leaves `/rate-limit-options` and
+  "Claude Code will continue automatically …" in the transcript; the device claims those rows as its
+  own key's for 30 s, so they draw no bubble. Nothing drawn, or only the menu again, is a key it
+  ignored, which is pressed once more. The card then resolves `by: "remote"` with the option in
+  `answers`. A menu the screen no longer shows, two keys it ignored, or anything else it cannot tell
+  from the menu expire the card, with the notice "The usage-limit menu could not be answered from
+  here; answer it in Claude Code's terminal."
+- **Close, words and messages.** Close on the card, words written there, a message sent to the
+  session and the resume of A35 all close the menu with a lone Escape, nothing after it in the same
+  write, and only while the screen still shows the menu and the terminal's keyboard has been still
+  for two seconds. The card resolves `by: "remote"` (`close`, or the words), and the words or the
+  message then go as on an idle CLI, or wait in Up next until a minute after the limit resets when
+  that is still to come. When the menu cannot be confirmed on screen, or the keyboard is in use, the
+  message is held and the card stays. Only the person's messages and the A35 resume do this; what
+  another agent sends never closes the menu.
+- **Answered in the terminal.** While the menu is up the device looks every second at whether the
+  person has pressed a key there, and reads the screen only then: the menu drawn over is the
+  terminal's answer, and the card resolves `by: "terminal"`. So does Claude Code's record saying the
+  dialog closed, the CLI taking a prompt and a turn starting. A terminal that goes away expires the
+  card, as does the bridge going.
+- **While it is up**, and for the five seconds it is looked for after a stop, nothing is injected and
+  nothing is typed. A message is held and shows in Up next as during a turn, what was steered into
+  the stopped turn joins it there, `/model`, `/effort`, `/compact` and a rename answer `conflict`
+  ("Claude Code is waiting at its usage-limit menu; answer that first"), Stop never presses Escape,
+  and Close ends the CLI with SIGTERM rather than typing `/exit` into the menu.
+- **Until a minute after the reset**, whether or not a menu came, no held message is injected: it
+  would only stop at the limit again and bring the menu back. The session is looked at again a
+  second after that, and the held messages go as an idle CLI takes them. The CLI going on by itself,
+  or taking a prompt the person typed, lifts the wait. A stop at the limit makes nothing go in again:
+  the `StopFailure` hook does not count as the CLI going past a message (A51).
+- **Resuming after the limit** (A35) on, with "Wait here" on screen in words the device reads whole:
+  no card. Once the terminal's keyboard has been still for two seconds the device presses that row,
+  found by its words and never by its place, with an `info` notice naming it, and Claude Code
+  continues by itself 30–90 s after the reset. When the transcript then says "Claude Code will
+  continue automatically" on Claude Code 2.1.234 or later, the scheduler's pending resume is
+  cancelled (see its table); a resume a person set, or one without that word, is sent as before.
+  Without "Wait here", with its words broken, or with the switch turned off while the menu is up,
+  the card goes up as usual.
+- **What it cannot read it does not touch.** After a stop, a menu whose title or footer is up but
+  none of whose rows it knows, and one on a terminal the device does not own (an older shim, the
+  interpreter gone), where Claude Code's own record (`~/.claude/sessions/<pid>.json`,
+  `status: "waiting"`, `waitingFor: "dialog open"`) says a dialog is open, get one `warn` notice,
+  "Claude Code is waiting in its terminal for a choice about the usage limit; answer it there.", and
+  `needs_input`; no card, no key. Messages are not held for such a menu: the CLI keeps them behind it
+  and runs them the moment the person answers. A device update waits while any of this is under way
+  (A56).
+
+**Unverified:** the menu's bytes as Claude Code 2.1.318–2.1.326 draws them have not been captured
+through the proxy, so the rows and footer the tests use are the strings in those binaries laid out
+the way the 2.1.299 effort slider was recorded. Known limits: the menu is read from the 8 KB of
+screen text the proxy keeps, which a long stretch of other output can push it out of, and that menu
+is then answered in the terminal; a daemon that restarts while the menu is up expires its card and
+does not raise it again.
 
 ## Codex on the shared daemon
 

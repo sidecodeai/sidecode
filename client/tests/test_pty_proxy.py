@@ -230,10 +230,17 @@ async def test_the_proxy_relays_a_real_terminal_and_answers_the_daemon(
         proxy.send_signal(signal.SIGWINCH)
         await terminal.until("size 120x30")
 
+        # A63: keys on the condition that the screen still ends as it was read are held back
+        # once something else is drawn, and go while nothing is.
+        withheld = await link.keys_if_shown("never\r", "a menu that is not on screen")
+        assert withheld.sent is False
+        shown = (await link.screen()).text
+
         # And the device types, which ends the child.
-        typed = await link.keys("done\r")
-        assert typed.draft == 0
+        typed = await link.keys_if_shown("done\r", shown[-40:])
+        assert typed.draft == 0 and typed.sent
         await terminal.until("typed done")
+        assert "never" not in terminal.text
         assert await asyncio.to_thread(proxy.wait, 10) == 3
     finally:
         await _stop(proxy, server)
@@ -288,6 +295,22 @@ def test_the_registration_frame_names_the_cli_and_the_settings_it_was_given() ->
     }
     assert wire.screen_request("r2") == {"type": "screen", "id": "r2"}
     assert wire.state_request("r3") == {"type": "state", "id": "r3"}
+    # A63: the condition goes only when there is one, and a reply says `sent` only to say no.
+    assert wire.keys("r1", "\x1b", if_ends_with="Esc to cancel")["if_ends_with"] == "Esc to cancel"
+    assert wire.typed("r1", 0, 0.0, sent=False)["sent"] is False
+
+
+def test_the_screen_says_whether_it_still_ends_as_it_was_read() -> None:
+    """A redraw appends, so a screen that ends the same way is the screen the daemon read."""
+    screen = Screen()
+    screen.feed(
+        b"What do you want to do?\r\x1b[1B Enter to confirm \xc2\xb7 Esc to cancel\x1b[40;1H"
+    )
+    read = screen.text()
+    assert screen.ends_with(read[-20:])
+    assert screen.ends_with("")
+    screen.feed(b"\r\x1b[1B? for shortcuts")
+    assert not screen.ends_with(read[-20:])
 
 
 def test_a_proxy_asks_a_restarting_daemon_again_within_two_seconds(

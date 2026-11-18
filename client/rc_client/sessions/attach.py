@@ -90,15 +90,17 @@ class HookQuestion:
 class TurnHook:
     """Where a turn stands, as one of the CLI's turn hooks reported it (A51).
 
-    `event` is `prompt`, `batch`, `stop`, `agent_start` or `agent_stop`. A
-    prompt says whose it was — `ours` with the injection's `message_id`,
-    `agent`, `command` or `person` — and never what it said. `deadline` is when
-    the hook stops waiting for an answer, in seconds since the epoch; 0 when it
-    did not say. A `stop` says in `background` how many background subagents and
-    workflows the turn leaves running, and never what they run; 0 for every
-    other event, and for a CLI that does not say. It says in `listed_agents` how
-    many agents of any kind its task list holds, or None when the CLI gave no
-    list. The two subagent events name the subagent by its `agent_id`.
+    `event` is `prompt`, `batch`, `stop`, `limit`, `agent_start` or
+    `agent_stop`. A prompt says whose it was — `ours` with the injection's
+    `message_id`, `agent`, `command` or `person` — and never what it said.
+    `deadline` is when the hook stops waiting for an answer, in seconds since
+    the epoch; 0 when it did not say. A `stop` says in `background` how many
+    background subagents and workflows the turn leaves running, and never what
+    they run; 0 for every other event, and for a CLI that does not say. It says
+    in `listed_agents` how many agents of any kind its task list holds, or None
+    when the CLI gave no list. The two subagent events name the subagent by its
+    `agent_id`. A `limit` is the main thread stopping at the usage limit, and
+    `said` is the CLI's own sentence about it (A63).
     """
 
     session_id: str
@@ -109,6 +111,7 @@ class TurnHook:
     background: int = 0
     agent_id: str = ""
     listed_agents: int | None = None
+    said: str = ""
 
 
 class AttachSink(Protocol):
@@ -460,7 +463,14 @@ def _turn_hook(message: dict[str, Any]) -> TurnHook | None:
         background=_count(message.get("background")) or 0,
         agent_id=agent_id if event in wire.AGENT_EVENTS else "",
         listed_agents=_count(message.get("listed_agents")),
+        said=_said(message) if event == wire.LIMIT_EVENT else "",
     )
+
+
+def _said(message: dict[str, Any]) -> str:
+    """The CLI's sentence a `limit` frame carries, on one line, as short as the hook cuts it."""
+    said = message.get("said")
+    return " ".join(said.split())[: wire.MAX_SAID] if isinstance(said, str) else ""
 
 
 def _count(value: object) -> int | None:

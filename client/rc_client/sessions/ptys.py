@@ -52,11 +52,13 @@ class TerminalState:
     `draft` counts the characters the person has typed since they last finished
     a line, `idle_for` is how long the keyboard has been quiet, and `text` is
     the screen as the proxy keeps it — empty unless the screen was asked for.
+    `sent` is false when keys sent on a condition were held back (A63).
     """
 
     draft: int
     idle_for: float
     text: str = ""
+    sent: bool = True
 
 
 class PtyLink:
@@ -84,6 +86,14 @@ class PtyLink:
         command drew rather than whatever was left from the last one.
         """
         return _read_state(await self._request(lambda rid: wire.keys(rid, data, clear)))
+
+    async def keys_if_shown(self, data: str, tail: str, clear: bool = False) -> TerminalState:
+        """Type this only while the screen still ends with `tail`, as the daemon last read it.
+
+        The reply's `sent` says whether it was typed (A63). A proxy from before
+        types regardless and says nothing, which reads as sent.
+        """
+        return _read_state(await self._request(lambda rid: wire.keys(rid, data, clear, tail)))
 
     async def screen(self) -> TerminalState:
         """What the terminal has printed, with the escape sequences taken out."""
@@ -139,7 +149,10 @@ def _read_state(message: dict[str, Any]) -> TerminalState:
     except (TypeError, ValueError):
         draft, idle_for = 0, 0.0
     return TerminalState(
-        draft=max(0, draft), idle_for=idle_for, text=str(message.get("text") or "")
+        draft=max(0, draft),
+        idle_for=idle_for,
+        text=str(message.get("text") or ""),
+        sent=message.get("sent") is not False,
     )
 
 

@@ -17,6 +17,7 @@ from rc_client.errors import RcError
 from rc_client.models import AgentInfo, Choice
 from rc_client.registry import Registry
 from rc_client.sessions import typist
+from rc_client.sessions.attach import TurnHook
 from rc_client.sessions.hub import SessionEntry, SessionHub
 from rc_client.sessions.ptys import PtyLink, TerminalState
 from rc_client.sessions.queue import hold
@@ -24,6 +25,7 @@ from rc_client.sessions.shared import pending_item
 from rc_client.sessions.typist import HIGHLIGHT, read_picker
 from tests.helpers import drained
 
+from .limit_helpers import SAID, LimitTerminal, quick, until
 from .test_shared_control import FakeAttachment, FakeHookQuestion
 
 REQUEST = "5c1d7e2a-9b3f-4a8c-8d6e-0f1a2b3c4d5e"
@@ -704,6 +706,89 @@ async def test_an_agent_that_cannot_be_stopped_still_says_so(tmp_path: Path) -> 
 
 
 # ------------------------------------------------------- what the agent says
+
+
+# ------------------------------------------------------ the usage-limit menu (A63)
+
+
+async def menu_up(harness: Harness, terminal: LimitTerminal) -> SessionEntry:
+    """An attached session whose CLI stopped at the usage limit and shows its menu."""
+    entry = await harness.attach()
+    harness.hub.ptys.add(terminal)
+    await harness.hub.shared.turn_hook(
+        entry, TurnHook(session_id="sess-1", event="limit", said=SAID)
+    )
+    return entry
+
+
+async def refused(request: Callable[[], Any], message: str) -> None:
+    with pytest.raises(RcError) as caught:
+        await request()
+    assert (caught.value.code, caught.value.message) == ("conflict", message)
+
+
+async def test_nothing_is_typed_while_the_usage_limit_menu_is_up(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A digit or Enter in the menu would choose for the person; `/model` would be one."""
+    quick(monkeypatch)
+    terminal = LimitTerminal()
+    entry = await menu_up(harness, terminal)
+    await until(lambda: any(card["status"] == "pending" for card in harness.events("question")))
+
+    hub = harness.hub
+    await refused(
+        lambda: hub.set_options({"session_id": "sess-1", "model": "sonnet"}), typist.LIMIT_MENU
+    )
+    await refused(
+        lambda: hub.set_options({"session_id": "sess-1", "effort": "low"}), typist.LIMIT_MENU
+    )
+    await refused(
+        lambda: hub.command({"session_id": "sess-1", "name": "compact"}), typist.LIMIT_MENU
+    )
+    await refused(lambda: hub.stop({"session_id": "sess-1"}), typist.ANSWER_FIRST)
+    assert await typist.Typist(entry, terminal, hub.shared).exit() is False
+    assert terminal.typed == []
+    assert terminal.open
+
+
+async def test_nothing_is_typed_while_the_menu_is_looked_for(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Between the stop and the first look at the screen, the menu may be up already."""
+    quick(monkeypatch)
+    monkeypatch.setattr("rc_client.sessions.limit_dialog.DETECT_WINDOW", 5.0)
+    terminal = LimitTerminal(shows=False)
+    entry = await menu_up(harness, terminal)
+    state = entry.shared
+    assert state is not None and state.limit is not None
+
+    hub = harness.hub
+    await refused(
+        lambda: hub.set_options({"session_id": "sess-1", "model": "sonnet"}), typist.LIMIT_MENU
+    )
+    state.running = True
+    await refused(lambda: hub.stop({"session_id": "sess-1"}), typist.LIMIT_MENU)
+    assert terminal.typed == []
+    hub.shared.limits.drop(state)
+
+
+async def test_the_terminal_is_typed_into_again_once_the_menu_is_answered(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    quick(monkeypatch)
+    terminal = LimitTerminal()
+    entry = await menu_up(harness, terminal)
+    await until(lambda: any(card["status"] == "pending" for card in harness.events("question")))
+    card = harness.events("question")[-1]
+
+    await harness.hub.answer(
+        {"session_id": "sess-1", "request_id": card["request_id"], "answers": {"q0": ["stop_wait"]}}
+    )
+
+    assert terminal.typed == ["1"]
+    state = entry.shared
+    assert state is not None and state.limit is None and state.injectable
 
 
 def test_the_settings_keys_are_serialised_only_when_there_are_some() -> None:

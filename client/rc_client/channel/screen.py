@@ -77,6 +77,15 @@ class Screen:
         """Forget what is there, so what comes next can be read on its own."""
         self._text.clear()
 
+    def ends_with(self, tail: str) -> bool:
+        """Whether nothing has been drawn since the screen ended with `tail` (A63).
+
+        A redraw appends, so a screen that still ends with what the daemon read
+        is the screen it read; trailing white space is a cursor moving, not a
+        draw.
+        """
+        return self.text().rstrip().endswith(tail.rstrip())
+
     def _byte(self, byte: int) -> None:
         if self._state == _NORMAL:
             self._plain(byte)

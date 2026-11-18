@@ -318,3 +318,42 @@ async def test_the_process_table_and_one_process_are_read_alike(
     one = await procscan.process_start(PID)
     assert seen == [procscan.START_ENV, procscan.START_ENV]
     assert scan.procs[0].start == one == "Tue Oct 7 14:39:20 2026"
+
+
+# ------------------------------------------------- what the CLI is doing (A63)
+
+
+def test_a_record_says_whether_a_dialog_of_the_cli_s_own_is_open() -> None:
+    write(PID, record(status="waiting", waitingFor="dialog open"))
+    assert live.dialog_open(PID, SESSION) is True
+    write(PID, record(status="waiting", waitingFor="permission"))
+    assert live.dialog_open(PID, SESSION) is False
+    write(PID, record(status="idle"))
+    assert live.dialog_open(PID, SESSION) is False
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"status": None},
+        {"status": ""},
+        {"status": 3},
+        {"sessionId": "another-session", "status": "idle"},
+        {"pid": PID + 1, "status": "idle"},
+    ],
+    ids=["no-status", "empty", "not-text", "another-session", "another-pid"],
+)
+def test_a_record_that_does_not_say_what_its_own_cli_is_doing_says_nothing(
+    changes: dict[str, Any],
+) -> None:
+    payload = record(**changes)
+    if changes.get("status") is None:
+        payload.pop("status", None)
+    write(PID, payload)
+    assert live.dialog_open(PID, SESSION) is None
+
+
+def test_no_record_says_nothing_about_a_dialog() -> None:
+    assert live.dialog_open(PID, SESSION) is None
+    write(PID, "not json")
+    assert live.dialog_open(PID, SESSION) is None

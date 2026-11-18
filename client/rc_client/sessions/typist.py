@@ -33,6 +33,10 @@ pressed, so it has no idle gate and waits for no confirmation: the CLI files
 `[Request interrupted by user]` and the transcript reader ends the turn from
 that (A32). What it does keep is the dialog rule — an approval or a question on
 screen is answered, not escaped.
+
+The usage-limit menu Claude Code may put up after a turn the limit stopped is
+the one dialog the device answers itself (A63, `limit_dialog.py`). While it is
+up, or looked for, or there and unreadable, no script here types anything.
 """
 
 from __future__ import annotations
@@ -67,6 +71,8 @@ UNCONFIRMED = (
 NOT_TYPEABLE = "the session is open in a terminal this device cannot type into; rename it there"
 # What a Stop says while the CLI is waiting on the person (A42).
 ANSWER_FIRST = "answer the prompt first"
+# And every script while Claude Code's usage-limit menu may be on screen (A63).
+LIMIT_MENU = "Claude Code is waiting at its usage-limit menu; answer that first"
 
 # How still the keyboard has to be before the device types.
 QUIET_SECONDS = 2.0
@@ -379,7 +385,7 @@ class Typist:
         was not typed, and the caller ends the CLI another way.
         """
         state = self.entry.shared
-        if state is None or not state.injectable:
+        if state is None or not state.injectable or state.limit is not None:
             return False
         try:
             terminal = await self.link.state()
@@ -398,22 +404,29 @@ class Typist:
         first). A dialog is the exception — it is answered, not escaped. What
         counts as a turn is `busy`, the same thing the apps are shown: an
         injection whose row has not reached the transcript yet is the CLI's
-        turn already. With no turn at all there is nothing to stop.
+        turn already. With no turn at all there is nothing to stop. Escape on
+        the usage-limit menu would answer it, so it is never pressed while the
+        menu may be up (A63).
         """
         state = self.entry.shared
         if state is None:
             raise RcError("conflict", "the session is no longer attached")
-        if state.approvals or state.question is not None:
+        asking = state.limit is not None and state.limit.asks
+        if state.approvals or state.question is not None or asking:
             raise RcError("conflict", ANSWER_FIRST)
         if not state.busy:
             return
+        if state.limit is not None:
+            raise RcError("conflict", LIMIT_MENU)
         await self.link.keys(ESCAPE)
 
     # ----------------------------------------------------------------- gates
 
     async def _gate(self) -> None:
-        """Nothing is typed into a terminal somebody else is using."""
+        """Nothing is typed into a terminal somebody else is using, or a menu is up in (A63)."""
         state = self.entry.shared
+        if state is not None and state.limit is not None:
+            raise RcError("conflict", LIMIT_MENU)
         if state is None or not state.injectable:
             raise RcError("conflict", BUSY)
         terminal = await self.link.state()

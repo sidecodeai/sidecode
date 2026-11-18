@@ -21,8 +21,12 @@ a second whenever the device has nothing for it.
 - `SubagentStart` and `SubagentStop` name the subagent by its id, which is how
   the daemon knows one is at work; what it was asked never leaves the hook. A
   subagent that an API error ends fires `StopFailure` and no `SubagentStop`, so
-  that is its end as well; the main thread's own `StopFailure` has no
-  `agent_id` and says nothing to the device.
+  that is its end as well.
+- The main thread's own `StopFailure` has no `agent_id`, and says something to
+  the device only when the error is the usage limit (A63): the turn stopped
+  there, and Claude Code may now hold the session at its menu. It carries the
+  CLI's own sentence about the limit, the one the transcript records too, cut
+  short; the error's details stay in the hook.
 
 Every other hook of a subagent's or a teammate's carries an `agent_id` and is
 none of the device's business: the person's messages go to the main thread.
@@ -60,6 +64,11 @@ EVENTS = {
 # The events that are about the subagent named in the payload's `agent_id`,
 # which every other hook of a subagent's leaves to it.
 AGENT_EVENTS = frozenset({"agent_start", "agent_stop"})
+# The main thread's `StopFailure` at the usage limit, the one error the device hears (A63).
+FAILURE = "StopFailure"
+LIMIT = "limit"
+RATE_LIMIT = "rate_limit"
+MAX_SAID = 300
 # How long each hook may take in all, counted from its start.
 BUDGETS = {
     "prompt": 1.0,
@@ -67,6 +76,7 @@ BUDGETS = {
     "stop": 2.0,
     "agent_start": 1.0,
     "agent_stop": 1.0,
+    LIMIT: 1.0,
 }
 
 MAX_STDIN_BYTES = 8 * 1024 * 1024
@@ -152,6 +162,25 @@ def agent_count(payload: Mapping[str, object]) -> int | None:
     return None if tasks is None else sum(1 for task in tasks if under_way(task, AGENT_KINDS))
 
 
+def limit_said(payload: Mapping[str, object]) -> str:
+    """The CLI's own sentence about the usage limit, on one line and cut short."""
+    said = " ".join(str(payload.get("last_assistant_message") or "").split())
+    return said if len(said) <= MAX_SAID else said[: MAX_SAID - 1] + "…"
+
+
+def event_of(payload: Mapping[str, object]) -> str | None:
+    """The device's name for this hook, or None for one it has no part in.
+
+    `StopFailure` is a subagent's end when it names one, and the main thread
+    stopping at the usage limit when it does not; any other error of the main
+    thread's is the transcript's to tell (A51, A63).
+    """
+    name = str(payload.get("hook_event_name") or "")
+    if name == FAILURE and not payload.get("agent_id"):
+        return LIMIT if payload.get("error") == RATE_LIMIT else None
+    return EVENTS.get(name)
+
+
 def details(event: str, payload: Mapping[str, object]) -> Mapping[str, object] | None:
     """What a frame says beside its event, or None when the device has no part in the hook."""
     agent_id = str(payload.get("agent_id") or "")
@@ -159,6 +188,8 @@ def details(event: str, payload: Mapping[str, object]) -> Mapping[str, object] |
         return {"agent_id": agent_id} if AGENT_ID.match(agent_id) else None
     if agent_id:
         return None
+    if event == LIMIT:
+        return {"said": limit_said(payload)}
     if event == "prompt":
         return prompt_kind(str(payload.get("prompt") or ""))
     if event == "stop":
@@ -176,7 +207,7 @@ def frame(payload: Mapping[str, object]) -> dict[str, object] | None:
     It carries the moment this hook stops waiting, in seconds since the epoch,
     so the daemon does not begin what it could not answer in time.
     """
-    event = EVENTS.get(str(payload.get("hook_event_name") or ""))
+    event = event_of(payload)
     session_id = str(payload.get("session_id") or "")
     if event is None or not SESSION_ID.match(session_id):
         return None

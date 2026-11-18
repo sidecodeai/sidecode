@@ -450,6 +450,7 @@ class SessionHub:
             if entry.shared is not None:
                 for item in entry.shared.steers:
                     await release(item)
+                self.shared.limits.drop(entry.shared)
                 entry.shared.attachment.detach()
                 entry.shared = None
             if entry.runner is not None:

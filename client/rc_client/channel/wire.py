@@ -32,7 +32,10 @@ PTY = "pty"
 TURN = "turn"
 # The turn events about one subagent, which they name by its `agent_id`: it began, or it ended.
 AGENT_EVENTS = ("agent_start", "agent_stop")
-TURN_EVENTS = ("prompt", "batch", "stop", *AGENT_EVENTS)
+# The main thread stopped at the usage limit, with the CLI's own sentence as `said` (A63).
+LIMIT_EVENT = "limit"
+MAX_SAID = 300
+TURN_EVENTS = ("prompt", "batch", "stop", LIMIT_EVENT, *AGENT_EVENTS)
 PROMPT_KINDS = ("ours", "agent", "command", "person")
 # daemon -> turn hook
 TURN_REPLY = "turn_reply"
@@ -185,15 +188,22 @@ def pty_register(pid: int, tool_batch: bool = False) -> dict[str, Any]:
     return {"type": PTY, "pid": pid, "tool_batch": tool_batch}
 
 
-def keys(request_id: str, data: str, clear: bool = False) -> dict[str, Any]:
+def keys(
+    request_id: str, data: str, clear: bool = False, if_ends_with: str | None = None
+) -> dict[str, Any]:
     """Type these characters into the terminal, exactly as a person would.
 
     `clear` forgets the screen first, so what a command draws can be read
-    without the frames that came before it getting in the way.
+    without the frames that came before it getting in the way. With
+    `if_ends_with` they are typed only while the screen still ends with that
+    text, which is the screen as the daemon last read it: a menu that closed in
+    between takes no key meant for it (A63). A proxy from before ignores it.
     """
     frame: dict[str, Any] = {"type": KEYS, "id": request_id, "data": data}
     if clear:
         frame["clear"] = True
+    if if_ends_with is not None:
+        frame["if_ends_with"] = if_ends_with
     return frame
 
 
@@ -205,13 +215,22 @@ def state_request(request_id: str) -> dict[str, Any]:
     return {"type": STATE, "id": request_id}
 
 
-def typed(request_id: str, draft: int, idle_for: float) -> dict[str, Any]:
+def typed(request_id: str, draft: int, idle_for: float, sent: bool = True) -> dict[str, Any]:
     """The reply to `keys`, carrying what the person is in the middle of doing.
 
     `draft` counts the characters they have typed since their last Enter,
-    Escape, Ctrl-C or Ctrl-U; the text itself never leaves the terminal.
+    Escape, Ctrl-C or Ctrl-U; the text itself never leaves the terminal. `sent`
+    is false, and only then present, when `if_ends_with` held the keys back.
     """
-    return {"type": TYPED, "id": request_id, "draft": draft, "idle_for": round(idle_for, 3)}
+    frame: dict[str, Any] = {
+        "type": TYPED,
+        "id": request_id,
+        "draft": draft,
+        "idle_for": round(idle_for, 3),
+    }
+    if not sent:
+        frame["sent"] = False
+    return frame
 
 
 def screen(request_id: str, text: str, draft: int, idle_for: float) -> dict[str, Any]:

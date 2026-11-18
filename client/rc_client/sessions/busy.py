@@ -31,7 +31,8 @@ def is_busy(entry: SessionEntry) -> bool:
     with it. Messages queued for a session nothing holds wait for the next send to resume it,
     and they would wait for that however long the update did. A held session is busy while it
     works or waits on a person, while messages are queued for it, and, for a terminal session,
-    while its CLI has a turn open or the device holds a prompt or a steered message for it.
+    while its CLI has a turn open or the device holds a prompt or a steered message for it, or
+    follows the usage-limit menu its CLI may be at (A63).
     """
     shared = entry.shared
     if entry.runner is None and shared is None:
@@ -43,4 +44,5 @@ def is_busy(entry: SessionEntry) -> bool:
         or shared.approvals
         or shared.question is not None
         or shared.steers
+        or shared.limit is not None
     )
