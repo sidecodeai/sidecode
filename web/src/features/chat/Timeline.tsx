@@ -26,6 +26,7 @@ import { ThinkingRow } from './blocks/ThinkingRow';
 import { ToolRow } from './blocks/ToolRow';
 import { AgentMessageRow } from './blocks/AgentMessageRow';
 import { UserMessageRow } from './blocks/UserMessageRow';
+import { PendingControlContext, showsBackToLatest, usePendingControls } from './pendingControls';
 import { useOlderSearch, useOpening } from './useOpening';
 import { useReadingTracker } from './useReadingTracker';
 import { useScrollFollow } from './useScrollFollow';
@@ -109,6 +110,7 @@ export function Timeline({
   });
   useOlderSearch(looking && !settled, historyLoading, onLoadOlder);
   useReadingTracker(ref, account, sessionKey, timeline.lastSeq);
+  const pending = usePendingControls(ref);
 
   // Stable so memoised rows do not re-render on every streaming delta.
   const handlers = useMemo<TimelineHandlers>(
@@ -137,23 +139,28 @@ export function Timeline({
 
           {/* The opening finds a row by its key and the reading position reads
               its place; the wrapper draws no box of its own, so the rows lay
-              out as before. */}
-          {view.roots.map((item) => (
-            <div
-              key={item.key}
-              className="timeline-row"
-              data-row-key={item.key}
-              data-row-seq={item.pending ? undefined : item.seq}
-            >
-              <ItemView item={item} handlers={handlers} nested={view.children[item.key]} />
-            </div>
-          ))}
+              out as before. A pending card's controls report where they are,
+              so the way back down never lies over one. */}
+          <PendingControlContext value={pending.track}>
+            {view.roots.map((item) => (
+              <div
+                key={item.key}
+                className="timeline-row"
+                data-row-key={item.key}
+                data-row-seq={item.pending ? undefined : item.seq}
+              >
+                <ItemView item={item} handlers={handlers} nested={view.children[item.key]} />
+              </div>
+            ))}
+          </PendingControlContext>
           {error === null ? null : <HistoryNotice message={error} onRetry={onRetry} />}
           {footer}
         </div>
       </div>
 
-      {following ? null : <BackToLatest missed={missed} onClick={jumpToLatest} />}
+      {showsBackToLatest(following, pending.controlOnScreen) ? (
+        <BackToLatest missed={missed} onClick={jumpToLatest} />
+      ) : null}
     </div>
   );
 }
@@ -162,7 +169,9 @@ export function Timeline({
  * The way back down, centred at the foot of the timeline above the composer. It
  * is on screen whenever the reader is away from the tail — paging up through
  * history needs a way back too — and widens into a capsule carrying what arrived
- * while they were away. The words live in the accessible name, as on the phone.
+ * while they were away. It gives way while a pending request's controls are on
+ * screen, so it never covers what the reader is asked to answer. The words live
+ * in the accessible name, as on the phone.
  */
 function BackToLatest({ missed, onClick }: { missed: number; onClick: () => void }) {
   const count = missed > 0 ? strings.chat.newUpdates(missed) : null;

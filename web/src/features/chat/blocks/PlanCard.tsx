@@ -9,6 +9,7 @@ import { cx } from '../../../lib/cx';
 import { deciderLabel, strings } from '../../../strings';
 import type { ApprovalEvent } from '../../../protocol/types';
 import { MarkdownText } from '../MarkdownText';
+import { usePendingControl } from '../pendingControls';
 
 interface Props {
   event: ApprovalEvent;
@@ -23,6 +24,7 @@ export function PlanCard({ event, onDecide }: Props) {
   const [open, setOpen] = useState(false);
   const [giving, setGiving] = useState(false);
   const [feedback, setFeedback] = useState('');
+  const control = usePendingControl();
   const pending = event.status === 'pending';
   const plan = typeof event.input?.plan === 'string' ? event.input.plan : '';
   const long = plan.split('\n').length > FOLD_LINES;
@@ -65,7 +67,7 @@ export function PlanCard({ event, onDecide }: Props) {
       {event.plan_truncated ? <p className="approval-result hint">{strings.chat.planTruncated}</p> : null}
 
       {pending && giving ? (
-        <div className="plan-feedback">
+        <div className="plan-feedback" ref={control}>
           <textarea
             className="field"
             rows={3}
@@ -95,7 +97,7 @@ export function PlanCard({ event, onDecide }: Props) {
           </div>
         </div>
       ) : pending ? (
-        <div className="approval-actions">
+        <div className="approval-actions" ref={control}>
           {options.map((option) => (
             <button
               key={option.id}

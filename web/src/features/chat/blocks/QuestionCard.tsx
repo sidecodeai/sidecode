@@ -3,6 +3,7 @@ import { cx } from '../../../lib/cx';
 import { strings } from '../../../strings';
 import { draftOf, useAnswers } from '../../../stores/answers';
 import { cardAnswers, cardComplete } from '../answering';
+import { usePendingControl } from '../pendingControls';
 import type { QuestionAnswers, QuestionEvent } from '../../../protocol/types';
 
 interface Props {
@@ -23,6 +24,9 @@ export function QuestionCard({ event, onAnswer }: Props) {
   const clear = useAnswers((s) => s.clear);
   const [busy, setBusy] = useState(false);
   const pending = event.status === 'pending';
+  // The options, the free-text field and Submit, while they still take an answer.
+  const control = usePendingControl();
+  const pendingControl = pending ? control : undefined;
 
   /**
    * A question that stops being pending takes its working state with it,
@@ -54,7 +58,7 @@ export function QuestionCard({ event, onAnswer }: Props) {
         <div className="question-item" key={question.id}>
           <p className="question-prompt">{question.prompt}</p>
           {question.options.length > 0 ? (
-            <div className="question-options">
+            <div className="question-options" ref={pendingControl}>
               {question.options.map((option) => {
                 const active = (draft.selection[question.id] ?? []).includes(option.id);
                 const answered = answerIncludes(event.answers?.[question.id], option.id);
@@ -78,6 +82,7 @@ export function QuestionCard({ event, onAnswer }: Props) {
           ) : null}
           {question.allow_text ? (
             <input
+              ref={pendingControl}
               className="field"
               type={question.secret ? 'password' : 'text'}
               disabled={!pending}
@@ -96,7 +101,7 @@ export function QuestionCard({ event, onAnswer }: Props) {
         </div>
       ))}
       {pending ? (
-        <div className="approval-actions">
+        <div className="approval-actions" ref={control}>
           <button
             type="button"
             className="btn small primary"

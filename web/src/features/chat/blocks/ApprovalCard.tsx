@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { cx } from '../../../lib/cx';
 import { deciderLabel, strings } from '../../../strings';
 import type { ApprovalEvent } from '../../../protocol/types';
+import { usePendingControl } from '../pendingControls';
 import { DiffView } from './DiffView';
 import { OutputBox } from './OutputBox';
 import { PlanCard } from './PlanCard';
@@ -22,6 +23,7 @@ export function ApprovalCard({ event, onDecide }: Props) {
 
 function ToolApprovalCard({ event, onDecide }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
+  const control = usePendingControl();
   const pending = event.status === 'pending';
   const options = [...event.options].sort(
     (a, b) => (ORDER[a.style] ?? 1) - (ORDER[b.style] ?? 1),
@@ -47,7 +49,7 @@ function ToolApprovalCard({ event, onDecide }: Props) {
       ) : null}
 
       {pending ? (
-        <div className="approval-actions">
+        <div className="approval-actions" ref={control}>
           {options.map((option) => (
             <button
               key={option.id}
