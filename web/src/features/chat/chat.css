@@ -1113,8 +1113,14 @@
   border-color: var(--line);
 }
 
+/*
+ * The field takes the row's free width and may shrink below a textarea's own
+ * twenty columns, so at 320 px the controls beside it stay inside the box; its
+ * height is set from what it shows (`fieldFit.ts`).
+ */
 .composer-input {
   flex: 1;
+  min-width: 0;
   min-height: 34px;
   max-height: 220px;
   padding: 7px 0;

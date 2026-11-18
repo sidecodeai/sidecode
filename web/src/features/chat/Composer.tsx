@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -49,6 +50,7 @@ import { attachHint, canAttachShared, canInterruptShared, canSetShared, canSteer
 import { MAX_ATTACHMENTS, readAttachments, textTooLong } from './attachments';
 import { CommandHint, CommandMenu } from './CommandMenu';
 import { commandQuery, completionFor, filterCommands, matchCommand } from './commands';
+import { fitField, useRefitOnResize } from './fieldFit';
 import { SizedBox } from './SizedBox';
 import { labelPairs, type LabelPair } from './modelLabels';
 import type { SessionOptions } from './sessionOptions';
@@ -568,21 +570,6 @@ export function Composer({
     cancelEdit();
   };
 
-  /**
-   * The field grows with its content up to eight lines and scrolls inside
-   * after that. A write that asked to follow its tail is then shown from its
-   * end, with no animation — the scroll position is set, never animated.
-   */
-  useEffect(() => {
-    const el = textarea.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
-    if (!followTail.current) return;
-    followTail.current = false;
-    el.scrollTop = el.scrollHeight;
-  }, [text]);
-
   // PROTOCOL-FROZEN §5: `auto` is "send now if idle; if running, steer or queue".
   // Forcing `queue` here would make the `steer` capability unreachable, and
   // `shared_steer` with it (A51). A43: a queued message being edited is the
@@ -665,6 +652,22 @@ export function Composer({
             ? strings.composer.placeholderSteer
             : strings.composer.placeholderQueued
           : strings.composer.placeholder;
+
+  /**
+   * The field grows with its words, or with none with its placeholder, up to
+   * eight lines and scrolls inside after that (`fieldFit.ts`). A write that
+   * asked to follow its tail is then shown from its end, with no animation —
+   * the scroll position is set, never animated.
+   */
+  useLayoutEffect(() => {
+    const el = textarea.current;
+    if (!el) return;
+    fitField(el);
+    if (!followTail.current) return;
+    followTail.current = false;
+    el.scrollTop = el.scrollHeight;
+  }, [text, placeholder]);
+  useRefitOnResize(textarea);
 
   return (
     <div className="composer-wrap">
