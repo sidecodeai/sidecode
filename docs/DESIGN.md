@@ -1690,7 +1690,12 @@ read or kept until the account turns it on, and it is never written from an app'
 open items, doing and to do: `Tasks 3` (看板 3), in both timeline details, whenever the gateway
 reports `board.enabled`. It shows no count while the board is off, unavailable or empty, and is not
 drawn at all on a gateway that keeps no boards. The chip reads 看板 and never 任务, which the phone
-already uses for the agent's own Todos chip.
+already uses for the agent's own Todos chip. On the web at 480 px and narrower, the Tasks chip and
+the Todos chip beside it show only their icon and number — `3`, `1/4`, or the icon alone while
+nothing is open — and the usage chip gives way to the Tasks chip as it does to the voice
+assistant's entry, so the conversation's title keeps its room; each chip keeps its accessible name,
+its whole pill as the target and the panel it opens. The phone keeps the title in the navigation
+bar and the chips on a row of their own.
 
 **The panel.** The chip opens a panel titled **Task board** on the page's own canvas with hairline
 dividers: the groups **Doing**, **To do** and **Done recently**, an empty group left out, each item

@@ -99,14 +99,30 @@
   color: var(--ink-tertiary);
 }
 
+/* A Todos or Tasks chip shows its number beside its icon only on a phone (below). */
+.chat-header-actions .header-chip-count {
+  display: none;
+}
+
 /*
  * The voice assistant's entry (features/live) and the Tasks chip (A62) each take room in this row.
- * On a phone the usage chip, the quietest thing in it, gives way so the title keeps its room.
+ * On a phone the usage chip, the quietest thing in it, gives way so the title keeps its room, and
+ * the Todos and Tasks chips are their icon and number: the words and the chevron go, while each
+ * chip keeps its accessible name, its whole pill as the target and the panel it opens.
  */
 @media (max-width: 480px) {
   .chat-header-actions:has(.live-entry) .usage-chip,
   .chat-header-actions:has(.board-chip) .usage-chip {
     display: none;
+  }
+
+  .chat-header-actions .header-chip-words,
+  .chat-header-actions .header-chip .popover-chevron {
+    display: none;
+  }
+
+  .chat-header-actions .header-chip-count {
+    display: inline;
   }
 }
 

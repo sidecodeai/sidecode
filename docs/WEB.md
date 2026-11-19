@@ -485,7 +485,13 @@ makes nothing itself.
 - **The chip** (`BoardChip.tsx`) sits in the conversation header between the Todos chip and the
   usage chip, in both timeline details: the Todos chip's look with a `ListChecks` glyph, "Tasks 3"
   (看板 3) with the count of doing and to-do items, "Tasks" (看板) while the board is off,
-  unavailable or has nothing open. At 480 px and narrower the usage chip gives way to it.
+  unavailable or has nothing open. At 480 px and narrower the usage chip gives way to it, and the
+  Todos and Tasks chips are their glyph and number alone — "1/4", "3", or the glyph by itself while
+  nothing is open — with the words and the chevron hidden (`HeaderChipFace.tsx` and the phone rule
+  in `chat.css`), so the conversation's title keeps its room: at 390 px the two chips once left
+  "Fix flak…" of it. Each chip names itself with its `aria-label` ("Todos", "Tasks 3"), so its
+  accessible name, its pill as the target and the panel it opens are the same at every width;
+  `tests/header-chips.test.tsx` holds both faces and reads the rule.
 - **The panel** (`BoardPanel.tsx`) is the chip's popover, aligned to its end, about 360 px wide and
   at most 60 % of the window tall with the items scrolling, nearly the window's width on a phone. It
   is headed "Task board" (任务看板) and, while the gateway keeps the board (current, updating or
@@ -1802,4 +1808,6 @@ sticks above the keyboard.
 - "Back to latest" giving way to a pending card and the field that fits its placeholder are covered
   by the vitest suites only: jsdom has no `IntersectionObserver` and no layout, so the suites drive
   a fake observer and a simulated text width, and neither has been driven in a browser at 390 px or
-  320 px, in English or in 中文, or measured in Safari or Firefox.
+  320 px, in English or in 中文, or measured in Safari or Firefox. The same holds for the Todos and
+  Tasks chips' phone face: the suite checks both faces and reads the rule in `chat.css`, and how
+  much of the title shows at 320 px and 390 px has not been measured.

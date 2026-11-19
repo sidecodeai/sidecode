@@ -1,6 +1,7 @@
 /**
  * A62 — the task board's way in from the conversation header: a chip like the
- * Todos chip, "Tasks" with the count of what is open, which opens the panel. It
+ * Todos chip, "Tasks" with the count of what is open, which opens the panel; on
+ * a phone, like the Todos chip, its glyph and count alone (`HeaderChipFace`). It
  * is drawn in both timeline details whenever the gateway keeps boards, and not
  * at all otherwise. The disclosure the panel's Enable leads to is a dialog of
  * its own, opened here once the panel has closed, since a dialog inside the
@@ -13,6 +14,7 @@ import { strings } from '../../../strings';
 import { useBoards } from '../../../stores/board';
 import { useConnection } from '../../../stores/connection';
 import { sessionKey } from '../../../stores/sessions';
+import { HeaderChipFace } from '../HeaderChipFace';
 import { BoardConsent } from './BoardConsent';
 import { BoardPanel } from './BoardPanel';
 import { hidesChip, openCount } from './boardView';
@@ -31,17 +33,20 @@ export function BoardChip({ deviceId, sessionId }: Props) {
   if (!offered || hidesChip(entry?.status)) return null;
   const open = openCount(entry);
   const s = strings.chat.board;
+  const words = open > 0 ? s.chipCount(open) : s.chip;
 
   return (
     <>
       <Popover
         align="end"
-        className="board-chip"
+        className="board-chip header-chip"
+        ariaLabel={words}
         label={
-          <>
-            <ListChecks size={13} aria-hidden />
-            {open > 0 ? s.chipCount(open) : s.chip}
-          </>
+          <HeaderChipFace
+            icon={<ListChecks size={13} aria-hidden />}
+            words={words}
+            count={open > 0 ? String(open) : null}
+          />
         }
       >
         {(close) => (

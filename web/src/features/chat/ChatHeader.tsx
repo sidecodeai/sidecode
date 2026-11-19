@@ -11,6 +11,7 @@ import { SessionRenameDialog } from '../sessions/SessionRenameDialog';
 import { canRename } from '../sessions/rename';
 import { canInterruptShared } from './attach';
 import { BoardChip } from './board/BoardChip';
+import { HeaderChipFace } from './HeaderChipFace';
 import type { AgentInfo, Session, TodoItem } from '../../protocol/types';
 
 interface Props {
@@ -81,12 +82,14 @@ export function ChatHeader({
         {showsTodos && total > 0 ? (
           <Popover
             align="end"
+            className="header-chip"
             ariaLabel={strings.chat.todosTitle}
             label={
-              <>
-                <CheckSquare size={13} aria-hidden />
-                {strings.chat.todos(done, total)}
-              </>
+              <HeaderChipFace
+                icon={<CheckSquare size={13} aria-hidden />}
+                words={strings.chat.todos(done, total)}
+                count={`${done}/${total}`}
+              />
             }
           >
             {() => (
