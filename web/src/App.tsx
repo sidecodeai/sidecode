@@ -12,6 +12,7 @@ import { ChatPage } from './features/chat/ChatPage';
 import { SettingsPage } from './features/settings/SettingsPage';
 import { UsersPage } from './features/users/UsersPage';
 import { useLiveHost } from './features/live/useLiveHost';
+import { usePageTop } from './lib/usePageTop';
 import { useAppBadge } from './push/useAppBadge';
 import { useServiceWorkerNavigation } from './push/useServiceWorkerNavigation';
 import { useAuth } from './stores/auth';
@@ -56,6 +57,8 @@ export function App() {
 
   useServiceWorkerNavigation();
   useAppBadge();
+  // Every page shares the document's scroll, so a different one opens at its top.
+  usePageTop();
   // The experimental voice assistant's call belongs to the page, not to a screen.
   useLiveHost();
 

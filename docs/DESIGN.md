@@ -105,7 +105,10 @@ never has a meter, because a key has no plan window to measure.
 Devices, Sessions, Settings. On open the app lands on Sessions when the account has at least one
 device and on Devices when it has none: a new account's first job is enrolling a machine, everyone
 else's is the conversation. The choice is made once per open, from the first device list that
-arrives, and is not remembered.
+arrives, and is not remembered. On the web, opening another of these pages shows it from its top,
+while moving between the sections of Settings keeps the scroll position; Back and Forward are left
+to the browser, and [WEB.md](WEB.md) § "Behaviour worth knowing" says which places the web app
+counts as a page of its own.
 
 **A device keeps itself current** (A36). Nobody should know or care
 which client a machine runs: they update the app on their phone, and the machines follow. The

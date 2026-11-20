@@ -914,6 +914,9 @@ Nothing of this reaches the gateway.
   navigation unmounts it: somebody who then opens Devices on an empty account stays there, and a
   device arriving later moves nobody. `LoginPage` returns to `/` when there is nothing to go back
   to, so signing in lands by the same rule; a remembered `from` still wins, fragment and all (A23).
+- **A different page opens at its top.** The pages share the document's scroll, so `usePageTop`
+  scrolls to the top when a link or a redirect changes the address's first segment; the sections of
+  Settings (one page), a list and what it opens, and Back and Forward keep the offset.
 - **The session list** is one selector, `selectSessionLayout` in `src/stores/sessions.ts`. It
   filters on the device, the agent, the status and the search text, then returns one `DeviceGroup`
   per device that still has something to show: the device, whether the user folded it shut, its
