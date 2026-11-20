@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { cx } from '../lib/cx';
 import { strings } from '../strings';
+import { useEscapeLayer } from './escapeLayer';
 import './overlay.css';
 
 interface Props {
@@ -88,39 +89,21 @@ export function Drawer({ open, onClose, title, subtitle, children, footer }: Dra
   );
 }
 
-/**
- * Open overlays, innermost last. Escape must close only the top one: both
- * handlers sit on `document`, where stopPropagation cannot reorder them.
- */
-const overlayStack: symbol[] = [];
-
 function useOverlay(
   open: boolean,
   onClose: () => void,
   panelRef: React.RefObject<HTMLDivElement | null>,
 ): void {
-  // The latest `onClose`, in a ref: a parent that re-renders hands a new one
-  // every time, as an inline arrow does, and an effect that depended on it
-  // would be torn down and set up again — focus given back to the opener and
-  // then to the first field, in the middle of what the person is typing, an
-  // input method's composition included. The effect below runs on open and on
-  // close alone.
-  const latestClose = useRef(onClose);
-  useEffect(() => {
-    latestClose.current = onClose;
-  });
+  // Escape reaches the latest `onClose` without re-arming anything: a parent
+  // that re-renders hands a new one every time, as an inline arrow does, and an
+  // effect that depended on it would be torn down and set up again — focus
+  // given back to the opener and then to the first field, in the middle of what
+  // the person is typing, an input method's composition included. The effect
+  // below runs on open and on close alone.
+  useEscapeLayer(open, onClose);
 
   useEffect(() => {
     if (!open) return;
-    const token = Symbol('overlay');
-    overlayStack.push(token);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      if (overlayStack.at(-1) !== token) return;
-      e.stopPropagation();
-      latestClose.current();
-    };
-    document.addEventListener('keydown', onKey);
     const previous = document.activeElement as HTMLElement | null;
     const focusable = panelRef.current?.querySelector<HTMLElement>(
       'input, textarea, select, button:not([disabled]), [tabindex]:not([tabindex="-1"])',
@@ -129,9 +112,6 @@ function useOverlay(
     const overflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
-      const index = overlayStack.lastIndexOf(token);
-      if (index >= 0) overlayStack.splice(index, 1);
-      document.removeEventListener('keydown', onKey);
       document.body.style.overflow = overflow;
       previous?.focus?.();
     };

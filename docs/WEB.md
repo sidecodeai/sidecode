@@ -861,6 +861,10 @@ Nothing of this reaches the gateway.
   it there itself: the Add device modal moves it to the one-liner's Copy when a code arrives, a new
   one included. `tests/Modal.test.tsx` holds the effect and `tests/AddDeviceModal.test.tsx` the
   dialog.
+- **Escape closes the top overlay alone.** Dialogs, drawers and popovers share one stack
+  (`useEscapeLayer`, `src/components/escapeLayer.ts`), so Escape in a list open in the New session
+  drawer closes the list, gives focus back to its trigger and keeps the drawer and what was chosen
+  in it; the next Escape closes the drawer.
 - **Settings are the account's (A41).** `src/stores/settings.ts` keeps its shape, because the
   rest of the app reads it, but for five of the six preferences of A41 — interface language,
   polish on/off, model and strength, timeline detail — it is the cache of the account's value, not

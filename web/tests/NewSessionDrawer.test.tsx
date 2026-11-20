@@ -84,6 +84,26 @@ describe('NewSessionDrawer', () => {
     expect(trigger).toHaveAccessibleName('Device, ci-runner-01, online');
   });
 
+  it('closes an open list alone on Escape, keeping the drawer, the choice and the focus', async () => {
+    renderDrawer();
+    const model = screen.getByRole('button', { name: labelled(strings.newSession.model) });
+    await userEvent.click(model);
+    await userEvent.click(screen.getByRole('option', { name: 'Opus 4.1' }));
+    await userEvent.click(model);
+    expect(screen.getByRole('listbox', { name: strings.newSession.model })).toBeInTheDocument();
+
+    await userEvent.keyboard('{Escape}');
+
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(model).toHaveAccessibleName('Model, Opus 4.1');
+    expect(model).toHaveFocus();
+
+    // The next Escape is the drawer's.
+    await userEvent.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
   it('reads it in the interface language', () => {
     useSettings.setState({ language: 'zh-Hans' });
     try {

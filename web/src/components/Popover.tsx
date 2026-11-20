@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { ChevronDown } from 'lucide-react';
 import { cx } from '../lib/cx';
 import { strings } from '../strings';
+import { useEscapeLayer } from './escapeLayer';
 import { placementFor, type Align, type Side } from './popoverPlacement';
 import './popover.css';
 
@@ -42,6 +43,7 @@ export function Popover({
 }: PopoverProps) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const panelId = useId();
   // The panel is a portal on the body, so it is placed against the viewport,
@@ -82,20 +84,21 @@ export function Popover({
       if (root.current?.contains(target) || panel.current?.contains(target)) return;
       setOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
     document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
+    return () => document.removeEventListener('mousedown', onDown);
   }, [open]);
+
+  // Escape closes the panel alone, not a drawer or a dialog it is open in, and
+  // gives focus back to the trigger that opened it.
+  useEscapeLayer(open, () => {
+    setOpen(false);
+    trigger.current?.focus();
+  });
 
   return (
     <div className={cx('popover-root', className)} ref={root}>
       <button
+        ref={trigger}
         type="button"
         className={cx('pill', triggerClassName)}
         aria-expanded={open}
