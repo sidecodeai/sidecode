@@ -235,6 +235,7 @@ export const en = {
     allDevices: 'All devices',
     allAgents: 'All agents',
     agentFilter: 'Filter by agent',
+    deviceFilter: 'Filter by device',
     /**
      * The filter by status, a menu beside the agent and device filters. Its
      * options read the dot a row shows: Running is the green one, Waiting both
@@ -311,6 +312,8 @@ export const en = {
     continuingOn: (device: string) => `Continuing on ${device}`,
     pickDevice: 'Pick a device to start on',
     device: 'Device',
+    /** What the device picker has chosen, as its trigger is read: the device and its state. */
+    deviceChoice: (name: string, online: boolean) => `${name}, ${online ? 'online' : 'offline'}`,
     agent: 'Agent',
     agentUnavailable: 'not installed',
     model: 'Model',
@@ -550,8 +553,6 @@ export const en = {
     /** A21: "Speed, Fast" / "Speed, Standard" on the tier toggle. */
     speed: (tier: string) => `Speed, ${tier}`,
     speedStandard: 'Standard',
-    /** The accessible name of a control in the card: "Model, Opus 4.6". */
-    option: (name: string, value: string) => `${name}, ${value}`,
     /** A17: what a terminal chose, shown where its picker would be. */
     setInTerminal: (name: string, value: string) => `${name} · ${value} · set in the terminal`,
     sendFailed: 'Could not send the message.',
@@ -735,6 +736,11 @@ export const en = {
 
   a11y: {
     statusDot: (state: string) => `Status: ${state}`,
+    /**
+     * The name of a control that shows what is chosen: what it is, then the
+     * choice, as "Model, Opus 4.6" or "Device, mac-studio-office, online".
+     */
+    choice: (name: string, value: string) => `${name}, ${value}`,
     openMenu: 'Open menu',
     closeDialog: 'Close dialog',
     toolRow: 'Tool call',

@@ -998,6 +998,8 @@ function ComposerBottomRow({
   const speedText = labelOf(speeds, session.speed);
   // "Opus 4.6 High": what runs, and how hard, in one line of the composer row.
   const cardText = [modelText, effortText].filter((part) => part !== null).join(' ');
+  // The chip in words: what it shows, then the tier its lightning stands for.
+  const cardWords = cardText || agentLabel(session.agent);
   const hasCard = models.length > 0 || efforts.length > 0 || speeds.length > 0;
   // A40: the card is the one control for three settings, so it opens as soon
   // as one of them is the device's. The rows inside it answer for themselves.
@@ -1013,6 +1015,7 @@ function ComposerBottomRow({
             align="start"
             chevron={false}
             ariaLabel={strings.composer.modelCard}
+            valueText={speedText === null ? cardWords : `${cardWords} · ${speedText}`}
             triggerClassName="model-card-chip"
             label={
               <SizedBox
@@ -1113,7 +1116,7 @@ function ModelCard({
     return (
       <ul className="menu" role="listbox" aria-label={strings.composer.model}>
         {models.map((model) => (
-          <li key={model.id}>
+          <li key={model.id} role="none">
             <button
               type="button"
               role="option"
@@ -1156,7 +1159,7 @@ function ModelCard({
           <button
             type="button"
             className="model-card-name"
-            aria-label={strings.composer.option(strings.composer.model, modelText)}
+            aria-label={strings.a11y.choice(strings.composer.model, modelText)}
             onClick={() => setPicking(true)}
           >
             {nameRow}

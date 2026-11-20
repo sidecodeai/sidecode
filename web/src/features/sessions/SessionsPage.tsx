@@ -5,7 +5,7 @@ import { ArchiveGroupHeader, DeviceGroupHeader } from '../../components/GroupHea
 import { Button } from '../../components/Button';
 import { Menu } from '../../components/Popover';
 import { STATUS_FILTERS, type StatusFilter } from '../../components/statusFilter';
-import { strings } from '../../strings';
+import { agentLabel, strings } from '../../strings';
 import { useDevices } from '../../stores/devices';
 import { selectAgents, selectSessionLayout, useSessions } from '../../stores/sessions';
 import { useSettings } from '../../stores/settings';
@@ -153,6 +153,7 @@ export function SessionsPage() {
             value={agentFilter ?? ALL}
             onSelect={(id) => setAgentFilter(id === ALL ? null : id)}
             label={agentFilter ? <AgentOption agent={agentFilter} /> : strings.sessions.allAgents}
+            valueText={agentFilter ? agentLabel(agentFilter) : strings.sessions.allAgents}
             options={[
               { id: ALL, label: strings.sessions.allAgents },
               ...agents.map((agent) => ({ id: agent, label: <AgentOption agent={agent} /> })),
@@ -160,10 +161,11 @@ export function SessionsPage() {
           />
         ) : null}
         <Menu
-          ariaLabel={strings.sessions.allDevices}
+          ariaLabel={strings.sessions.deviceFilter}
           align="end"
           label={deviceFilter ? (deviceNames[deviceFilter] ?? deviceFilter) : strings.sessions.allDevices}
-          value={deviceFilter}
+          // No filter is the "All devices" row, which the menu then marks.
+          value={deviceFilter ?? ALL}
           onSelect={(id) => setDeviceFilter(id === ALL ? null : id)}
           options={[
             { id: ALL, label: strings.sessions.allDevices },

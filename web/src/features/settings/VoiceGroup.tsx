@@ -89,6 +89,9 @@ function PolishRows() {
     };
   }, [setPolishModel]);
 
+  // The model chosen, by its name in the list, or by its id while there is no list.
+  const chosen = models.find((model) => model.id === polishModel)?.label || polishModel;
+
   return (
     <>
       <SettingsRow
@@ -102,11 +105,8 @@ function PolishRows() {
             value={polishModel}
             onSelect={setPolishModel}
             options={models.map((model) => ({ id: model.id, label: model.label }))}
-            label={
-              models.find((model) => model.id === polishModel)?.label ||
-              polishModel ||
-              strings.settings.polishChooseModel
-            }
+            label={chosen || strings.settings.polishChooseModel}
+            valueText={chosen || undefined}
           />
         }
       />

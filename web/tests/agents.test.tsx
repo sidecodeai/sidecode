@@ -19,6 +19,7 @@ import { rpc } from '../src/lib/gateway';
 import { claudeAgent, devices, grokAgent, piAgent, sessions } from '../mock/fixtures';
 import { fixturesAvailable, readFixture } from './fixtures';
 import type { AgentInfo, Session } from '../src/protocol/types';
+import { labelled } from './choice';
 
 vi.mock('../src/lib/gateway', () => ({
   rpc: vi.fn(async (method: string, params: Record<string, unknown>) => {
@@ -162,9 +163,9 @@ describe('the new-session form draws what the agent has', () => {
       'never',
     ]);
     expect(rowLabels()).toContain(strings.newSession.permissions);
-    expect(
-      screen.getByRole('button', { name: strings.newSession.permissions }),
-    ).toHaveTextContent('Ask when needed');
+    expect(screen.getByRole('button', { name: 'Permissions, Ask when needed' })).toHaveTextContent(
+      'Ask when needed',
+    );
     expect(rowLabels()).toContain(strings.newSession.model);
     expect(rowLabels()).toContain(strings.newSession.effort);
   });
@@ -222,11 +223,11 @@ describe('the composer draws what the agent has', () => {
   it('offers the permission picker on a pi session (A26)', () => {
     renderComposer(sessionOf('ses-pi'), piAgent);
 
-    expect(screen.getByRole('button', { name: strings.composer.permissionMode })).toHaveTextContent(
+    expect(screen.getByRole('button', { name: labelled(strings.composer.permissionMode) })).toHaveTextContent(
       'Ask when needed',
     );
     expect(document.querySelector('.composer-chip.readonly')).toBeNull();
-    expect(screen.getByRole('button', { name: strings.composer.modelCard })).toHaveTextContent(
+    expect(screen.getByRole('button', { name: labelled(strings.composer.modelCard) })).toHaveTextContent(
       'Claude Sonnet 4.5 High',
     );
   });
@@ -234,14 +235,14 @@ describe('the composer draws what the agent has', () => {
   it('reads the model alone for an agent with no efforts, and opens a card with no slider', async () => {
     renderComposer({ ...sessionOf('ses-pi'), agent: 'aider', model: 'auto', effort: null }, sparseAgent);
 
-    const chip = screen.getByRole('button', { name: strings.composer.modelCard });
+    const chip = screen.getByRole('button', { name: labelled(strings.composer.modelCard) });
     expect(chip).toHaveTextContent('Auto');
     expect(document.querySelector('.sized-box-shown [data-effort-word]')).toBeNull();
 
     await userEvent.click(chip);
     expect(screen.queryByRole('slider', { name: strings.composer.effort })).not.toBeInTheDocument();
     expect(
-      screen.queryByRole('button', { name: strings.composer.permissionMode }),
+      screen.queryByRole('button', { name: labelled(strings.composer.permissionMode) }),
     ).not.toBeInTheDocument();
   });
 

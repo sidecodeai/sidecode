@@ -13,6 +13,7 @@ import { keyOf, useSessions } from '../src/stores/sessions';
 import { useSettings } from '../src/stores/settings';
 import { en, stringTables, strings } from '../src/strings';
 import { devices, sessions } from '../mock/fixtures';
+import { labelled } from './choice';
 import { RequestError } from '../src/lib/ws';
 import type { Device, Session } from '../src/protocol/types';
 
@@ -55,7 +56,14 @@ const renderPage = () =>
     </MemoryRouter>,
   );
 
-const deviceHeader = (name: string) => screen.getByRole('button', { name: new RegExp(name) });
+/** The header of a device's group; the device filter names a device it is on too. */
+const deviceHeader = (name: string): HTMLElement => {
+  const header = screen
+    .getAllByRole('button', { name: new RegExp(name) })
+    .find((button) => button.closest('.session-group') !== null);
+  if (!header) throw new Error(`no group header names ${name}`);
+  return header;
+};
 
 const rowTitles = (): string[] =>
   screen
@@ -193,7 +201,7 @@ describe('SessionsPage grouping', () => {
 
   /** A25: the filter is a menu, so a choice is an option inside it. */
   const pickAgent = async (name: string) => {
-    await userEvent.click(screen.getByRole('button', { name: strings.sessions.agentFilter }));
+    await userEvent.click(screen.getByRole('button', { name: labelled(strings.sessions.agentFilter) }));
     await userEvent.click(screen.getByRole('option', { name }));
   };
 
@@ -210,6 +218,24 @@ describe('SessionsPage grouping', () => {
 
     expect(useSessions.getState().agentFilter).toBeNull();
     expect(rowTitles()).toContain('Fix flaky auth test');
+  });
+
+  it('reads the agent and the device each filter is on, and marks it in its menu', async () => {
+    renderPage();
+    const agentFilter = () => screen.getByRole('button', { name: labelled(strings.sessions.agentFilter) });
+    const deviceFilter = () => screen.getByRole('button', { name: labelled(strings.sessions.deviceFilter) });
+
+    // The agent is drawn as its logo and name; the button reads the name.
+    await pickAgent('Codex');
+    expect(agentFilter()).toHaveAccessibleName('Filter by agent, Codex');
+
+    await userEvent.click(deviceFilter());
+    expect(screen.getByRole('option', { name: strings.sessions.allDevices })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await userEvent.click(screen.getByRole('option', { name: MAC }));
+    expect(deviceFilter()).toHaveAccessibleName(`Filter by device, ${MAC}`);
   });
 
   it('drops a device whose sessions the agent filter removed', async () => {
@@ -423,7 +449,7 @@ describe('the filter by status', () => {
     useSettings.setState({ language: 'en' });
   });
 
-  const trigger = () => screen.getByRole('button', { name: strings.sessions.statusFilter });
+  const trigger = () => screen.getByRole('button', { name: labelled(strings.sessions.statusFilter) });
 
   const pickStatus = async (name: string) => {
     await userEvent.click(trigger());
@@ -455,19 +481,20 @@ describe('the filter by status', () => {
 
     expect(toolbar.firstElementChild?.classList.contains('search-field')).toBe(true);
     expect([...toolbar.querySelectorAll('button.pill')].map((b) => b.getAttribute('aria-label'))).toEqual([
-      strings.sessions.statusFilter,
-      strings.sessions.agentFilter,
-      strings.sessions.allDevices,
+      'Filter by status, All states',
+      'Filter by agent, All agents',
+      'Filter by device, All devices',
     ]);
   });
 
-  it('says the chosen word on its button', async () => {
+  it('says the chosen word on its button, and reads it after what the menu filters by', async () => {
     renderPage();
     expect(trigger()).toHaveTextContent('All states');
 
     await pickStatus('Waiting');
 
     expect(trigger()).toHaveTextContent('Waiting');
+    expect(trigger()).toHaveAccessibleName('Filter by status, Waiting');
   });
 
   it('narrows the list to the green dots under Running, and keeps the choice in the store', async () => {
@@ -525,7 +552,7 @@ describe('the filter by status', () => {
     renderPage();
 
     await pickStatus('Running');
-    await userEvent.click(screen.getByRole('button', { name: strings.sessions.agentFilter }));
+    await userEvent.click(screen.getByRole('button', { name: labelled(strings.sessions.agentFilter) }));
     await userEvent.click(screen.getByRole('option', { name: 'Codex' }));
 
     expect(rowTitles()).toEqual(['Typecheck the web app']);
@@ -582,7 +609,7 @@ describe('the filter by status', () => {
     useSessions.setState({ statusFilter: 'running' });
     renderPage();
 
-    await userEvent.click(screen.getByRole('button', { name: strings.sessions.allDevices }));
+    await userEvent.click(screen.getByRole('button', { name: labelled(strings.sessions.deviceFilter) }));
     await userEvent.click(screen.getByRole('option', { name: quietDevice.name }));
 
     expect(screen.getByText(strings.sessions.noFilterMatches)).toBeInTheDocument();
@@ -629,8 +656,8 @@ describe('the filter by status', () => {
     useSettings.setState({ language: 'zh-Hans' });
     renderPage();
 
-    expect(screen.getByRole('button', { name: '按状态筛选' })).toHaveTextContent('全部状态');
-    await userEvent.click(screen.getByRole('button', { name: '按状态筛选' }));
+    expect(screen.getByRole('button', { name: '按状态筛选：全部状态' })).toHaveTextContent('全部状态');
+    await userEvent.click(screen.getByRole('button', { name: '按状态筛选：全部状态' }));
 
     expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual([
       '全部状态',
@@ -651,7 +678,7 @@ describe('the group headers while the list is revealing groups', () => {
   const searchField = () => screen.getByLabelText(strings.sessions.searchPlaceholder);
 
   const pickStatus = async (name: string) => {
-    await userEvent.click(screen.getByRole('button', { name: strings.sessions.statusFilter }));
+    await userEvent.click(screen.getByRole('button', { name: labelled(strings.sessions.statusFilter) }));
     await userEvent.click(screen.getByRole('option', { name }));
   };
 
@@ -730,7 +757,7 @@ describe('the group headers while the list is revealing groups', () => {
 
   it('stay live while nothing but an agent or a device narrows the list', async () => {
     renderPage();
-    await userEvent.click(screen.getByRole('button', { name: strings.sessions.agentFilter }));
+    await userEvent.click(screen.getByRole('button', { name: labelled(strings.sessions.agentFilter) }));
     await userEvent.click(screen.getByRole('option', { name: 'Codex' }));
 
     expect(headers().some((header) => header.hasAttribute('aria-disabled'))).toBe(false);
@@ -738,7 +765,7 @@ describe('the group headers while the list is revealing groups', () => {
     expect(useSettings.getState().collapsedDevices).toEqual(['dev-mac']);
     await userEvent.click(deviceHeader(MAC));
 
-    await userEvent.click(screen.getByRole('button', { name: strings.sessions.allDevices }));
+    await userEvent.click(screen.getByRole('button', { name: labelled(strings.sessions.deviceFilter) }));
     await userEvent.click(screen.getByRole('option', { name: MAC }));
 
     expect(headers().some((header) => header.hasAttribute('aria-disabled'))).toBe(false);

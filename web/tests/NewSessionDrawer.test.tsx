@@ -13,7 +13,9 @@ import { useDevices } from '../src/stores/devices';
 import { useSessions } from '../src/stores/sessions';
 import { strings } from '../src/strings';
 import { rpc } from '../src/lib/gateway';
+import { useSettings } from '../src/stores/settings';
 import { claudeAgent, codexAgent, devices } from '../mock/fixtures';
+import { labelled } from './choice';
 
 vi.mock('../src/lib/gateway', () => ({
   rpc: vi.fn(async (method: string, params: Record<string, unknown>) => {
@@ -47,7 +49,7 @@ describe('NewSessionDrawer', () => {
   it('opens the device menu above the drawer and selects from it', async () => {
     renderDrawer();
 
-    const trigger = screen.getByRole('button', { name: strings.newSession.device });
+    const trigger = screen.getByRole('button', { name: labelled(strings.newSession.device) });
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
 
     await userEvent.click(trigger);
@@ -65,6 +67,31 @@ describe('NewSessionDrawer', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
     expect(screen.getByText(second.name)).toBeInTheDocument();
+  });
+
+  // The Mac's picker reads the same: the field, then the device and its state.
+  it('reads the device it is on and whether it is online, and marks that row', async () => {
+    renderDrawer();
+
+    const trigger = screen.getByRole('button', { name: 'Device, mac-studio-office, online' });
+    expect(trigger).toHaveAttribute('aria-haspopup', 'listbox');
+    await userEvent.click(trigger);
+    const rows = screen.getAllByRole('option');
+    expect(rows.map((row) => row.getAttribute('aria-selected'))).toEqual(['true', 'false']);
+    expect(rows[0]).toHaveTextContent('mac-studio-office');
+
+    await userEvent.click(rows[1]!);
+    expect(trigger).toHaveAccessibleName('Device, ci-runner-01, online');
+  });
+
+  it('reads it in the interface language', () => {
+    useSettings.setState({ language: 'zh-Hans' });
+    try {
+      renderDrawer();
+      expect(screen.getByRole('button', { name: '设备：mac-studio-office，在线' })).toBeInTheDocument();
+    } finally {
+      useSettings.setState({ language: 'en' });
+    }
   });
 
   it('labels its fields in sentence case', () => {
@@ -111,10 +138,8 @@ describe('NewSessionDrawer options', () => {
   it("starts at the agent's own defaults", () => {
     renderDrawer();
 
-    expect(screen.getByRole('button', { name: strings.newSession.model })).toHaveTextContent(
-      'Sonnet 4.5',
-    );
-    expect(screen.getByRole('button', { name: strings.newSession.permissions })).toHaveTextContent(
+    expect(screen.getByRole('button', { name: 'Model, Sonnet 4.5' })).toHaveTextContent('Sonnet 4.5');
+    expect(screen.getByRole('button', { name: 'Permissions, Auto-accept edits' })).toHaveTextContent(
       'Auto-accept edits',
     );
   });

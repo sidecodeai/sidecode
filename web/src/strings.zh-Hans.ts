@@ -214,6 +214,7 @@ export const zhHans: StringTable = {
     allDevices: '全部设备',
     allAgents: '全部 agent',
     agentFilter: '按 agent 筛选',
+    deviceFilter: '按设备筛选',
     statusFilter: '按状态筛选',
     allStates: '全部状态',
     statusRunning: '正在运行',
@@ -252,6 +253,7 @@ export const zhHans: StringTable = {
     continuingOn: (device: string) => `在 ${device} 上继续`,
     pickDevice: '选择要启动的设备',
     device: '设备',
+    deviceChoice: (name: string, online: boolean) => `${name}，${online ? '在线' : '离线'}`,
     agent: 'Agent',
     agentUnavailable: '未安装',
     model: '模型',
@@ -450,7 +452,6 @@ export const zhHans: StringTable = {
     modelCard: '模型与思考强度',
     speed: (tier: string) => `速度：${tier}`,
     speedStandard: '标准',
-    option: (name: string, value: string) => `${name}：${value}`,
     setInTerminal: (name: string, value: string) => `${name} · ${value} · 在终端设置`,
     sendFailed: '无法发送消息。',
     upNext: '待发送',
@@ -592,6 +593,7 @@ export const zhHans: StringTable = {
 
   a11y: {
     statusDot: (state: string) => `状态：${state}`,
+    choice: (name: string, value: string) => `${name}：${value}`,
     openMenu: '打开菜单',
     closeDialog: '关闭对话框',
     toolRow: '工具调用',

@@ -29,6 +29,7 @@ import {
   rowTitles,
   versionParts,
 } from './settingsScreen';
+import { labelled } from './choice';
 
 beforeEach(() => {
   useSettings.setState({ language: 'en' });
@@ -518,18 +519,18 @@ describe('settings: voice', () => {
     expect(polish).toHaveAttribute('aria-checked', 'false');
     expect(screen.getByText(s.polishNote)).toBeInTheDocument();
     // Nothing to choose while it is off.
-    expect(screen.queryByRole('button', { name: s.polishModel })).toBeNull();
+    expect(screen.queryByRole('button', { name: labelled(s.polishModel) })).toBeNull();
 
     await user.click(polish);
 
     expect(useSettings.getState().polishEnabled).toBe(true);
     // The first model the gateway listed is chosen, so the switch is enough.
     await waitFor(() => expect(useSettings.getState().polishModel).toBe('gpt-4.1-mini'));
-    expect(screen.getByRole('button', { name: s.polishModel })).toHaveTextContent('gpt-4.1-mini');
+    expect(screen.getByRole('button', { name: labelled(s.polishModel) })).toHaveTextContent('gpt-4.1-mini');
     expect(screen.getByText(s.polishModelNote)).toBeInTheDocument();
     expect(voiceRows()).toEqual([s.transcribe, s.polish, s.polishModel, s.polishStrength]);
 
-    await user.click(screen.getByRole('button', { name: s.polishModel }));
+    await user.click(screen.getByRole('button', { name: labelled(s.polishModel) }));
     await user.click(screen.getByRole('option', { name: 'gpt-4.1' }));
     expect(useSettings.getState().polishModel).toBe('gpt-4.1');
 
@@ -546,7 +547,8 @@ describe('settings: voice', () => {
 
     await waitFor(() => expect(screen.getByText(s.polishModelsFailed)).toBeInTheDocument());
     expect(screen.queryByText(s.polishModelNote)).toBeNull();
-    const select = screen.getByRole('button', { name: s.polishModel });
+    // With no list to name it, the menu reads the model by the id it shows.
+    const select = screen.getByRole('button', { name: strings.a11y.choice(s.polishModel, 'gpt-4.1') });
     expect(select).toHaveTextContent('gpt-4.1');
     await user.click(select);
     expect(screen.getByRole('listbox', { name: s.polishModel })).toBeInTheDocument();

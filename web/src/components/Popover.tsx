@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } f
 import { createPortal } from 'react-dom';
 import { ChevronDown } from 'lucide-react';
 import { cx } from '../lib/cx';
+import { strings } from '../strings';
 import { placementFor, type Align, type Side } from './popoverPlacement';
 import './popover.css';
 
@@ -12,7 +13,16 @@ interface PopoverProps {
   side?: Side;
   className?: string;
   triggerClassName?: string;
+  /** What the trigger is, for assistive technology. */
   ariaLabel?: string;
+  /**
+   * The choice the trigger shows, in words. The trigger is then read as what
+   * it is and what it is set to, "Device, mac-studio-office, online", as a
+   * sighted reader takes both from the field's label and the trigger.
+   */
+  valueText?: string | null;
+  /** What the trigger opens: a menu of actions, or a list to choose from. */
+  popup?: 'menu' | 'listbox';
   disabled?: boolean;
   chevron?: boolean;
 }
@@ -25,6 +35,8 @@ export function Popover({
   className,
   triggerClassName,
   ariaLabel,
+  valueText,
+  popup = 'menu',
   disabled,
   chevron = true,
 }: PopoverProps) {
@@ -87,9 +99,9 @@ export function Popover({
         type="button"
         className={cx('pill', triggerClassName)}
         aria-expanded={open}
-        aria-haspopup="true"
+        aria-haspopup={popup}
         aria-controls={open ? panelId : undefined}
-        aria-label={ariaLabel}
+        aria-label={ariaLabel && valueText ? strings.a11y.choice(ariaLabel, valueText) : ariaLabel}
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
       >
@@ -117,6 +129,11 @@ export interface MenuOption {
 
 interface MenuProps {
   label: ReactNode;
+  /**
+   * The choice in words, where `label` draws it as more than its words — a
+   * dot, a logo. Otherwise the trigger reads the chosen option's own words.
+   */
+  valueText?: string;
   options: MenuOption[];
   value: string | null;
   onSelect: (id: string) => void;
@@ -126,13 +143,36 @@ interface MenuProps {
   disabled?: boolean;
 }
 
-export function Menu({ label, options, value, onSelect, ariaLabel, align, side, disabled }: MenuProps) {
+/**
+ * A list to choose one from. The trigger shows the choice and is read as the
+ * list's name and the choice; the list marks the chosen option as selected.
+ */
+export function Menu({
+  label,
+  valueText,
+  options,
+  value,
+  onSelect,
+  ariaLabel,
+  align,
+  side,
+  disabled,
+}: MenuProps) {
+  const chosen = options.find((option) => option.id === value)?.label;
   return (
-    <Popover label={label} ariaLabel={ariaLabel} align={align} side={side} disabled={disabled}>
+    <Popover
+      label={label}
+      ariaLabel={ariaLabel}
+      valueText={valueText ?? (typeof chosen === 'string' ? chosen : null)}
+      popup="listbox"
+      align={align}
+      side={side}
+      disabled={disabled}
+    >
       {(close) => (
         <ul className="menu" role="listbox" aria-label={ariaLabel}>
           {options.map((option) => (
-            <li key={option.id}>
+            <li key={option.id} role="none">
               <button
                 type="button"
                 role="option"

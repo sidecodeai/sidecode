@@ -988,6 +988,10 @@ Nothing of this reaches the gateway.
   overlay the device picker inside the New session drawer opened behind the drawer and looked dead.
   The drawer's own outside-click check compares the event target with the overlay element, so a
   click inside the portalled panel never closes it.
+- **A picker reads its choice.** A `Menu` trigger, and the model card's, is named for what it is
+  and then what it is set to (`strings.a11y.choice`): "Device, mac-studio-office, online", "Filter
+  by status, Waiting", 设备：mac-studio-office，在线. Its list is a `listbox` whose rows read their
+  own words and mark the chosen one `aria-selected`, an "All" or Standard row included.
 - **The model card** (A21) is one chip in the composer row reading "<model> <effort>", with a small
   lightning before it while `session.speed` is set. It opens a popover above the composer holding
   two rows. The first has the speed toggle at its leading edge — drawn only when `agent.speeds` is
@@ -1567,8 +1571,8 @@ holds the row to the three lines, the order on the second and the folder's outli
 
 The Sessions toolbar carries a status filter between the search and the agent filter: a `Menu`
 (`Popover.tsx`) of **All states**, **Running**, **Waiting** and **Ended** (全部状态, 正在运行, 正在等待,
-已结束), always drawn, its button reading the chosen word and named "Filter by status" for a screen
-reader, and the chosen row marked, All states included. The rule is `matchesStatus` in
+已结束), always drawn, its button reading the chosen word and named "Filter by status, Waiting" — the
+filter, then the word — for a screen reader, and the chosen row marked, All states included. The rule is `matchesStatus` in
 `src/components/statusFilter.ts`, and it reads the dot a row shows, `dotTone(state, control, online)`,
 rather than the raw state, so what the reader filters on is what they see. The three options that
 narrow the list share the five tones between them: every session is in exactly one.

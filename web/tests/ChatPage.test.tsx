@@ -20,6 +20,7 @@ import { RequestError } from '../src/lib/ws';
 import { strings } from '../src/strings';
 import { claudeAgent, codexAgent, devices as deviceFixtures } from '../mock/fixtures';
 import type { Session } from '../src/protocol/types';
+import { labelled } from './choice';
 
 const { rpcMock } = vi.hoisted(() => ({ rpcMock: vi.fn() }));
 
@@ -86,7 +87,7 @@ function renderChat() {
 /** Opens the model card and presses the speed toggle inside it. */
 async function toggleSpeed() {
   const user = userEvent.setup();
-  await user.click(screen.getByRole('button', { name: strings.composer.modelCard }));
+  await user.click(screen.getByRole('button', { name: labelled(strings.composer.modelCard) }));
   await user.click(
     screen.getByRole('button', {
       name: strings.composer.speed(strings.composer.speedStandard),

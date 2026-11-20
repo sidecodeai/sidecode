@@ -189,6 +189,10 @@ function NewSessionForm({ devices, presetDeviceId, onClose }: FormProps) {
         <span className="label">{strings.newSession.device}</span>
         <Menu
           ariaLabel={strings.newSession.device}
+          // The dot says whether the device is online; the trigger says it in words.
+          valueText={
+            device ? strings.newSession.deviceChoice(device.name, device.online) : strings.newSession.noDevices
+          }
           align="start"
           disabled={devices.length === 0}
           value={deviceId}
@@ -427,7 +431,8 @@ function SpeedField({
     <Menu
       ariaLabel={strings.newSession.speed}
       align="end"
-      value={value}
+      // The standard speed is a real row, so the menu marks it while no tier is on.
+      value={value ?? STANDARD_SPEED}
       onSelect={(id) => onChange(id === STANDARD_SPEED ? null : id)}
       options={[
         { id: STANDARD_SPEED, label: strings.composer.speedStandard },

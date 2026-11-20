@@ -7,6 +7,7 @@ import { foldSession } from '../src/stores/chatFold';
 import { strings } from '../src/strings';
 import { claudeAgent, codexAgent } from '../mock/fixtures';
 import type { AgentInfo, Session, SessionEvent, SessionState } from '../src/protocol/types';
+import { labelled } from './choice';
 
 const baseSession: Session = {
   session_id: 'ses-1',
@@ -376,7 +377,7 @@ describe('Composer control row', () => {
 
   const row = () => document.querySelector('.composer-bottom') as HTMLElement;
 
-  it('reads Up next, the model card, then the permission mode, and nothing else', () => {
+  it('reads Up next, the model card, then the permission mode, each with what it is set to', () => {
     renderRow('remote');
 
     expect(screen.getByRole('button', { name: strings.composer.micStart })).toBeInTheDocument();
@@ -385,8 +386,8 @@ describe('Composer control row', () => {
       .map((button) => button.getAttribute('aria-label') ?? button.textContent);
     expect(names).toEqual([
       strings.composer.upNextCount(1),
-      strings.composer.modelCard,
-      strings.composer.permissionMode,
+      'Model and effort, Sonnet 4.5 High',
+      'Permission mode, Ask before edits',
     ]);
   });
 
@@ -434,7 +435,7 @@ describe('Composer settings a terminal holds', () => {
     // The device types `/model` and `/effort` into the terminal, so the card
     // opens; it has nothing to type for the permission mode, which stays a
     // chip that opens nothing.
-    expect(screen.getByRole('button', { name: strings.composer.modelCard })).toBeEnabled();
+    expect(screen.getByRole('button', { name: labelled(strings.composer.modelCard) })).toBeEnabled();
     expect(chip(strings.composer.permissionMode, 'Ask before edits')).toBeInTheDocument();
     expect(document.querySelectorAll('.composer-chip.readonly')).toHaveLength(1);
   });
@@ -491,14 +492,14 @@ describe('Composer settings a terminal holds', () => {
   it('keeps the card on a session the device drives', () => {
     renderComposer({ control: 'remote' });
 
-    expect(screen.getByRole('button', { name: strings.composer.modelCard })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: labelled(strings.composer.modelCard) })).toBeInTheDocument();
     expect(document.querySelectorAll('.composer-chip.readonly')).toHaveLength(0);
   });
 
   it('keeps the card on a shared agent that carries the settings', () => {
     renderComposer({ control: 'shared', agent: 'codex', model: 'gpt-5.4' }, codexAgent);
 
-    expect(screen.getByRole('button', { name: strings.composer.modelCard })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: labelled(strings.composer.modelCard) })).toBeInTheDocument();
     expect(document.querySelectorAll('.composer-chip.readonly')).toHaveLength(0);
   });
 
@@ -565,7 +566,7 @@ describe('Composer model card', () => {
 
   const openCard = async () => {
     const user = userEvent.setup();
-    await user.click(screen.getByRole('button', { name: strings.composer.modelCard }));
+    await user.click(screen.getByRole('button', { name: labelled(strings.composer.modelCard) }));
     return user;
   };
 
@@ -574,17 +575,20 @@ describe('Composer model card', () => {
 
   it('reads the model and the effort in one chip', () => {
     renderComposer({});
-    expect(screen.getByRole('button', { name: strings.composer.modelCard })).toHaveTextContent(
+    expect(screen.getByRole('button', { name: labelled(strings.composer.modelCard) })).toHaveTextContent(
       'Sonnet 4.5 High',
     );
     expect(document.querySelector('.model-card-chip .sized-box-shown .speed-glyph')).toBeNull();
   });
 
-  it('marks the chip with the lightning while a tier is on', () => {
+  it('marks the chip with the lightning while a tier is on, and reads the tier in words', () => {
     renderComposer({ agent: 'codex', model: 'gpt-5.4-codex', speed: 'priority' }, codexAgent);
     expect(
       document.querySelector('.model-card-chip .sized-box-shown .speed-glyph'),
     ).not.toBeNull();
+    expect(screen.getByRole('button', { name: labelled(strings.composer.modelCard) })).toHaveAccessibleName(
+      'Model and effort, GPT-5.4 Codex High · Fast',
+    );
   });
 
   it('opens a card with the model name and the effort slider', async () => {
@@ -593,7 +597,7 @@ describe('Composer model card', () => {
 
     expect(
       screen.getByRole('button', {
-        name: strings.composer.option(strings.composer.model, 'Sonnet 4.5'),
+        name: strings.a11y.choice(strings.composer.model, 'Sonnet 4.5'),
       }),
     ).toBeInTheDocument();
     const slider = screen.getByRole('slider', { name: strings.composer.effort });
@@ -638,7 +642,7 @@ describe('Composer model card', () => {
 
   it('sizes the chip and the name row on every model-and-effort pair', async () => {
     renderComposer({});
-    const chip = screen.getByRole('button', { name: strings.composer.modelCard });
+    const chip = screen.getByRole('button', { name: labelled(strings.composer.modelCard) });
     // Three models times three levels, laid out under the visible label so the
     // chip cannot change width when either of them changes.
     expect(chip.querySelectorAll('.sized-box-ghost')).toHaveLength(9);
@@ -646,7 +650,7 @@ describe('Composer model card', () => {
 
     await openCard();
     const name = screen.getByRole('button', {
-      name: strings.composer.option(strings.composer.model, 'Sonnet 4.5'),
+      name: strings.a11y.choice(strings.composer.model, 'Sonnet 4.5'),
     });
     expect(name.querySelectorAll('.sized-box-ghost')).toHaveLength(9);
     expect(name.querySelector('.sized-box-ghost')).toHaveTextContent(/Sonnet 4\.5\s*Low/);
@@ -672,7 +676,7 @@ describe('Composer model card', () => {
 
     await user.click(
       screen.getByRole('button', {
-        name: strings.composer.option(strings.composer.model, 'Sonnet 4.5'),
+        name: strings.a11y.choice(strings.composer.model, 'Sonnet 4.5'),
       }),
     );
     await user.click(screen.getByRole('option', { name: 'Haiku 4.5' }));

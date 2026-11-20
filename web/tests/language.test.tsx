@@ -18,6 +18,7 @@ import { useSessions } from '../src/stores/sessions';
 import { useSettings } from '../src/stores/settings';
 import { claudeAgent } from '../mock/fixtures';
 import type { Session } from '../src/protocol/types';
+import { labelled } from './choice';
 
 /** Every leaf path in a table, so a missing nested key is a failure, not a gap. */
 function leaves(value: unknown, prefix = ''): string[] {
@@ -153,7 +154,7 @@ describe('the words themselves', () => {
     expect(screen.getByRole('button', { name: '排队' })).toBeInTheDocument();
     expect(screen.getByLabelText('给 agent 发消息…')).toBeInTheDocument();
     // What the device reported is not translated, in either half of the chip.
-    expect(screen.getByRole('button', { name: strings.composer.modelCard })).toHaveTextContent(
+    expect(screen.getByRole('button', { name: labelled(strings.composer.modelCard) })).toHaveTextContent(
       'Sonnet 4.5 High',
     );
   });

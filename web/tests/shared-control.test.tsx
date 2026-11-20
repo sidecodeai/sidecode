@@ -54,6 +54,7 @@ import type {
   SharedSettingKey,
   UserMessageEvent,
 } from '../src/protocol/types';
+import { labelled } from './choice';
 
 const CONTROLS = ['remote', 'terminal', 'shared', 'none'];
 const DELIVERIES = ['delivered', 'absorbed'];
@@ -189,7 +190,7 @@ describe.runIf(fixturesAvailable())('A10 composer on a shared session', () => {
     delete noSettings.shared_settings_keys;
     render(<Composer {...composerProps(sharedIdle, noSettings)} />);
     for (const name of ['Model and effort', 'Permission mode', 'Model', 'Effort']) {
-      expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: labelled(name) })).not.toBeInTheDocument();
     }
     // A17: what the terminal chose is still shown, as chips that open nothing.
     expect(document.querySelectorAll('.composer-chip.readonly')).toHaveLength(2);
@@ -222,7 +223,7 @@ describe.runIf(fixturesAvailable())('A10 composer on a shared session', () => {
   it('leaves the pickers alone on a remote session', () => {
     const session: Session = { ...sharedIdle, control: 'remote', origin: 'remote' };
     render(<Composer {...composerProps(session, claudeAgent)} />);
-    expect(screen.getByRole('button', { name: 'Model and effort' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: labelled('Model and effort') })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Attach files' })).toBeEnabled();
   });
 });
@@ -531,7 +532,7 @@ describe.runIf(fixturesAvailable())('A11 composer on a shared Codex session', ()
   it('shows the pickers when the device reports shared_settings', () => {
     render(<Composer {...composerProps(codexShared, daemonAgent)} />);
     for (const name of ['Model and effort', 'Permission mode']) {
-      expect(screen.getByRole('button', { name })).toBeEnabled();
+      expect(screen.getByRole('button', { name: labelled(name) })).toBeEnabled();
     }
   });
 
@@ -543,13 +544,13 @@ describe.runIf(fixturesAvailable())('A11 composer on a shared Codex session', ()
   it('hides whichever half the device does not report', () => {
     const settingsOnly: AgentInfo = { ...daemonAgent, shared_attachments: false };
     const { unmount } = render(<Composer {...composerProps(codexShared, settingsOnly)} />);
-    expect(screen.getByRole('button', { name: 'Model and effort' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: labelled('Model and effort') })).toBeEnabled();
     expect(screen.queryByRole('button', { name: 'Attach files' })).not.toBeInTheDocument();
     unmount();
 
     const attachmentsOnly: AgentInfo = { ...daemonAgent, shared_settings: false };
     render(<Composer {...composerProps(codexShared, attachmentsOnly)} />);
-    expect(screen.queryByRole('button', { name: 'Model and effort' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: labelled('Model and effort') })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Attach files' })).toBeEnabled();
   });
 
@@ -570,7 +571,7 @@ describe.runIf(fixturesAvailable())('A11 composer on a shared Codex session', ()
     const noInterrupt: AgentInfo = { ...daemonAgent, shared_interrupt: false };
     render(<Composer {...composerProps(codexShared, noInterrupt)} />);
     expect(screen.queryByRole('button', { name: 'Send options' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Model and effort' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: labelled('Model and effort') })).toBeEnabled();
   });
 
   it('says the prompt will steer, matching the status line and the Send label', () => {
@@ -934,7 +935,7 @@ describe('A28 Grok Build on the leader', () => {
     render(<Composer {...composerProps(grokShared, grokAgent)} />);
     expect(screen.getByLabelText('Message the agent…')).toBeEnabled();
     for (const name of ['Model and effort', 'Permission mode']) {
-      expect(screen.getByRole('button', { name })).toBeEnabled();
+      expect(screen.getByRole('button', { name: labelled(name) })).toBeEnabled();
     }
     expect(screen.queryByText(LEADER_HINT)).not.toBeInTheDocument();
   });
@@ -1004,8 +1005,8 @@ describe.runIf(fixturesAvailable())('A40 the device types into a Claude terminal
 
   it('opens the model card and leaves the permission mode a value', () => {
     claudeShared(attachAgent);
-    expect(screen.getByRole('button', { name: 'Model and effort' })).toBeEnabled();
-    expect(screen.queryByRole('button', { name: 'Permission mode' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: labelled('Model and effort') })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: labelled('Permission mode') })).not.toBeInTheDocument();
     expect(
       screen.getByLabelText('Permission mode · Ask before edits · set in the terminal'),
     ).toBeInTheDocument();
@@ -1016,7 +1017,7 @@ describe.runIf(fixturesAvailable())('A40 the device types into a Claude terminal
 
   it('gives the card a live model list and a live effort slider', async () => {
     claudeShared(attachAgent);
-    await userEvent.click(screen.getByRole('button', { name: 'Model and effort' }));
+    await userEvent.click(screen.getByRole('button', { name: labelled('Model and effort') }));
     expect(screen.getByRole('slider', { name: 'Effort' })).toBeEnabled();
     await userEvent.click(screen.getByRole('button', { name: 'Model, Sonnet 4.5' }));
     expect(screen.getByRole('listbox', { name: 'Model' })).toBeInTheDocument();
@@ -1030,7 +1031,7 @@ describe.runIf(fixturesAvailable())('A40 the device types into a Claude terminal
   it('sends the model the card picked', async () => {
     const props = composerProps(sharedIdle, attachAgent);
     render(<Composer {...props} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Model and effort' }));
+    await userEvent.click(screen.getByRole('button', { name: labelled('Model and effort') }));
     await userEvent.click(screen.getByRole('button', { name: 'Model, Sonnet 4.5' }));
     await userEvent.click(screen.getByRole('option', { name: 'Haiku 4.5' }));
     expect(props.onSetOption).toHaveBeenCalledWith({ model: 'claude-haiku-4-5' });
@@ -1052,21 +1053,21 @@ describe.runIf(fixturesAvailable())('A40 the device types into a Claude terminal
   it('draws only the rows the agent named, never a control that would fail', async () => {
     const modelOnly: AgentInfo = { ...attachAgent, shared_settings_keys: ['model'] };
     const { unmount } = claudeShared(modelOnly);
-    await userEvent.click(screen.getByRole('button', { name: 'Model and effort' }));
+    await userEvent.click(screen.getByRole('button', { name: labelled('Model and effort') }));
     expect(screen.getByRole('button', { name: 'Model, Sonnet 4.5' })).toBeEnabled();
     expect(screen.queryByRole('slider', { name: 'Effort' })).not.toBeInTheDocument();
     unmount();
 
     const effortOnly: AgentInfo = { ...attachAgent, shared_settings_keys: ['effort'] };
     claudeShared(effortOnly);
-    await userEvent.click(screen.getByRole('button', { name: 'Model and effort' }));
+    await userEvent.click(screen.getByRole('button', { name: labelled('Model and effort') }));
     expect(screen.getByRole('slider', { name: 'Effort' })).toBeEnabled();
     expect(screen.queryByRole('button', { name: 'Model, Sonnet 4.5' })).not.toBeInTheDocument();
   });
 
   it('keeps every setting the terminal\'s on a session no attachment reaches', () => {
     render(<Composer {...composerProps(terminalSession(), attachAgent)} />);
-    expect(screen.queryByRole('button', { name: 'Model and effort' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: labelled('Model and effort') })).not.toBeInTheDocument();
     expect(document.querySelectorAll('.composer-chip.readonly')).toHaveLength(2);
   });
 
