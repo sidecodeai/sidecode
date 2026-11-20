@@ -37,7 +37,9 @@ exists is said beside the field and left for editing; a name with a slash or a l
 refused with the reason. The picker still browses and makes, and never deletes, renames or moves. The first prompt is typed in the chat, not
 here. On the phone the Sessions list ends the way the Devices list ends: one primary button in the
 bottom bar, **New session**, exactly where Devices puts **Add device**; the list itself begins with
-the first device group.
+the first device group. Start session opens the conversation it made at once, whichever of the
+device's announcement of the new session and its reply arrives first; whichever arrives second
+never moves the session backwards.
 
 **Chat.** A sidebar of sessions grouped by device, each device's Archive collapsed under it, a header
 with the title, `device:path · branch`, a Todos chip, a Tasks chip where the gateway keeps task

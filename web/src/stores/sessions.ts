@@ -111,6 +111,8 @@ export const useSessions = create<SessionsState>((set, get) => ({
 
   create: async (params) => {
     const { session } = await rpc('session.create', params);
+    // The reply may replace an announcement of this session that came first: the reply was
+    // queued after it on the same ordered connection, and it resolves before the next frame.
     get().upsert(session);
     return session;
   },
