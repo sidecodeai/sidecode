@@ -39,7 +39,9 @@ here. On the phone the Sessions list ends the way the Devices list ends: one pri
 bottom bar, **New session**, exactly where Devices puts **Add device**; the list itself begins with
 the first device group. Start session opens the conversation it made at once, whichever of the
 device's announcement of the new session and its reply arrives first; whichever arrives second
-never moves the session backwards.
+never moves the session backwards. On the web a modal or the drawer is modal for assistive
+technology: what lies under it is out of reach until it closes (`aria-modal`), one Escape closes
+only the newest overlay, and the control that had focus gets it back when the panel closes.
 
 **Chat.** A sidebar of sessions grouped by device, each device's Archive collapsed under it, a header
 with the title, `device:path · branch`, a Todos chip, a Tasks chip where the gateway keeps task
