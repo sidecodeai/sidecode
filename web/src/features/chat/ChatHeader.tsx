@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ArrowLeft, CheckSquare, Square } from 'lucide-react';
 import { Link } from 'react-router';
 import { Popover } from '../../components/Popover';
-import { compactNumber, duration, tildePath } from '../../lib/format';
+import { compactNumber, duration } from '../../lib/format';
 import { sessionTitle, strings } from '../../strings';
 import { useSettings } from '../../stores/settings';
 import { useNow } from '../../lib/useNow';
@@ -11,6 +11,7 @@ import { SessionRenameDialog } from '../sessions/SessionRenameDialog';
 import { canRename } from '../sessions/rename';
 import { canInterruptShared } from './attach';
 import { BoardChip } from './board/BoardChip';
+import { ChatSubLine } from './ChatSubLine';
 import { HeaderChipFace } from './HeaderChipFace';
 import type { AgentInfo, Session, TodoItem } from '../../protocol/types';
 
@@ -72,10 +73,11 @@ export function ChatHeader({
             sessionTitle(session)
           )}
         </h1>
-        <p className="mono chat-sub">
-          {deviceName}:{tildePath(session.cwd)}
-          {session.git ? ` · ${session.git.branch}` : ''}
-        </p>
+        <ChatSubLine
+          device={deviceName}
+          cwd={session.cwd}
+          branch={session.git ? session.git.branch : null}
+        />
       </div>
 
       <div className="chat-header-actions">

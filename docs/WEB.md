@@ -1571,6 +1571,18 @@ narrow row. Rows are `--row-h-three` tall at every width; the phone-width rules 
 the status onto its own line are gone with the column they served. `tests/SessionsPage.test.tsx`
 holds the row to the three lines, the order on the second and the folder's outline.
 
+The conversation header's line under the title, `device:directory · branch` (`ChatSubLine.tsx`),
+cuts its directory from the head the same way, but never past the folder it ends in. The line is a
+grid, a column per part, no wider than its text or than the heading. The head before the folder
+(`.chat-sub-head`) is the one flexible column, so it is given room last and gives way first, down to
+its ellipsis: "…" and the folder are the least the directory gets. The device and the branch are
+sized before it and share what is left evenly, a part that needs less than its share keeping its
+whole name; only then is either cut, at its tail, never to less than a letter and "…". A browser
+never ellipses away a line's first character, so each cut part's line starts with an empty
+`::before` of no width: without it Chrome kept the head's last "/" at 320 px and pushed the ellipsis
+out of the box ("./gateway"), and a branch cut to one letter lost its ellipsis the same way. The
+text keeps every part whole for assistive technology. `tests/ChatHeader.test.tsx` holds the parts.
+
 ## Filtering by status
 
 The Sessions toolbar carries a status filter between the search and the agent filter: a `Menu`

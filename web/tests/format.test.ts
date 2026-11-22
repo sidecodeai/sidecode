@@ -9,6 +9,7 @@ import {
   latency,
   relativeAgo,
   relativeTime,
+  splitFolder,
   tildePath,
 } from '../src/lib/format';
 import { useSettings } from '../src/stores/settings';
@@ -65,6 +66,17 @@ describe('numbers and paths', () => {
     expect(tildePath('/home/ci/work/api')).toBe('~/work/api');
     expect(tildePath('/opt/tools')).toBe('/opt/tools');
     expect(tildePath('/Users/me/dev', '/Users/me')).toBe('~/dev');
+  });
+
+  it('splits a path into what leads to the folder it ends in, and that folder', () => {
+    expect(splitFolder('~/dev/remote-control/gateway')).toEqual(['~/dev/remote-control/', 'gateway']);
+    expect(splitFolder('~/dev/gateway/')).toEqual(['~/dev/', 'gateway/']);
+    expect(splitFolder('~/x')).toEqual(['~/', 'x']);
+    expect(splitFolder('/opt/tools')).toEqual(['/opt/', 'tools']);
+    // Nothing before the one segment: the path is all folder.
+    expect(splitFolder('~')).toEqual(['', '~']);
+    expect(splitFolder('/srv')).toEqual(['', '/srv']);
+    expect(splitFolder('/')).toEqual(['', '/']);
   });
 
   it('takes the last path segment for sidebar subtitles', () => {

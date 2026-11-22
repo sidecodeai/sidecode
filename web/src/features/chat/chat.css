@@ -77,13 +77,93 @@
   background: var(--hover);
 }
 
+/*
+ * The line under the title (`ChatSubLine.tsx`): device, directory and branch on
+ * one line, a column each, as wide as its text and never wider than the
+ * heading. The head of the directory is the one flexible column, so it is
+ * given room last: too narrow, it gives way first, down to its ellipsis, which
+ * it keeps with the folder the path ends in, never cut. The device and the
+ * branch are sized before it and share what is left evenly, a part that needs
+ * less than its share keeping its whole name; only then is either cut, at its
+ * tail.
+ */
 .chat-sub {
+  display: grid;
+  /* device, ":", the head, the folder, " · ", the branch */
+  grid-template-columns:
+    minmax(auto, max-content) max-content minmax(auto, 1fr) max-content max-content
+    minmax(auto, max-content);
+  width: fit-content;
+  max-width: 100%;
   font-size: var(--fs-12);
   line-height: 1.45;
   color: var(--ink-tertiary);
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Each part keeps its own column, so one that is not there leaves an empty,
+   zero-wide column rather than moving the others along. */
+.chat-sub-device {
+  grid-column: 1;
+}
+
+.chat-sub-colon {
+  grid-column: 2;
+}
+
+.chat-sub-head {
+  grid-column: 3;
+}
+
+.chat-sub-folder {
+  grid-column: 4;
+}
+
+.chat-sub-dot {
+  grid-column: 5;
+}
+
+.chat-sub-branch {
+  grid-column: 6;
+}
+
+/* Cut at their tail, never to less than a letter and the ellipsis, which fit
+   2ch in the mono face; the pixel keeps rounding from pushing the ellipsis out. */
+.chat-sub-device,
+.chat-sub-branch {
+  min-width: calc(2ch + 1px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-sub-colon,
+.chat-sub-dot,
+.chat-sub-folder {
+  white-space: pre;
+}
+
+/* Cut from its head, as the session row's path. Its least is the ellipsis, 1ch
+   in the mono face, and a pixel so that rounding cannot drop it. */
+.chat-sub-head {
+  min-width: calc(1ch + 1px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+/* Each cut part's first item, at its start edge and of no width. A browser
+   never ellipses away a line's first character (css-ui § text-overflow), so
+   without it the head's last "/" stayed beside an ellipsis pushed out of the
+   box, and its least read "./" rather than "…". With it the head can show its
+   ellipsis alone, and so can a device or a branch where not even its first
+   letter fits beside one, a wide CJK letter. */
+.chat-sub-device::before,
+.chat-sub-head::before,
+.chat-sub-branch::before {
+  content: '';
+  display: inline-block;
 }
 
 .chat-header-actions {

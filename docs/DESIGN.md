@@ -43,10 +43,13 @@ never moves the session backwards.
 
 **Chat.** A sidebar of sessions grouped by device, each device's Archive collapsed under it, a header
 with the title, `device:path · branch`, a Todos chip, a Tasks chip where the gateway keeps task
-boards (§ "The task board"), usage and elapsed time, and a Stop button. The timeline runs down the middle on the
-page's own canvas. The composer sits at the bottom with a row of controls beneath it: Up next
-while something is queued (A43), the dictation language where the phone recognises speech itself
-(A44), the model card (model, effort and speed in one control), then the permission-mode picker.
+boards (§ "The task board"), usage and elapsed time, and a Stop button. When the `device:path · branch`
+line is too narrow, the working directory gives way first, cut from its head but never past the
+folder it ends in, while the device and the branch keep their whole names as long as the line can
+hold them. The timeline runs down the middle on the page's own canvas. The composer sits at the
+bottom with a row of controls beneath it: Up next while something is queued (A43), the dictation
+language where the phone recognises speech itself (A44), the model card (model, effort and speed in
+one control), then the permission-mode picker.
 
 **Settings** holds the account, notifications, voice, the timeline detail, the app lock, and the
 interface language, in the shape § "The Settings screen" gives it. **Language** offers English and 中文 and defaults to English whatever the

@@ -87,6 +87,17 @@ export function tildePath(path: string, home?: string | null): string {
   return path;
 }
 
+/**
+ * A path as what leads to the folder it ends in, and that folder: "~/dev/" and
+ * "gateway". A path with nothing before its one segment, "~" or "/srv", is all
+ * folder.
+ */
+export function splitFolder(path: string): [head: string, folder: string] {
+  const cut = path.replace(/(.)\/+$/, '$1').lastIndexOf('/');
+  if (cut <= 0) return ['', path];
+  return [path.slice(0, cut + 1), path.slice(cut + 1)];
+}
+
 /** Last path segment, used as the short cwd label in the sidebar. */
 export function baseName(path: string): string {
   const trimmed = path.replace(/(.)\/+$/, '$1');
