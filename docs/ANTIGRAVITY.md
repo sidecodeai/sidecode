@@ -47,7 +47,10 @@ code, so A64 changes nothing in it.
 Nothing on the wire is new beyond the id: a client draws Antigravity from its `capabilities` and
 `control` as it draws any agent, and a client from before A64 shows the id `antigravity` with the
 letter mark. The web app names it "Antigravity" in both languages and its account's vendor "Google",
-and marks it with the letter A until Google's official vector and its licence are available.
+and its mark is Google's one-colour Antigravity icon from antigravity.google/press, its path
+unchanged, in a square cut to the arch's width and centred on its height, drawn as the other four
+logos are: monochrome in the ink colour, in the same box, at the same size and alignment. The
+generic letter stays for an agent nobody knows.
 
 | Offered | Not offered |
 | --- | --- |
@@ -90,9 +93,11 @@ gateway it enrols with. A test account on the gateway does not protect those con
   examples in `protocol/schema/objects.json`; the fixture's entry in
   `protocol/scripts/validate_fixtures.py`.
 - **Web.** `agentLabels.antigravity`, `vendorLabels.google` and the A35 switch's sentence in
-  `web/src/strings.ts` and `web/src/strings.zh-Hans.ts`; `antigravityAgent` and `antigravityHello`
-  in `web/mock/fixtures.ts`; the tests `agents.test.tsx`, `DevicePage.test.tsx`,
-  `accounts.test.ts`, `mock-close.test.ts` and `SettingsPage.test.tsx`.
+  `web/src/strings.ts` and `web/src/strings.zh-Hans.ts`; the mark, the `antigravity` entry of
+  `web/src/components/AgentLogo.tsx` and its source in the header comment; `antigravityAgent` and
+  `antigravityHello` in `web/mock/fixtures.ts`; the tests `agents.test.tsx` (Google's arch, and
+  five vectors in the agent control), `DevicePage.test.tsx`, `accounts.test.ts`,
+  `mock-close.test.ts` and `SettingsPage.test.tsx`, and the comment in `DevicesPage.test.tsx`.
 - **Docs.** This file, the `[mirror]` rows in [CLIENT.md](CLIENT.md), and the Antigravity passages
   in [DESIGN.md](DESIGN.md) and [WEB.md](WEB.md).
 
@@ -107,7 +112,7 @@ gateway it enrols with. A test account on the gateway does not protect those con
    no client keeps a row nothing can open.
 2. **Protocol.** Withdraw the id in a new amendment, as A26 withdrew Cursor, and delete the two
    fixtures with their schema and validator entries.
-3. **Web.** Delete the name, the vendor label, the demo entries and their tests.
+3. **Web.** Delete the name, the vendor label, the mark, the demo entries and their tests.
 4. **Docs.** The passages above, this file last. `rg -il 'antigravity|\bagy\b'` should then find
    only the amendment history in `protocol/PROTOCOL.md`.
 5. **Release.** Devices update themselves with the next rc-client (A36), and a client that still

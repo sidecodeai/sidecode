@@ -971,11 +971,13 @@ Nothing of this reaches the gateway.
   names Claude Code, Codex, Grok Build, pi and Antigravity, the same in both languages, and an id it
   does not know is drawn as itself. The mark
   beside or instead of a name is `src/components/AgentLogo.tsx`: one inline `<svg>` per agent with
-  the vendor's published vector (Simple Icons for Claude and OpenAI, pi.dev for pi, the Grok mark),
+  the vendor's published vector (Claude's from Simple Icons, OpenAI's knot from Simple Icons 15.0.0,
+  which 16.0.0 removed, the Grok mark from LobeHub's icon set, pi's from pi.dev, and Antigravity's
+  from antigravity.google/press, Google's arch in a viewBox cut square to its width),
   `fill="currentColor"` and no colour of its own, in a box one em square sitting on the cap height
   of its line, so a logo is the size of the text it stands beside and inherits its ink. An agent
-  with no vector falls back to the first letter of its id in the same box, which is what Antigravity
-  gets until there is an official vector for it (A64) and what Cursor now gets (A26 withdrew it).
+  with no vector falls back to the first letter of its id in the same box, which is what Cursor now
+  gets (A26 withdrew it).
   The component is used in the new-session form's agent control, where the
   logo stands alone because the names do not fit side by side and the line under the row names the
   one that is chosen, in the agent filter's rows and its button, on the session-row chip and in a

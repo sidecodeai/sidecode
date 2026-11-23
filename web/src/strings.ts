@@ -831,8 +831,7 @@ export const strings: StringTable = new Proxy({} as StringTable, {
 
 /**
  * Product names, never translated. A25 added Grok Build and pi, and A64
- * Antigravity, Google's `agy`, which keeps the first-letter mark until it has
- * an official vector (`components/AgentLogo.tsx`).
+ * Antigravity, Google's `agy`.
  */
 export const agentLabels: Record<string, string> = {
   claude: 'Claude Code',

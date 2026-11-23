@@ -6,12 +6,14 @@
  *
  * The box is one em square and sits on the cap height of its line, so a logo
  * reads as the same size as the name it stands beside or replaces. An agent
- * with no vector here — one nobody knows, or one whose official mark we do not
- * have yet — is marked by the first letter of its id, in the same box.
+ * with no vector here, one nobody knows, is marked by the first letter of its
+ * id, in the same box.
  *
- * The vectors are the vendors' published marks (Simple Icons for Claude and
- * OpenAI, pi.dev for pi, the Grok mark). They identify the product and are used
- * for nothing else.
+ * The vectors are the vendors' published marks: Claude's from Simple Icons,
+ * OpenAI's knot from Simple Icons 15.0.0 (16.0.0 removed it), the Grok mark
+ * from LobeHub's icon set, pi's from pi.dev and Antigravity's from
+ * antigravity.google/press. They identify the product and are used for nothing
+ * else.
  */
 
 interface Logo {
@@ -47,6 +49,14 @@ const logos: Record<string, Logo> = {
     paths: [
       { d: 'M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65Z', evenOdd: true },
       { d: 'M517.36 400H634.72V634.72H517.36Z', evenOdd: true },
+    ],
+  },
+  // Antigravity's arch: Google's one-colour icon, its path as published, in a
+  // square cut from its 180-unit canvas to the arch's width, centred on its height.
+  antigravity: {
+    viewBox: '22.500 22.833 134.335 134.335',
+    paths: [
+      { d: 'M144.248 149.062C151.748 154.688 162.998 150.938 152.685 140.625C121.748 110.625 128.31 28.125 89.8727 28.125C51.4352 28.125 57.9977 110.625 27.0602 140.625C15.8102 151.875 27.9977 154.688 35.4977 149.062C64.5602 129.375 62.6852 94.6875 89.8727 94.6875C117.06 94.6875 115.185 129.375 144.248 149.062Z' },
     ],
   },
 };

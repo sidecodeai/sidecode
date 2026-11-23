@@ -87,15 +87,21 @@ describe('agent names and logos', () => {
   });
 
   it('draws each of them as its own logo', () => {
-    for (const agent of ['claude', 'codex', 'grok', 'pi']) {
+    for (const agent of ['claude', 'codex', 'grok', 'pi', 'antigravity']) {
       const logo = logoOf(agent);
       expect(logo.tag).toBe('svg');
       expect(logo.text).toBe('');
     }
   });
 
-  it('marks Antigravity by its first letter until it has an official vector (A64)', () => {
-    expect(logoOf('antigravity')).toEqual({ tag: 'span', text: 'A' });
+  it("draws Antigravity as Google's arch, in a square and in the ink as the others are (A64)", () => {
+    const { container } = render(<AgentLogo agent="antigravity" />);
+    const svg = container.querySelector('svg.agent-logo');
+    const [, , width, height] = (svg?.getAttribute('viewBox') ?? '').split(' ').map(Number);
+    expect(width).toBeGreaterThan(0);
+    expect(width).toBe(height);
+    const fills = [...(svg?.querySelectorAll('path') ?? [])].map((path) => path.getAttribute('fill'));
+    expect(fills).toEqual(['currentColor']);
   });
 
   it('renders an agent nobody knows as itself, marked by its first letter', () => {
@@ -160,8 +166,9 @@ describe('the new-session form draws what the agent has', () => {
       el.getAttribute('data-agent'),
     );
     expect(logos).toEqual(['claude', 'codex', 'grok', 'pi', 'antigravity']);
-    // Antigravity's mark is its first letter (A64); the other four are vectors.
-    expect(control.textContent).toBe('A');
+    // Every mark is a vector, Antigravity's too (A64), so the control holds no words.
+    expect(control.querySelectorAll('svg.agent-logo')).toHaveLength(5);
+    expect(control.textContent).toBe('');
     for (const name of ['Claude Code', 'Codex', 'Grok Build', 'pi', 'Antigravity']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument();
     }

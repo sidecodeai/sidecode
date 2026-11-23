@@ -438,15 +438,16 @@ plan mode is only a permission mode, and its titles are the ones `agy` writes.
 **The mark is the agent's own logo.** Where an agent is shown by something smaller than its name
 — the agent control of the new-session form, the filter menu, the chip on a session row, a
 device's agent list — it is shown by its logo: Anthropic's starburst for Claude Code, OpenAI's
-knot for Codex, the Grok spiral for Grok Build, pi's pixel P. Every logo is drawn monochrome in
-the ink colour, at the cap height of the text beside it, on the same quiet chip tint as before:
-the shape tells the agents apart, not a colour per vendor, and nothing on the screen wears a brand
-colour. Where there is room the name follows the logo; in the agent control the logo stands alone
-and the line under the control names the chosen agent. An agent nobody knows is marked by the
-first letter of its id in the same box. The vectors are the vendors' published marks (Simple Icons
-for Claude and OpenAI, pi.dev for pi, the Grok mark), used to identify the product and for nothing
-else; the letters C, X, G and π are gone. Antigravity is marked by the letter A for now, as an agent
-nobody knows is, until Google's official vector and its licence are available.
+knot for Codex, the Grok spiral for Grok Build, pi's pixel P, Google's arch for Antigravity. Every
+logo is drawn monochrome in the ink colour, at the cap height of the text beside it, on the same
+quiet chip tint as before: the shape tells the agents apart, not a colour per vendor, and nothing
+on the screen wears a brand colour. Where there is room the name follows the logo; in the agent
+control the logo stands alone and the line under the control names the chosen agent. An agent
+nobody knows is marked by the first letter of its id in the same box. The vectors are the vendors'
+published marks, used to identify the product and for nothing else: Claude's from Simple Icons,
+OpenAI's knot from Simple Icons 15.0.0 (16.0.0 removed it), the Grok mark from LobeHub's icon set,
+pi's from pi.dev, and Antigravity's from antigravity.google/press, Google's one-colour icon with
+its path unchanged, in a square cut to the arch's width. The letters C, X, G and π are gone.
 
 **What an agent does not have is not drawn.** The composer row and the new-session form offer
 exactly what the device advertises: an agent whose `permission_modes` is empty shows no permission
