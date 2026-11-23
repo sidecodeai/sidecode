@@ -88,7 +88,7 @@ describe('the header and the agent list', () => {
     renderPage('dev-mac');
 
     const names = [...document.querySelectorAll('.device-page-agent-name')].map((el) => el.textContent);
-    expect(names).toEqual(['Claude Code', 'Codex', 'Grok Build', 'pi']);
+    expect(names).toEqual(['Claude Code', 'Codex', 'Grok Build', 'pi', 'Antigravity']);
     await waitFor(() => expect(rpc).toHaveBeenCalled());
   });
 
@@ -139,6 +139,44 @@ describe('the four shapes an account comes in', () => {
     expect(within(card).getByText('OpenAI API key · api.relay.example')).toBeInTheDocument();
     // pi's other provider is an account, so the card has meters — but only two.
     await waitFor(() => expect(within(card).getAllByRole('progressbar')).toHaveLength(2));
+  });
+
+  /**
+   * A64: the device reads nothing of agy's sign-in, so the card says nothing until the reply
+   * brings the Google account, with the four windows agy's usage query reports — five hours and a
+   * week for each model group, the unused ones with no reset time.
+   */
+  it("draws Antigravity's Google account and agy's four windows only from the reply", async () => {
+    vi.mocked(rpc).mockReturnValue(new Promise(() => undefined) as never);
+    const waiting = renderPage('dev-mac');
+    expect(cardOf('Antigravity').querySelector('.device-page-signin')).toBeNull();
+    expect(cardOf('Antigravity').querySelector('.device-page-note')).toBeNull();
+    waiting.unmount();
+
+    answersWithLimits('dev-mac');
+    renderPage('dev-mac');
+    const card = cardOf('Antigravity');
+    expect(await within(card).findByText('Google account')).toBeInTheDocument();
+    await waitFor(() => expect(within(card).getAllByRole('progressbar')).toHaveLength(4));
+    const meters = [...card.querySelectorAll('.device-page-meter')];
+    expect(meters.map((meter) => meter.querySelector('.device-page-meter-name')?.textContent)).toEqual([
+      '5-hour · Gemini Models',
+      '7-day · Gemini Models',
+      '5-hour · Claude and GPT models',
+      '7-day · Claude and GPT models',
+    ]);
+    expect(meters.map((meter) => meter.querySelector('.device-page-meter-value')?.textContent)).toEqual([
+      '25%',
+      '13%',
+      '0%',
+      '0%',
+    ]);
+    expect(meters.map((meter) => meter.querySelector('.device-page-meter-reset') !== null)).toEqual([
+      true,
+      true,
+      false,
+      false,
+    ]);
   });
 
   it('draws the account line alone when the vendor exposes no windows', async () => {
@@ -236,7 +274,13 @@ describe('the fresh windows stay on the page', () => {
   });
 
   it('is what the mock device list already carries', () => {
-    expect(deviceNamed('dev-mac').agents).toEqual(freshAgents('dev-mac').map(withoutLimits));
+    // A64: Antigravity's account comes from agy's usage query alone, so hello carries none.
+    const inHello = (agent: AgentInfo): AgentInfo => {
+      if (agent.agent !== 'antigravity') return withoutLimits(agent);
+      const { accounts: _accounts, ...hello } = agent;
+      return hello;
+    };
+    expect(deviceNamed('dev-mac').agents).toEqual(freshAgents('dev-mac').map(inHello));
   });
 });
 

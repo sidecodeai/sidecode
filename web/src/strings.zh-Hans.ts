@@ -7,8 +7,9 @@
  * output, device names, paths, branches, model, effort, permission and speed
  * labels — arrives translated by nobody and is drawn as it came. The product is
  * 随码 here, where the English table says SideCode; every agent's name —
- * "Claude Code", "Codex", "Grok Build" and "pi" — stays as its maker writes it,
- * and each of the two interface languages is always named in its own script.
+ * "Claude Code", "Codex", "Grok Build", "pi" and "Antigravity" — stays as its
+ * maker writes it, and each of the two interface languages is always named in
+ * its own script.
  */
 import type { StringTable } from './strings';
 
@@ -513,7 +514,7 @@ export const zhHans: StringTable = {
     pushServerDisabled: '网关未启用网页推送。',
     resumeAfterLimit: '限额恢复后继续会话',
     resumeAfterLimitNote:
-      'Claude Code 或 Codex 因用量限额停下时，设备会在限额恢复一分钟后继续该会话。',
+      'Claude Code、Codex 或 Antigravity 因用量限额停下时，设备会在限额恢复一分钟后继续该会话。',
     resumeUnavailable: '此网关尚不支持该功能。',
 
     transcribe: '转写',

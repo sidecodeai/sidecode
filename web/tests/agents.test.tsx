@@ -1,5 +1,5 @@
 /**
- * A25/A26 — the four agents a device can report, and the shape the app must
+ * A25/A26/A64 — the five agents a device can report, and the shape the app must
  * still handle: an agent that lists nothing for a setting.
  * `docs/DESIGN.md` § "Agents": every agent is named, each is marked by its own
  * logo, and what an agent does not have is not drawn.
@@ -16,7 +16,16 @@ import { useDevices } from '../src/stores/devices';
 import { useSessions } from '../src/stores/sessions';
 import { agentLabel, strings } from '../src/strings';
 import { rpc } from '../src/lib/gateway';
-import { claudeAgent, devices, grokAgent, piAgent, sessions } from '../mock/fixtures';
+import { RequestError } from '../src/lib/ws';
+import {
+  antigravityAgent,
+  antigravityHello,
+  claudeAgent,
+  devices,
+  grokAgent,
+  piAgent,
+  sessions,
+} from '../mock/fixtures';
 import { fixturesAvailable, readFixture } from './fixtures';
 import type { AgentInfo, Session } from '../src/protocol/types';
 import { labelled } from './choice';
@@ -74,6 +83,7 @@ describe('agent names and logos', () => {
     expect(agentLabel('codex')).toBe('Codex');
     expect(agentLabel('grok')).toBe('Grok Build');
     expect(agentLabel('pi')).toBe('pi');
+    expect(agentLabel('antigravity')).toBe('Antigravity');
   });
 
   it('draws each of them as its own logo', () => {
@@ -82,6 +92,10 @@ describe('agent names and logos', () => {
       expect(logo.tag).toBe('svg');
       expect(logo.text).toBe('');
     }
+  });
+
+  it('marks Antigravity by its first letter until it has an official vector (A64)', () => {
+    expect(logoOf('antigravity')).toEqual({ tag: 'span', text: 'A' });
   });
 
   it('renders an agent nobody knows as itself, marked by its first letter', () => {
@@ -111,10 +125,17 @@ describe.runIf(fixturesAvailable())('the mock advertises what the contract does'
   it.each([
     ['grok', grokAgent],
     ['pi', piAgent],
+    ['antigravity', antigravityAgent],
   ])('matches objects/agent.%s.json', (id, mocked) => {
     expect(mocked).toEqual(readFixture<AgentInfo>(`objects/agent.${id}.json`));
-    // A27: both agents carry the capability the panel is drawn from.
+    // A27: each agent carries the capability the panel is drawn from.
     expect(mocked.capabilities).toContain('commands');
+  });
+
+  it('lists Antigravity in hello as the fixture without its account, which only device.agents carries (A64)', () => {
+    const { accounts: _accounts, ...hello } = readFixture<AgentInfo>('objects/agent.antigravity.json');
+    expect(antigravityHello).toEqual(hello);
+    expect(devices.find((device) => device.device_id === 'dev-mac')?.agents).toContainEqual(hello);
   });
 });
 
@@ -131,19 +152,57 @@ const renderDrawer = () => {
 const rowLabels = () => [...document.querySelectorAll('.label')].map((el) => el.textContent);
 
 describe('the new-session form draws what the agent has', () => {
-  it('offers all four agents, each named though it draws only its logo', () => {
+  it('offers all five agents, each named though it draws only its mark', () => {
     renderDrawer();
 
     const control = screen.getByRole('group', { name: strings.newSession.agent });
     const logos = [...control.querySelectorAll('.agent-logo')].map((el) =>
       el.getAttribute('data-agent'),
     );
-    expect(logos).toEqual(['claude', 'codex', 'grok', 'pi']);
-    expect(control.textContent).toBe('');
-    for (const name of ['Claude Code', 'Codex', 'Grok Build', 'pi']) {
+    expect(logos).toEqual(['claude', 'codex', 'grok', 'pi', 'antigravity']);
+    // Antigravity's mark is its first letter (A64); the other four are vectors.
+    expect(control.textContent).toBe('A');
+    for (const name of ['Claude Code', 'Codex', 'Grok Build', 'pi', 'Antigravity']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument();
     }
   });
+
+  it("draws Antigravity's model, effort and permission lists, on its defaults (A64)", async () => {
+    renderDrawer();
+    await userEvent.click(screen.getByRole('button', { name: 'Antigravity' }));
+
+    expect(document.querySelector('.agent-line')?.textContent).toContain('Antigravity');
+    expect(screen.getByRole('button', { name: 'Model, Gemini 4 Neon' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Effort, High' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Permissions, Default' })).toBeInTheDocument();
+    // agy offers no speed tier.
+    expect(rowLabels()).not.toContain(strings.newSession.speed);
+  });
+
+  it.runIf(fixturesAvailable())(
+    'says what the device says when agy is not signed in there (A64)',
+    async () => {
+      const reply = readFixture<{ error: { code: string; message: string } }>(
+        'app/reply.error.antigravity-signed-out.json',
+      );
+      const answer = vi.mocked(rpc).getMockImplementation();
+      vi.mocked(rpc).mockImplementation(async (method, params) => {
+        if (method === 'session.create') throw new RequestError(reply.error);
+        return answer?.(method, params) as never;
+      });
+      try {
+        renderDrawer();
+        await userEvent.click(screen.getByRole('button', { name: 'Antigravity' }));
+        await userEvent.click(screen.getByRole('button', { name: new RegExp(strings.newSession.start) }));
+
+        expect(await screen.findByText(reply.error.message)).toBeInTheDocument();
+      } finally {
+        if (answer) vi.mocked(rpc).mockImplementation(answer);
+        // The tests after this one read the first session.create they find.
+        vi.mocked(rpc).mockClear();
+      }
+    },
+  );
 
   it('names the chosen agent under the row', async () => {
     renderDrawer();

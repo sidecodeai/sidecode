@@ -236,8 +236,13 @@ describe('what a device row says', () => {
       const agents = device.agents.filter((agent) => agent.available);
       const logos = row.querySelectorAll('.device-agent');
       expect(logos).toHaveLength(agents.length);
-      // No name and no version anywhere in the strip — only the marks.
-      expect(row.querySelector('.device-agents')?.textContent).toBe('');
+      // No name and no version anywhere in the strip — only the marks, a letter for an agent
+      // with no vector yet (Antigravity's "A", A64).
+      const strip = row.querySelector('.device-agents')?.textContent ?? '';
+      for (const agent of agents) {
+        expect(strip).not.toContain(agentLabel(agent.agent));
+        if (agent.version) expect(strip).not.toContain(agent.version);
+      }
 
       for (const [index, agent] of agents.entries()) {
         const label = agentLabel(agent.agent);

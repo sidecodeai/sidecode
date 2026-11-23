@@ -6,8 +6,8 @@
  *
  * The box is one em square and sits on the cap height of its line, so a logo
  * reads as the same size as the name it stands beside or replaces. An agent
- * nobody knows has no vector: it is marked by the first letter of its id, in
- * the same box.
+ * with no vector here — one nobody knows, or one whose official mark we do not
+ * have yet — is marked by the first letter of its id, in the same box.
  *
  * The vectors are the vendors' published marks (Simple Icons for Claude and
  * OpenAI, pi.dev for pi, the Grok mark). They identify the product and are used

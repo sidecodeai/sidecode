@@ -1,7 +1,7 @@
 /**
  * A33 — the words a device page puts on an account and its windows.
  * `docs/DESIGN.md` § "A device has a page" and § "Quota is a meter, drawn for
- * accounts only": the vendor comes from a table of three ids, everything else
+ * accounts only": the vendor comes from a table of four ids, everything else
  * the device reported is printed as it arrived, and the meter's colour band is
  * the ink colour, the warning colour past 80 and the danger colour at 100.
  */
@@ -20,10 +20,13 @@ import type { AgentAccount } from '../src/protocol/types';
 afterEach(() => useSettings.setState({ language: 'en' }));
 
 describe('the vendor a credential belongs to', () => {
-  it('names the three ids the apps know', () => {
+  it('names the four ids the apps know', () => {
     expect(vendorLabel('anthropic')).toBe('Anthropic');
     expect(vendorLabel('openai')).toBe('OpenAI');
     expect(vendorLabel('xai')).toBe('xAI');
+    // A64: Antigravity's account, with no plan, tier or email to follow it.
+    expect(vendorLabel('google')).toBe('Google');
+    expect(signInLine({ provider: 'google', method: 'account' })).toBe('Google account');
   });
 
   it('prints an id it does not know as itself', () => {

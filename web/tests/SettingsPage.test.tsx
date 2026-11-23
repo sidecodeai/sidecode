@@ -18,7 +18,7 @@ import { useAuth } from '../src/stores/auth';
 import { useConnection } from '../src/stores/connection';
 import { usePreferences } from '../src/stores/preferences';
 import { useSettings } from '../src/stores/settings';
-import { strings } from '../src/strings';
+import { stringTables, strings } from '../src/strings';
 import {
   address,
   captions,
@@ -393,6 +393,17 @@ describe("settings: while you're away", () => {
     expect(toggle).toHaveAttribute('aria-checked', 'false');
     expect(toggle).toBeEnabled();
     expect(screen.getByText(s.resumeAfterLimitNote)).toBeInTheDocument();
+  });
+
+  // A35 continues the agents whose limits the device can read, A64 added Antigravity; Grok Build
+  // and pi take no part.
+  it('names the agents the resume switch continues, in both languages', () => {
+    expect(stringTables.en.settings.resumeAfterLimitNote).toBe(
+      'When Claude Code, Codex or Antigravity stops at a usage limit, the device continues the session a minute after the limit resets.',
+    );
+    expect(stringTables['zh-Hans'].settings.resumeAfterLimitNote).toBe(
+      'Claude Code、Codex 或 Antigravity 因用量限额停下时，设备会在限额恢复一分钟后继续该会话。',
+    );
   });
 
   it('draws it on when the account has turned it on', () => {

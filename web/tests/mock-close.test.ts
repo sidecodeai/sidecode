@@ -26,15 +26,17 @@ const plan = (id: string) => {
 };
 
 describe('closing a session a terminal holds, on the mock device', () => {
-  it('lists close_terminal, last, for every agent on the Mac, and for nothing on the CI runner', () => {
+  it('lists close_terminal, last, for every agent on the Mac but Antigravity, and for nothing on the CI runner', () => {
     const listing = (deviceId: string) =>
       devices
         .find((d) => d.device_id === deviceId)
         ?.agents.filter((a) => a.capabilities.includes('close_terminal'))
         .map((a) => a.agent);
+    // A64: the device never owns an agy terminal, so Antigravity has no Close.
     expect(listing('dev-mac')).toEqual(['claude', 'codex', 'grok', 'pi']);
     expect(listing('dev-ci')).toEqual([]);
     for (const agent of devices.find((d) => d.device_id === 'dev-mac')?.agents ?? []) {
+      if (agent.agent === 'antigravity') continue;
       expect(agent.capabilities.at(-1), agent.agent).toBe('close_terminal');
     }
   });

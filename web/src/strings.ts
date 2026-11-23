@@ -639,7 +639,7 @@ export const en = {
     /** A35: the one switch the account owns, not the browser. */
     resumeAfterLimit: 'Resume after the limit resets',
     resumeAfterLimitNote:
-      'When Claude Code or Codex stops at a usage limit, the device continues the session a minute after the limit resets.',
+      'When Claude Code, Codex or Antigravity stops at a usage limit, the device continues the session a minute after the limit resets.',
     resumeUnavailable: 'Your gateway does not offer this yet.',
 
     /** A44: the web transcribes only on the gateway, so this row names it and offers nothing. */
@@ -829,12 +829,17 @@ export const strings: StringTable = new Proxy({} as StringTable, {
   has: (_target, key) => key in table(),
 });
 
-/** Product names, never translated. A25 added the last two. */
+/**
+ * Product names, never translated. A25 added Grok Build and pi, and A64
+ * Antigravity, Google's `agy`, which keeps the first-letter mark until it has
+ * an official vector (`components/AgentLogo.tsx`).
+ */
 export const agentLabels: Record<string, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
   grok: 'Grok Build',
   pi: 'pi',
+  antigravity: 'Antigravity',
 };
 
 export function agentLabel(agent: string): string {
@@ -864,6 +869,8 @@ export const vendorLabels: Record<string, string> = {
   anthropic: 'Anthropic',
   openai: 'OpenAI',
   xai: 'xAI',
+  // A64: Antigravity's account.
+  google: 'Google',
 };
 
 export function vendorLabel(provider: string): string {

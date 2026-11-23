@@ -344,6 +344,57 @@ export const piAgent: AgentInfo = {
 };
 
 /**
+ * A64: Antigravity, Google's `agy`, driven over its own ACP server, exactly as
+ * `protocol/fixtures/objects/agent.antigravity.json` has a `device.agents`
+ * reply carry it: a Google account whose four windows, two for each model
+ * group, come from agy's own usage query. It has no session in the demo.
+ */
+export const antigravityAgent: AgentInfo = {
+  agent: 'antigravity',
+  available: true,
+  version: '1.5.14',
+  path: '/Users/me/.local/bin/agy',
+  models: [
+    { id: 'gemini-4-neon', label: 'Gemini 4 Neon' },
+    { id: 'gemini-4-carbon', label: 'Gemini 4 Carbon' },
+    { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash' },
+  ],
+  default_model: 'gemini-4-neon',
+  permission_modes: [
+    { id: 'default', label: 'Default' },
+    { id: 'accept-edits', label: 'Accept edits' },
+    { id: 'auto', label: 'Auto' },
+    { id: 'plan', label: 'Plan' },
+  ],
+  default_permission_mode: 'default',
+  efforts: [
+    { id: 'low', label: 'Low' },
+    { id: 'medium', label: 'Medium' },
+    { id: 'high', label: 'High' },
+    { id: 'xhigh', label: 'Extra' },
+  ],
+  default_effort: 'high',
+  capabilities: ['worktree', 'interrupt', 'queue', 'steer', 'attachments', 'effort', 'history', 'commands'],
+  attach: null,
+  accounts: [
+    {
+      provider: 'google',
+      method: 'account',
+      limits: [
+        { window_minutes: 300, scope: 'Gemini Models', used_percent: 25, resets_at: 1789482000000 },
+        { window_minutes: 10080, scope: 'Gemini Models', used_percent: 12.5, resets_at: 1789837200000 },
+        { window_minutes: 300, scope: 'Claude and GPT models', used_percent: 0 },
+        { window_minutes: 10080, scope: 'Claude and GPT models', used_percent: 0 },
+      ],
+      limits_checked_at: 1789470000000,
+    },
+  ],
+};
+
+/** `hello` and `agents.updated` carry no account for it: the device reads nothing of agy's sign-in. */
+export const antigravityHello: AgentInfo = (({ accounts: _accounts, ...hello }) => hello)(antigravityAgent);
+
+/**
  * A27 — what each agent offers when an app asks `session.commands`.
  *
  * The lists follow what the real agents advertise: Codex has one source, so it
@@ -488,7 +539,7 @@ const ciAgents: AgentInfo[] = [claudeNoShim, codexNoDaemon, grokNoLeader].map(be
 
 /** A33: what a `device.agents` reply answers with, per device. */
 export const deviceAgents: Record<string, AgentInfo[]> = {
-  'dev-mac': macAgents,
+  'dev-mac': [...macAgents, antigravityAgent],
   'dev-ci': ciAgents,
 };
 
@@ -510,7 +561,7 @@ export const devices: Device[] = [
     terminal: true,
     // A25: the one device that knows all four, so the picker, the card and a
     // session of each can be seen in development.
-    agents: macAgents.map(withoutLimits),
+    agents: [...macAgents.map(withoutLimits), antigravityHello],
   },
   {
     device_id: 'dev-ci',
