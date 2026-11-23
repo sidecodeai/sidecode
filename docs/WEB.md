@@ -46,9 +46,10 @@ terminal-controlled, shared through the Claude channel, shared through the Codex
 terminal sessions on a device that has neither the shim nor the Codex daemon, three sessions whose
 CLI exited (`control: "none"`) and two archived by hand, spread over both devices so every device
 group has both halves of an Archive under it. Between them they show all five status-dot tones.
-One of the two devices advertises all four agents (A25, A26) — the two newest copied from
-`protocol/fixtures/objects/agent.grok.json` and `agent.pi.json`, which `tests/agents.test.tsx`
-asserts they still equal — and carries one session of each: a Grok Build session a terminal holds
+One of the two devices advertises all five agents (A25, A26, A64) — the three newest copied from
+`protocol/fixtures/objects/agent.grok.json`, `agent.pi.json` and `agent.antigravity.json`, which
+`tests/agents.test.tsx` asserts they still equal — and carries one session of each but Antigravity,
+which has none, so no session count changes with it: a Grok Build session a terminal holds
 inside Grok's leader, which the device has joined (`control: "shared"`, A28), a second Grok Build
 session an app started, so its command list can actually be opened, and a pi session on the
 `on-request` permission mode its extension enforces. The other device carries a Grok Build agent
@@ -118,7 +119,10 @@ windows, a Codex `pro` account whose five-hour window is 84 % spent, so one mete
 attention colour, an xAI account the leader exposes no windows for, pi's two providers — an
 Anthropic subscription and an *OpenAI API key · api.relay.example* — and on the other device a
 Claude Code signed in nowhere, a Codex account whose windows failed to read, and a Grok Build the
-machine's older client never looked at. `withoutLimits` in `mock/fixtures.ts` is what divides them:
+machine's older client never looked at. Antigravity's Google account, with the four windows `agy`'s
+usage query reports — five hours and a week for each model group — is in the reply alone, since the
+device reads nothing of `agy`'s sign-in and its `hello` carries no account (A64). For the others
+`withoutLimits` in `mock/fixtures.ts` is what divides them:
 the device list and `hello` carry the accounts alone, and only the reply to `device.agents` carries
 `limits`, `limits_error` and `limits_checked_at`, 900 ms later, so the page's *Checking…* state is
 really seen. The mock and the tests share
@@ -606,10 +610,10 @@ draw them**, and the jump-to-latest count does not count them there. `drawnAt` i
 
 ## Paused by the usage limit (A35)
 
-A Claude Code or Codex turn the vendor's five-hour or weekly window ended closes with
-`stop_reason: "error"` and `limit {window_minutes, resets_at}`, and the device schedules a resume for
-a minute after the reset when the account has asked for one. Four surfaces carry it, and one small
-pure module carries every word.
+A Claude Code, Codex or Antigravity (A64) turn the vendor's five-hour or weekly window ended closes
+with `stop_reason: "error"` and `limit {window_minutes, resets_at}`, and the device schedules a resume
+for a minute after the reset when the account has asked for one; the switch's sentence in Settings
+names those three agents. Four surfaces carry it, and one small pure module carries every word.
 
 **The switch is the account's, not the browser's.** `src/stores/preferences.ts` holds
 `Preferences | undefined`: `hello.preferences` seeds it, a `preferences.updated` frame replaces it,
@@ -963,14 +967,16 @@ Nothing of this reaches the gateway.
   not persisted either. Unlike the agent filter the chat sidebar does not read it: a conversation
   changes status under the reader's eyes, and a filtered sidebar would drop the row of the
   conversation that is open. Its rule, its mapping and its empty state are § "Filtering by status".
-- **Four agents, each drawn as its own logo** (A25, A26). `agentLabels` in `src/strings.ts` names
-  Claude Code, Codex, Grok Build and pi, and an id it does not know is drawn as itself. The mark
+- **Five agents, each drawn as its own mark** (A25, A26, A64). `agentLabels` in `src/strings.ts`
+  names Claude Code, Codex, Grok Build, pi and Antigravity, the same in both languages, and an id it
+  does not know is drawn as itself. The mark
   beside or instead of a name is `src/components/AgentLogo.tsx`: one inline `<svg>` per agent with
   the vendor's published vector (Simple Icons for Claude and OpenAI, pi.dev for pi, the Grok mark),
   `fill="currentColor"` and no colour of its own, in a box one em square sitting on the cap height
   of its line, so a logo is the size of the text it stands beside and inherits its ink. An agent
-  with no vector falls back to the first letter of its id in the same box, which is what Cursor now
-  gets (A26 withdrew it). The component is used in the new-session form's agent control, where the
+  with no vector falls back to the first letter of its id in the same box, which is what Antigravity
+  gets until there is an official vector for it (A64) and what Cursor now gets (A26 withdrew it).
+  The component is used in the new-session form's agent control, where the
   logo stands alone because the names do not fit side by side and the line under the row names the
   one that is chosen, in the agent filter's rows and its button, on the session-row chip and in a
   device row's agent list; every segment still carries its agent's name as its accessible name and
@@ -1747,7 +1753,8 @@ one sign-in line per account. A device with no agents says so in one line.
 
 **The words on an account** are `features/devices/accounts.ts`, pure functions the tests drive
 directly. The vendor comes from `vendorLabels` in `src/strings.ts` — `anthropic` → Anthropic,
-`openai` → OpenAI, `xai` → xAI — and a provider that table does not know is printed as the device
+`openai` → OpenAI, `xai` → xAI, `google` → Google (Antigravity's, A64) — and a provider that table
+does not know is printed as the device
 reported it. Both methods lead with that name: an account reads *Anthropic account · Max · Max 5x ·
 me@example.com*, with every part after the first drawn only when the device reported it, and a key
 reads *Anthropic API key*, or *OpenAI API key · api.relay.example* when it goes to a third-party

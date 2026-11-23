@@ -1,13 +1,13 @@
 # SideCode
 
-Control the coding agents you already run — Claude Code, Codex, Grok Build and pi — from your
-phone or a browser. SideCode (随码 in Chinese) is a self-hosted control plane: a **gateway** on
-your own server sits between the **developer machines** where the agents are installed and the
-**apps** you carry. Add a machine with one pairing command, see every session on it, and drive a
-session the way you drive a chat: send text or dictate it, watch answers, thinking, tool calls and
-diffs stream in, approve or deny a tool, answer a question, stop a turn, queue the next one. A
-`claude` or a bare `codex` you started yourself in a terminal is not just mirrored: the device
-attaches to the live session, so you can pick it up from a phone without killing what it is
+Control the coding agents you already run — Claude Code, Codex, Grok Build, pi and Antigravity —
+from your phone or a browser. SideCode (随码 in Chinese) is a self-hosted control plane: a
+**gateway** on your own server sits between the **developer machines** where the agents are
+installed and the **apps** you carry. Add a machine with one pairing command, see every session on
+it, and drive a session the way you drive a chat: send text or dictate it, watch answers, thinking,
+tool calls and diffs stream in, approve or deny a tool, answer a question, stop a turn, queue the
+next one. A `claude` or a bare `codex` you started yourself in a terminal is not just mirrored: the
+device attaches to the live session, so you can pick it up from a phone without killing what it is
 running. Model credentials never leave the machine; the gateway routes and indexes but never runs
 an agent.
 
@@ -199,9 +199,10 @@ The checks every change has to pass, and a smoke flow for a release, are in
   mode or effort mid-session.
 - **Agents** — Claude Code through `claude-agent-sdk`, Codex through its app-server JSON-RPC
   interface, either as a private process per session or as a second client on the machine's shared
-  app-server daemon, Grok Build over its ACP JSON-RPC, and pi over its RPC mode with an extension of
-  the device's own loaded into every pi process. Every agent is normalised to one block timeline,
-  so the UI has no agent-specific code paths.
+  app-server daemon, Grok Build over its ACP JSON-RPC, pi over its RPC mode with an extension of
+  the device's own loaded into every pi process, and Antigravity as a client of its own `agy acp`,
+  without terminal takeover ([docs/ANTIGRAVITY.md](docs/ANTIGRAVITY.md)). Every agent is normalised
+  to one block timeline, so the UI has no agent-specific code paths.
 - **Slash commands** — typing `/` in the composer lists what the session's agent offers, the way its
   terminal does.
 - **Timeline** — streamed assistant Markdown, collapsible thinking, one-line tool rows that expand

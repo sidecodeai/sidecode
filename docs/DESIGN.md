@@ -89,9 +89,11 @@ plan, the tier and the email, each only when reported; *Anthropic API key* when 
 when the device found neither. The plan is the vendor's own word with its first letter raised
 (`max` → *Max*); the tier is printed exactly as the device reported it, because the device already
 put it into words. pi, which signs in per provider, gets one such line per provider. The vendor's name comes
-from a small table the app keeps for the ids it knows (`anthropic`, `openai`, `xai`); an id it does
-not know is printed as itself. Nothing is drawn for what the agent does not report, and the same
-three actions the row offers — Rename, Update, Revoke — are not repeated on the page.
+from a small table the app keeps for the ids it knows (`anthropic`, `openai`, `xai`, `google`); an
+id it does not know is printed as itself. Antigravity's account reads *Google account*, its windows
+named by `agy`'s model groups (*5-hour · Gemini Models*). Nothing is drawn for what the agent does
+not report, and the same three actions the row offers — Rename, Update, Revoke — are not repeated
+on the page.
 
 **Quota is a meter, drawn for accounts only.** Under an account line the page draws the vendor's
 rate-limit windows the device could read, one row each: the window's name — *5-hour*, *7-day*,
@@ -279,7 +281,7 @@ caption:
 | Group | Rows (title, then the sentence under it) |
 | --- | --- |
 | **Account** (its section's rows) | **Users** (admin role) — "Accounts on this gateway, and whether anyone can create one." · **Change password** (every account but the built-in `admin`) — "The current password and the new one." · **Sign out** — "Cached sessions and drafts leave this device. Nothing changes on your machines." |
-| **While you're away** | **Notify me** — "Which device and session needs you, and nothing else." · **Resume after the limit resets** (A35) — "When Claude Code or Codex stops at a usage limit, the device continues the session a minute after the limit resets." |
+| **While you're away** | **Notify me** — "Which device and session needs you, and nothing else." · **Resume after the limit resets** (A35) — "When Claude Code, Codex or Antigravity stops at a usage limit, the device continues the session a minute after the limit resets." |
 | **Voice** | **Transcribe** — on the phone a menu, On this iPhone or Gateway, with the chosen backend's own sentence ("Audio is streamed to your gateway, which recognises the language itself." for Gateway); on the web, which only transcribes on the gateway, the word Gateway and "Your gateway transcribes and recognises the language itself.", or "This gateway has no transcription service configured." · **Dictation language** (the phone, only while it recognises speech itself, A44) — "The language you speak. The recogniser on this iPhone listens for one at a time." · **Polish dictation with AI** — "Sends what you dictated and the last few messages to this gateway's model. Nothing is sent while it is off." · while it is on, **Model** — "From the list this gateway serves." and **Strength** — "Moderate cleans up. Strong also restructures and resolves references." |
 | **Reading** | **Language** — "The app's own words only; what the agent wrote stays as written." · **Detail** — "Simple shows only what is written to you. Detailed adds thinking, tool calls and the task list." · **Task board** (where the gateway reports `board`, A62) — a switch under "Lists what you asked for in each conversation, what is being done and what is left. For conversations you opened in the last 7 days, recent messages go through this gateway to a third-party AI model after each round and when you open them. Tool output is not sent. Nothing is sent while it is off, and turning it off deletes every board." It shows the account's stored `task_board`; turning it off is always possible while it is on, whatever `board.enabled` says, and asks nothing; turning it on shows the disclosure first and happens only when the account can use the board (§ "The task board") |
 
@@ -426,9 +428,12 @@ app, keyed by gateway and username; the gateway holds no settings for anyone.
 
 ## Agents
 
-**Four agents, one vocabulary.** The device knows Claude Code (`claude`), Codex (`codex`), Grok
-Build (`grok`) and pi (`pi`), and the apps name them exactly so; an id nobody knows renders as
-itself. Cursor was withdrawn (protocol A26) until it can be exercised against a signed-in Cursor.
+**Five agents, one vocabulary.** The device knows Claude Code (`claude`), Codex (`codex`), Grok
+Build (`grok`), pi (`pi`) and Antigravity (`antigravity`, A64), and the apps name them exactly so;
+an id nobody knows renders as itself. Cursor was withdrawn (protocol A26) until it can be exercised
+against a signed-in Cursor. Antigravity is the one agent supported without terminal takeover
+([ANTIGRAVITY.md](ANTIGRAVITY.md)): it has no Take over, no Rename, no plan card and no todos, its
+plan mode is only a permission mode, and its titles are the ones `agy` writes.
 
 **The mark is the agent's own logo.** Where an agent is shown by something smaller than its name
 — the agent control of the new-session form, the filter menu, the chip on a session row, a
@@ -440,7 +445,8 @@ colour. Where there is room the name follows the logo; in the agent control the 
 and the line under the control names the chosen agent. An agent nobody knows is marked by the
 first letter of its id in the same box. The vectors are the vendors' published marks (Simple Icons
 for Claude and OpenAI, pi.dev for pi, the Grok mark), used to identify the product and for nothing
-else; the letters C, X, G and π are gone.
+else; the letters C, X, G and π are gone. Antigravity is marked by the letter A for now, as an agent
+nobody knows is, until Google's official vector and its licence are available.
 
 **What an agent does not have is not drawn.** The composer row and the new-session form offer
 exactly what the device advertises: an agent whose `permission_modes` is empty shows no permission
@@ -465,6 +471,14 @@ daemon is — once `rc-client pi setup` has been run on that device; without the
 terminal pi session does not exist for the apps, and nothing is shown for it. An approval on a
 shared pi session is one question asked in two places, the terminal dialog and the app's block;
 whichever answers first wins and the other side is told, as A20 already says for Claude.
+Antigravity has no way into a terminal (A64), and `agy` tells a client nothing about another
+holder, so the device errs towards holding. While an `agy` the device did not start names a
+conversation or runs in its directory, that conversation is a terminal-held session, read-only and
+never updated live: there is no Take over, and the composer cannot send until that `agy` quits, when
+the row goes back to the device or to the Archive. A session the device created and still holds is
+held only by an `agy` that names it. A conversation known only from `agy`'s own list sits in the
+Archive with an empty transcript until a message from an app continues it; its earlier turns then
+appear first, followed by the new message.
 
 ## Session lists: by device, then by activity
 
@@ -543,9 +557,9 @@ device is driving — `control: "remote"`, whoever created it, not archived — 
 Archive while its agent ran on in the machine's background, and then climbed back out the moment
 that agent spoke, was the bug this replaces. Close stops the agent's work and ends what the device
 holds for it — Claude's CLI, pi's process, the Codex thread (archived in Codex too), the Grok
-leader session — and only then does the row move to the Archive, marked "Archived", by the rule
-above; `session.archive` stays the frame. While the session is working (its dot green) the app asks
-first — "Close this session?" over "The agent is still working; what it has not finished is lost."
+leader session, Antigravity's `agy acp` — and only then does the row move to the Archive, marked
+"Archived", by the rule above; `session.archive` stays the frame. While the session is working (its
+dot green) the app asks first — "Close this session?" over "The agent is still working; what it has not finished is lost."
 with Close and Cancel — and an idle one closes on the tap, because there is nothing to lose. The
 web row's trailing button and the phone's swipe and context menu carry it, with a circled cross
 (lucide `CircleX`, SF `xmark.circle`); it is the row's only swipe action and the only control drawn
@@ -831,6 +845,8 @@ booleans on the agent. Nothing in either app asks which agent it is looking at.
 | `shared_settings` | The model card and the permission-mode picker | model and effort (A40) | on | on | on |
 | `shared_attachments` | The attachment button, and pasted files | on (A49) | on | on | on (A49) |
 
+Antigravity has no attachment (`attach` is null, A64), so none of its conversations is attached.
+
 A control the attachment cannot drive is hidden, not disabled with a caption, and nothing explains
 its absence in the composer. A setting the attachment leaves to the terminal is the one exception,
 shown rather than offered (A17, above): on a Claude channel session that is the permission mode,
@@ -845,8 +861,10 @@ stays "Send". Claude does not advertise `steer`, but a shared Claude session ste
 its device reports `shared_steer`: the message reaches the running turn at its next step, and the
 composer and the status line read exactly as they do for Codex. A Claude session the device started,
 or a shared one on a device that does not report `shared_steer`, keeps "will be queued" and a
-"Queue" button. The delivery chips below therefore belong in practice to the sessions that queue — a
-steered message rarely waits.
+"Queue" button. Antigravity advertises `steer` as Codex does, but while one of its approvals or
+questions is open the device queues the message instead and sends it when the turn ends (A64), and
+the app draws what the reply says. The delivery chips below therefore belong in practice to the
+sessions that queue — a steered message rarely waits.
 
 A steered message is drawn where the agent reads it, not where it was sent. Codex takes a steer at
 its next step, after the sentence it was already writing, and the terminal shows the prompt there;
@@ -1201,7 +1219,8 @@ view the same way.
 - The number of options is the agent's business too. A relayed Claude prompt offers Allow and Deny;
   a Codex prompt on the shared daemon can offer four — Allow, Allow for this session, Always allow
   commands like this, Deny — and they stack between the primary and the danger button, wrapping
-  inside the card on a phone. Nothing in the UI counts them.
+  inside the card on a phone; an Antigravity prompt offers Allow and Deny, and Deny ends the turn
+  (A64). Nothing in the UI counts them.
 - Questions support several questions at once, single or multiple choice, free text, and secret
   fields. A secret field says "Value is not stored or logged".
 - **A question is answered where you are.** On an attached Claude Code session the terminal shows
@@ -1561,8 +1580,9 @@ the agent's bubble, and the work waited for someone to notice. The rule (A35):
 so once, and the person can see and end every such resume where the session is.**
 
 - **One switch, on the account.** The "While you're away" group of Settings holds one switch,
-  "Resume after the limit resets", with one sentence under its title: "When Claude Code or Codex
-  stops at a usage limit, the device continues the session a minute after the limit resets." It is
+  "Resume after the limit resets", with one sentence under its title: "When Claude Code, Codex or
+  Antigravity stops at a usage limit, the device continues the session a minute after the limit
+  resets." It is
   off until the person
   turns it on, and it is the account's, not the phone's: the gateway keeps it, so the browser, the
   phone and every device read the same value, and turning it off anywhere cancels every pending
@@ -1614,6 +1634,9 @@ so once, and the person can see and end every such resume where the session is.*
   after the limit reset") and when it could not ("mac-studio-office: not resumed"); a cancel the
   person made themselves is not announced. The time is never in the push — the gateway does not
   know the phone's time zone — and is read in the app.
+- **Antigravity** takes part (A64). Words that read like `agy`'s quota message only make the device
+  ask `agy`'s own usage query afresh, and a window it reports used up pauses the session exactly as
+  above.
 - **Grok Build and pi** report no limit stop the device can read. Their turns end as they always
   did, and no resume is offered for them until they do; the device reads every agent's limit signal
   in one place so one that gains a signal joins without a change to the wire.

@@ -3495,8 +3495,8 @@ daemon for a change to take effect.
 | `gateway_origin` | from enrollment | The gateway this device dials |
 | `device_id`, `device_token` | from enrollment | The device's identity and its bearer token |
 | `name` | the hostname | The name the device enrolled with, which the apps show until it is renamed there. The daemon still sends it in `hello`, where the gateway does not apply it, so editing it afterwards renames nothing (A50) |
-| `[mirror] max_sessions` | `50` | How many terminal sessions the initial mirror import publishes |
-| `[mirror] max_age_days` | `14` | How far back that import reaches |
+| `[mirror] max_sessions` | `50` | How many terminal sessions the initial mirror import publishes, and how many conversations Antigravity's list (`agy`'s `session/list`) publishes at most (A64) |
+| `[mirror] max_age_days` | `14` | How far back that import reaches, and how far back Antigravity's list reaches |
 | `[claude] setting_sources` | `["project", "local"]` | Which Claude settings layers a remote session loads |
 
 Environment overrides, useful for development and for unusual installs: `RC_CLIENT_HOME` moves the
