@@ -43,7 +43,7 @@ amended field names throughout.
 | gateway | The VPS service. Authenticates users and devices, routes frames, indexes sessions, buffers events for replay, proxies speech-to-text, dictation polish and push, and keeps task boards (A62). It never runs an agent and never holds an agent's credentials; the only model keys it may hold are the operator's own for speech-to-text, for polishing dictation (A29) and for task boards (A62). |
 | device | A developer machine running `rc-client`. It drives the locally installed agents and is the source of truth for session history. |
 | app | The web UI or the iOS app. Apps never talk to devices directly. |
-| agent | `"claude"` (Claude Code), `"codex"` (Codex CLI), `"grok"` (Grok Build) or `"pi"` (the pi coding agent) (A25, A26). The field is an **extensible string**: a UI that meets an unknown agent renders it generically, using the id as the label. |
+| agent | `"claude"` (Claude Code), `"codex"` (Codex CLI), `"grok"` (Grok Build), `"pi"` (the pi coding agent) or `"antigravity"` (Google's Antigravity CLI, `agy`) (A25, A26, A64). The field is an **extensible string**: a UI that meets an unknown agent renders it generically, using the id as the label. |
 | session | One conversation with one agent on one device. `session_id` is device-local (for Claude it equals the Claude session id, for Codex the thread id). Global identity is the pair (`device_id`, `session_id`). |
 | block | One renderable unit in a session timeline. |
 | seq | Per-session, monotonically increasing integer assigned by the device to every session event. It survives device restarts and is the replay cursor. |
@@ -842,7 +842,7 @@ The agent and option arrays are shortened here; the fixture holds the full objec
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `agent` | string | yes | `claude`, `codex`, `grok`, `pi`, or a future id. Never assume a closed set. |
+| `agent` | string | yes | `claude`, `codex`, `grok`, `pi`, `antigravity` (A64), or a future id. Never assume a closed set. |
 | `available` | boolean | yes | False when the binary is missing or will not start |
 | `version` | string \| null | yes | |
 | `path` | string \| null | yes | Resolved binary path |
@@ -853,8 +853,8 @@ The agent and option arrays are shortened here; the fixture holds the full objec
 | `efforts` | `LabeledId[]` | yes | Empty array when the agent has no effort levels |
 | `default_effort` | string \| null | yes | |
 | `speeds` | `LabeledId[]` | no | Speed tiers the agent can run a session at beyond its standard speed, for example Codex's `priority` ("Fast"); empty or absent when it has none (amendment A21) |
-| `capabilities` | string[] | yes | Subset of `worktree`, `takeover`, `interrupt`, `queue`, `steer`, `attachments`, `effort`, `history`, `commands`, `rename`, `close_terminal`. `commands` means the agent's sessions can list and run slash commands from an app through `session.commands` and `session.command` (A27); Codex, Grok Build and pi carry it, Claude does not. `rename` means the device can rename the agent's sessions in the agent itself through `session.set` with `title` (A55); Claude Code, Codex and pi carry it, Grok Build only while its leader mode is ready (`attach_ready`, A28). `close_terminal` means the device can end the agent's CLI in the terminal that holds one of its sessions (`control` `terminal` or `shared`), which is what Close on such a row asks for (6.3, A61); Claude Code, Codex and pi carry it, Grok Build only while its leader mode is ready, as `rename` |
-| `attach` | `channel` \| `daemon` \| `extension` \| `leader` \| null | no | How this agent's terminal sessions can be attached. `channel` is the Claude channel shim, `daemon` the Codex shared app-server, `extension` an extension of the device's own that the agent loads into every one of its processes (pi, A26), `leader` Grok Build's leader process — one shared backend per machine that its TUI joins when `[cli] use_leader` is on and that the device joins as another ACP client (A28). Null or absent means terminal sessions can only be taken over or resumed. |
+| `capabilities` | string[] | yes | Subset of `worktree`, `takeover`, `interrupt`, `queue`, `steer`, `attachments`, `effort`, `history`, `commands`, `rename`, `close_terminal`. `commands` means the agent's sessions can list and run slash commands from an app through `session.commands` and `session.command` (A27); Codex, Grok Build, pi and Antigravity (A64) carry it, Claude does not. `rename` means the device can rename the agent's sessions in the agent itself through `session.set` with `title` (A55); Claude Code, Codex and pi carry it, Grok Build only while its leader mode is ready (`attach_ready`, A28), and Antigravity never, since nothing `agy` offers a client renames a conversation (A64). `close_terminal` means the device can end the agent's CLI in the terminal that holds one of its sessions (`control` `terminal` or `shared`), which is what Close on such a row asks for (6.3, A61); Claude Code, Codex and pi carry it, Grok Build only while its leader mode is ready, as `rename`, and Antigravity never (A64) |
+| `attach` | `channel` \| `daemon` \| `extension` \| `leader` \| null | no | How this agent's terminal sessions can be attached. `channel` is the Claude channel shim, `daemon` the Codex shared app-server, `extension` an extension of the device's own that the agent loads into every one of its processes (pi, A26), `leader` Grok Build's leader process — one shared backend per machine that its TUI joins when `[cli] use_leader` is on and that the device joins as another ACP client (A28). Null or absent means terminal sessions can only be taken over or resumed. Antigravity reports null: a conversation is continued from an app only while no `agy` the device did not start may have it open, and never joined (4.4, A64). |
 | `attach_ready` | boolean | no | Whether the device is prepared to attach: for Claude the `claude` shim is installed and on `PATH`, for Codex a handshake on the shared daemon socket succeeds, for pi the device's extension is installed in pi's global extension directory at the current build, for Grok Build the person's own `~/.grok/config.toml` turns `[cli] use_leader` on and requests no sandbox profile, so the next `grok` started on that machine joins the leader (A28). Apps use it only to word the hint on a `terminal` session. |
 | `shared_interrupt` | boolean | no | Whether the attachment can interrupt a running turn. `session.stop` on a `shared` session needs this **and** capability `interrupt`. False when absent. |
 | `shared_settings` | boolean | no | Whether `session.set` for `model`, `permission_mode`, `effort` and `speed` works on a `shared` session. False when absent. |
@@ -867,11 +867,14 @@ The agent and option arrays are shortened here; the fixture holds the full objec
 Anthropic's Pro, Max, Team or Enterprise, OpenAI's Plus, Pro or Business, an xAI account — or an
 API key, possibly pointed at a third-party endpoint. `accounts` says which, one `AgentAccount` per
 credential the agent holds on the device, read from the agent's own files and never from a running
-session. pi holds one per provider it is signed in to; the other three hold at most one.
+session. pi holds one per provider it is signed in to; the others hold at most one. Antigravity's
+comes from neither (A64): the device reads nothing of `agy`'s sign-in, so `hello` and
+`agents.updated` carry no `accounts` for it, and only a `device.agents` reply carries its one
+account, from `agy`'s own usage query (below).
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `provider` | string | yes | The vendor the credential belongs to, as the agent names it: `anthropic`, `openai`, `xai`, or another id. Apps show a known name and otherwise the id |
+| `provider` | string | yes | The vendor the credential belongs to, as the agent names it: `anthropic`, `openai`, `xai`, `google` (A64), or another id. Apps show a known name and otherwise the id |
 | `method` | `account` \| `api_key` | yes | `account` is the vendor's own subscription account, signed in with OAuth; `api_key` is a key |
 | `plan` | string \| null | no | The plan word the vendor records, lowercase as reported: `pro`, `max`, `team`, `enterprise`, `plus`, `business`, `free`… Null or absent when the agent records none |
 | `tier` | string | no | A finer tier when the vendor exposes one, in words the device vouches for: `Max 5x` from Claude's rate-limit tier id `default_claude_max_5x`. Omitted when it only repeats `plan` |
@@ -902,9 +905,26 @@ app that opens a device shows the stored accounts at once and asks `device.agent
 device that is offline has accounts and no meters. `fixtures/objects/agent.claude-attach.json` (an
 Anthropic account with a tier and two windows, one confined to a model), `agent.codex-daemon.json`
 (an OpenAI account on plan `pro` with the shared daemon's two windows), `agent.grok.json` (an xAI
-account with no plan, on a device with Grok's leader mode off and so with no windows) and
-`agent.pi.json` (an Anthropic account beside an OpenAI key) are the worked examples, each as a
-`device.agents` reply would carry it.
+account with no plan, on a device with Grok's leader mode off and so with no windows),
+`agent.pi.json` (an Anthropic account beside an OpenAI key) and `agent.antigravity.json` (a Google
+account with the four windows `agy` reports, two for each of its model groups, A64) are the worked
+examples, each as a `device.agents` reply would carry it.
+
+**Antigravity's windows (A64).** For a `device.agents` reply the device runs `agy`'s own usage
+query, `agy -p "/usage" --output-format json`, which starts no turn and keeps no conversation,
+under a short timeout. A reply asked for within a minute of the last run reuses its answer, and a
+run that fails is stood in for by the last good reading under 30 minutes old, as for Anthropic; the
+device never runs the query on a timer, and runs it otherwise only to confirm a limit stop (7.2).
+`agy` names each model group and the group's windows, `5h` and `weekly`, and each window becomes an
+`AgentLimit`: `window_minutes` 300 or 10080 — a window `agy` names otherwise is left out — `scope`
+the group's name in `agy`'s words (`Gemini Models`), `used_percent` (1 − `remaining_fraction`) ×
+100, and `resets_at` the window's `reset_time`, left out for a window none of which is used, whose
+reset time `agy` gives only as the query's time plus the window. Groups come in `agy`'s order, each
+with its five-hour window first. The account is `provider` `google` and `method` `account`, with no
+`plan`, `tier` or `email`, which the query does not name. When the query fails and nothing can
+stand in, the account carries `limits_error`; when `agy` last answered the device's list of its
+conversations (4.4) with `Authentication required`, the reply carries `accounts: []`, signed in
+nowhere, and the device runs no query.
 
 Capabilities gate the UI. `steer` decides whether a message sent during a running turn is steered or
 queued; `takeover` decides whether a terminal-controlled session offers "Take over"; `history`
@@ -958,11 +978,16 @@ the leader act on the session everyone is in (A28), and `shared_attachments` tru
 | Codex | `untrusted` "Ask for everything", `on-request` "Ask when needed", `never` "Never ask" |
 | Grok Build | `default` "Ask when needed", `acceptEdits` "Auto-accept edits", `auto` "Auto mode", `dontAsk` "Deny unless allowed", `plan` "Plan mode", `bypassPermissions` "Bypass permissions" (A25) |
 | pi | `untrusted` "Ask for everything", `on-request` "Ask when needed", `never` "Never ask". pi itself has no permission system; these are the device's, enforced by the extension it loads into every pi session it drives or is attached to. `on-request` asks before `bash`, `edit`, `write` and every tool that is not one of pi's built-in readers (`read`, `grep`, `find`, `ls`); `untrusted` asks before every tool; `never` is pi's own behaviour (A26) |
+| Antigravity | `default` "Default", `accept-edits` "Accept edits", `auto` "Auto", `plan` "Plan": `agy`'s own session modes by its own ids and names, as it offered them to the newest session the device opened, and these four until the device has opened one (A64) |
 
 Model ids are the agents' native ids. Effort ids are too: Claude's and Codex's reasoning
-efforts, Grok's `reasoning_effort` levels as its model catalogue lists them per model, and pi's
-thinking levels (`off` … `max`). `fixtures/objects/agent.grok.json` and `agent.pi.json` are the two
-worked examples of A25 and A26.
+efforts, Grok's `reasoning_effort` levels as its model catalogue lists them per model, pi's
+thinking levels (`off` … `max`), and Antigravity's thinking levels, `low` "Low", `medium` "Medium",
+`high` "High" and `xhigh` "Extra" (A64). `agy` offers its levels per model and some models none: a
+session keeps its effort across a model change while the new model offers it, takes the nearest
+level below it that the model offers when it does not, and runs with `effort` null on a model with
+no thinking level. `fixtures/objects/agent.grok.json` and `agent.pi.json` are the two worked
+examples of A25 and A26, and `agent.antigravity.json` that of A64.
 
 ### 4.4 Session
 
@@ -1057,10 +1082,11 @@ in it, until it is closed (6.3):
 - when its turn ends, and across a restart or an update, which restore it as `remote` and `idle`
   with no process running; the next message starts one. Every session the device does not hold
   comes back `none`, `stopped` when it is archived.
-- when the device stops its Claude or pi process after 30 minutes unused — no turn running or
-  starting, nothing queued, no request in progress, no subagent holding the turn open. The row
-  stays `remote` and `idle`, and the next message starts the process again. A Codex or Grok session
-  lives in a daemon or a leader the device does not own, and nothing of it is stopped.
+- when the device stops its Claude, pi or Antigravity process after 30 minutes unused — no turn
+  running or starting, nothing queued, no request in progress, no subagent holding the turn open,
+  and for Antigravity no background command or scheduled wake of `agy`'s still running (A64). The
+  row stays `remote` and `idle`, and the next message starts the process again. A Codex or Grok
+  session lives in a daemon or a leader the device does not own, and nothing of it is stopped.
 - when a terminal that took it leaves — a Claude CLI that exits, whether its bridge, a scan or the
   device's watch on the process says so, a pi extension that says goodbye, a Codex TUI or a Grok
   registry entry that is gone, a mirrored file whose writer is gone. The session goes back to
@@ -1073,6 +1099,20 @@ the attachment is accepted; a busy device process still refuses the attachment, 
 `claude --resume` the holder scan finds naming the session, by its command line or Claude Code's own
 record and never by its directory, stops the device's process, and the session becomes `terminal`.
 A pi TUI that loads the session closes the device's own pi, and the TUI's attachment takes over.
+An `agy` the device finds holding a held Antigravity conversation, by the rules of the Antigravity
+table below, has the device stop its own idle `agy acp`, and the session becomes `terminal`; a
+session the device created is held only by an `agy` that names it (A64).
+
+The messages queued for a held session wait while a terminal holds it, whatever the agent (A64).
+The device delivers no queued message into a session whose `control` is `terminal`, and when it
+stops its own process for a terminal it can leave the queue behind, the session turning `terminal`
+and `readonly` with its `queue` as it was. Every entry can still be removed with
+`session.queue_remove` and edited as A43 has it: a `session.send` with `mode: "queue"` and
+`queue_ts` puts the edited words back in their place and is answered `accepted: "queued"`, while
+every other `session.send` to the session is refused with `conflict` (6.3). When the terminal lets
+go and the session is `remote` again, the queue goes out by itself, oldest first, as it does after
+a turn: the device starts the session's process again for it, as a message would, when none runs.
+A session the device does not hold keeps its queue and is not opened for it.
 
 Only what is launched or continued from A58 on is held. A session from before carries no hold: it
 comes back `none` and goes to the Archive when nothing holds it, as before, and a Codex thread or a
@@ -1185,6 +1225,115 @@ does. It sends nothing for a session it does not route and nothing when it lets 
 terminal shares. Apps need no Grok logic: `control` and the five attachment fields of 4.2 say
 everything.
 
+#### `origin` and `control` for Antigravity conversations
+
+Antigravity keeps a person's conversations in one store, which its terminal and every `agy acp`
+share, and the device drives it as an editor does (amendment A64): one `agy acp` for each session
+the device runs, started with no other argument in that session's directory and signed in with the
+person's own `agy` sign-in. `agy` marks a conversation as held with a lock file of its own, in a
+directory the device does not read, and tells an ACP client nothing of it: a second process opens
+the conversation without a word, each goes on from its own copy, and when both write, a message is
+lost. Nor does anything else say who holds a conversation: a terminal's command line names only the
+conversation it started in, which `/resume`, `/switch`, `/fork` or `/new` inside the TUI leave
+behind, and `agy`'s list does not say which client wrote a conversation. There is no backend the
+device could join and nothing to take over (`attach` is null, no `takeover`), so the device derives
+`origin` and `control` conservatively from the `agy` processes it did not start — a TUI, a
+print-mode run, another client's `agy acp` — the first row that applies deciding:
+
+| Situation | `origin` | `control` |
+| --- | --- | --- |
+| A turn of the device's own is running in its `agy acp` | unchanged (`remote` when launched here) | `remote` |
+| Such an `agy` names it on its command line (`--conversation <id>` or `--conversation=<id>`) | `terminal` when the device did not create it, otherwise unchanged | `terminal`; `session.send` and `session.command` are refused with `conflict` |
+| The device created it and still holds it (A58) | unchanged | `remote`; with no process, the next `session.send` opens it in a new one |
+| Such an `agy` runs in the conversation's directory — its working directory is the one `agy`'s list gives the conversation — or, for a conversation `agy` keeps without a directory, runs anywhere on the machine | `terminal` when the device did not create it, otherwise unchanged | `terminal`; `session.send` and `session.command` are refused with `conflict` |
+| The device runs an idle `agy acp` for it, or holds it (A58) and runs none | unchanged | `remote`; with no process, the next `session.send` opens it in a new one |
+| Known only from `agy`'s own list (`session/list`), and nothing holds it | `terminal` when the device did not create it, otherwise unchanged | `none`; the next `session.send` opens it, and the device holds it from then on |
+| Closed (archived), and nothing holds it | unchanged | `none` |
+
+These rules err towards holding. An `agy` running in a project's directory makes every
+conversation of that directory read-only here, whichever conversation it is in, and one running
+anywhere does the same for every conversation `agy` keeps without a directory, until it quits; a
+conversation without a directory is therefore handed over only while no `agy` the device did not
+start runs at all. A session the device created and still holds is held only by an `agy` that names
+it, so the person's terminals in its directory leave it alone. A terminal that reached a
+conversation without naming it, in a way the rules do not watch, goes unseen: by `/resume` from
+another directory, or by `-c` (`--continue`) in the directory of a session the device created and
+holds. Nothing but a message or a command sent to a conversation makes the device open it. The
+device looks for such processes every ten seconds, and again just before it opens a conversation,
+which a holder refuses with `conflict`. A holder of a conversation the device runs an idle process
+for gets it alone, as A58 says: the device stops its own process first. While a turn of the
+device's own is running it cannot stop, so it says once, as a `notice` of level `warn`, "agy is
+running on this computer and may have this conversation open too; messages sent from both may
+conflict.", and when the turn ends, if the holder is still there, gives the conversation up before
+anything queued for it goes out: a message queued meanwhile is not sent then, and waits with the
+rest of the queue for the device to have the conversation again (A58, above). Whenever a queued
+message is about to go out, the device first looks for a holder, so one no ten-second look has seen
+yet takes the conversation before the message leaves. A conversation a holder has reports
+`readonly`: the device sees nothing of the terminal's turns, and the transcript stays as the device
+last had it until the holder quits, when the session becomes `remote` if the device holds it and
+`none` otherwise (A58).
+
+- **Opening a conversation.** A message to a session with no process opens it in a new `agy acp`:
+  with `session/resume`, which replays nothing, when the device has every turn of it — it created or
+  last continued the conversation, and `agy`'s list shows no write since — and otherwise with
+  `session/load`, which replays the whole conversation to the device before it answers. `agy`
+  replays the person's words, its own and each tool once, in its final state and under the
+  tool-call id it had live, without times, images or the text of an embedded file. The device
+  publishes only the rows it has not published before, timed when it read them, so a conversation
+  known only from the list shows no earlier turns until a message continues it, and then shows them
+  before that message. It never opens with `session/load` a conversation `agy` no longer lists,
+  because `agy` would start an empty conversation under that id; the message is refused with
+  `not_found`. In every new process `agy` starts a conversation on the account's default model,
+  thinking level and mode, whatever it ran before, so the device sets the session's own again
+  before the first prompt.
+- **Settings.** `models` and the three defaults are what `agy` offered the newest session the
+  device opened — its `model` session option, and the values it started that session on — empty
+  and null until the device has opened one; `permission_modes` are its session modes (4.3) and
+  `efforts` its thinking levels, set per model (4.3). `session.create` and `session.set` set `agy`'s
+  session options, and the device publishes what `agy` then runs as `meta`.
+- **Listing.** The device reads `agy`'s list of its conversations with an `agy acp` of its own that
+  opens none, while its gateway link is up. It publishes each conversation it does not have yet as
+  the table says, with the title, the directory and the time of the last write `agy` lists, follows
+  later changes of those, and withdraws with `session.removed` one the list no longer names that the
+  device does not hold. `agy` reports a conversation it kept without a directory under the
+  directory of the process that lists it, so that process runs in an empty directory of the
+  device's own and such a conversation is published under the person's home directory.
+- **Turns.** A message is one `session/prompt`, and the turn ends when `agy` answers it: `end_turn`
+  as `completed`, `cancelled` as `interrupted`, any other end or an error as `error`. A message sent
+  while a turn runs steers it (`accepted: "steered"`): the device sends it as another prompt, `agy`
+  answers the earlier prompt at once and goes on under the new one, the device publishes the
+  message's `user_message` then (A14), and the turn ends when the last prompt sent returns. `agy`
+  takes no steer while an approval or a question of the turn waits for an answer, so a message sent
+  then is queued (`accepted: "queued"`) and goes out when the turn ends. `agy` also goes on by
+  itself after its prompt has returned, when a background command or a scheduled wake finishes, and
+  marks neither end of that: the device publishes such a turn with `trigger: "agent"` and no
+  `user_message`, from the first text, thought or new tool `agy` sends after the prompt returned
+  until three seconds after `agy` last reported the context in use with nothing after it. Stop is
+  `session/cancel`. `agy` closes no approval or question that the end of a turn left open, so the
+  device expires them when the turn ends, whatever ended it (5.7, 5.8). `agy` keeps no to-do list
+  and raises no plan to approve: in its plan mode the plan is a file it writes, shown as that
+  tool's row, and approving it is the person's next message.
+- **Errors.** What the device answers for Antigravity, in its own words; an app shows `message`
+  and branches on `code` (2.2). An `agy` older than 1.5.13 is still reported `available`, with its
+  `version`, and is refused only when a session would start.
+
+| When | `code` | `message` |
+| --- | --- | --- |
+| `agy` is not installed | `agent_unavailable` | `antigravity is not installed on this device` |
+| `agy` is older than 1.5.13 | `agent_unavailable` | `Antigravity CLI 1.5.13 or later is needed; this computer has <version>. Run agy update there.` |
+| `agy` is not signed in: it answers `Authentication required` | `agent_unavailable` | `Antigravity is not signed in on this computer. Run agy in a terminal there and sign in, then try again.` |
+| `agy` cannot start its own backend | `agent_unavailable` | `agy`'s words, without paths |
+| An `agy` holds the conversation by the table above: `session.send` or `session.command` on a `terminal` session, or a holder found just before the device would open it | `conflict` | `agy is running on this computer and may have this conversation open; quit agy there to continue here.` |
+| `agy` no longer lists the conversation | `not_found` | `Antigravity no longer has this conversation.` |
+| `speed`, a rename, a takeover, or Close on a row a terminal holds | `unsupported` | the device's refusal for what an agent does not offer (`antigravity has no speed tiers`, `antigravity sessions cannot be taken over`) |
+
+During a turn, `agy` exiting is an `error` event, `Antigravity stopped before the turn finished.`,
+and a prompt `agy` fails is an `error` event in `agy`'s words, without paths and at most 2,000
+characters; either ends the turn with `error`. The device never signs `agy` in: the person does, in
+a terminal on that computer. `fixtures/app/reply.error.antigravity-signed-out.json` is the reply an
+app gets when it starts a session where `agy` is not signed in. Apps need no Antigravity logic
+beyond its name: `control`, the capabilities and the errors say everything.
+
 `fixtures/app/session.updated.json`
 
 ```json
@@ -1287,6 +1436,13 @@ omits those fields; a UI must render a session whose `usage` carries three field
 `fixtures/events/turn_completed.no_cost.json` and `fixtures/timelines/codex.json` are the worked
 examples.
 
+Antigravity reports tokens for each prompt and the context apart from them (A64), so its `usage`,
+on a session and on each `turn_completed`, is what the session has spent through the device:
+`agy`'s `inputTokens`, `outputTokens` and `totalTokens` summed over every prompt the device sent, a
+steered one included, as `input_tokens`, `output_tokens` and `total_tokens`, beside `context_used`
+and `context_window`, the context in use and its size as `agy` last reported them. `agy` reports no
+cost, and a turn it starts by itself adds no tokens.
+
 ### 4.8 Attachment
 
 Two shapes carry the same idea in opposite directions.
@@ -1311,7 +1467,10 @@ per file, `mime` taken from the name and `size` 0 once the file is gone; a title
 agent words itself shows a file's name where it quoted a path. The device's echo of its own prompt
 on Grok's leader is recognised as its own and is never a second block. The agent opening one of
 those files with its own read tool asks nobody: the device allows that read itself, for the
-session's own files only, and raises no `approval` block. The files are the device's to delete: a
+session's own files only, and raises no `approval` block. Antigravity takes an image as image
+content and a text file as its text embedded in the prompt; any other file the device writes in
+the same way and hands `agy` as a link to it (`resource_link`), not in the words, and `agy`'s read
+of it is allowed the same way (A64). The files are the device's to delete: a
 message that will not reach the agent takes its folder with it, a deleted session all of its
 folders, and none is kept longer than a week.
 
@@ -1887,6 +2046,15 @@ wins, and when the terminal's was it the block resolves with `decision: {option_
 "terminal"}` (A11). `fixtures/events/approval.plan-pending.json`, `approval.plan-resolved.json` and
 `approval.plan-truncated.json` are the worked set.
 
+**Antigravity's approvals (A64).** `agy` asks before a tool runs with `session/request_permission`,
+offering allow once and reject once, and the device offers exactly those two: `allow` "Allow"
+(`primary`) and `deny` "Deny" (`danger`); an option of any other kind `agy` might list is not
+offered. A refusal ends `agy`'s turn: the tool fails and the turn completes with nothing more from
+the model. `agy` sends nothing to close a request that Stop or the end of the turn left open, so
+the device expires every approval still pending when the turn ends, and a `message` with an answer
+has nowhere to go. The read of a file the device wrote for the session's own attachments is allowed
+by the device itself and raises no block (4.8). Antigravity's plan mode raises no plan to approve.
+
 `fixtures/events/approval.pending.json`
 
 ```json
@@ -2024,6 +2192,19 @@ resolved block without `answers` means the answer named nothing the device could
 text or a question or label worded otherwise than the device read it. A Grok option's `preview` has
 no field here and is left out.
 
+Antigravity asks with a form, `elicitation/create` in `mode` `form`, which `agy` sends only to a
+client that declares form elicitation, as the device does; to any other client it prints the
+question as text and ends the turn (A64). The form carries each question as two fields: `qN`, the
+choices — a string with `oneOf` for one choice, an `array` whose `items` carry `anyOf` for several,
+each choice a `const` with its `title` — and `qN_other`, free words. The device raises one
+`question` block with `needs_input` for the form and one question per `qN`, in the form's order and
+at most four: `prompt` is the field's `title`, the options are the choices in `agy`'s words, `multi`
+follows the field's type, and `allow_text` is true when the form has the matching `qN_other`. The
+device hands `agy` the answer as `accept`: for each answered question, the chosen `const` in `qN`,
+a list of them for several, or the words in `qN_other`; a question an app left unanswered, or past
+the fourth, is left out. Stop cancels the form with the turn, and since `agy` closes no form, a
+question still pending when the turn ends expires.
+
 `fixtures/events/question.resolved.terminal.json` is the block after the person at the terminal
 answered.
 
@@ -2069,7 +2250,7 @@ answered.
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `turn_id` | uuid | yes | Matches `Session.turn.turn_id` |
-| `trigger` | `remote` \| `terminal` \| `queue` \| `agent` \| `resume` | yes | `turn_started` only. `agent` is a turn started by a message another agent put into the conversation (A30); `resume` is a turn the device started once a usage limit reset (A35) |
+| `trigger` | `remote` \| `terminal` \| `queue` \| `agent` \| `resume` | yes | `turn_started` only. `agent` is a turn started by a message another agent put into the conversation (A30), or one Antigravity starts by itself when a background command or a scheduled wake finishes after its prompt has returned (A64); `resume` is a turn the device started once a usage limit reset (A35) |
 | `stop_reason` | `completed` \| `interrupted` \| `error` | yes | `turn_completed` only |
 | `duration_ms` | integer | yes | `turn_completed` only |
 | `usage` | `Usage` | no | `turn_completed` only |
@@ -2137,8 +2318,10 @@ and `resets_at` null when the vendor named no time. The device reads the limit f
 from its words: Claude Code's result with HTTP status 429 — `api_error_status` in the SDK's result
 message, `apiErrorStatus` with `quotaLimits.resetsAt` in the transcript row — and Codex's
 `turn/completed` whose error is `usageLimitExceeded`, with the window from `account/rateLimits/read`.
-The vendor's sentence goes out as the `error` of 5.14, not as the agent's text. Grok Build and pi
-report no limit the device can read, so their turns never carry it.
+The vendor's sentence goes out as the `error` of 5.14, not as the agent's text. For Antigravity,
+words that read like `agy`'s quota message only make the device ask `agy`'s own usage query, and
+the limit is a window that query reports used up (7.2, A64); `agy`'s words stay where `agy` put
+them. Grok Build and pi report no limit the device can read, so their turns never carry it.
 
 `fixtures/events/turn_completed.limit.json`
 
@@ -2232,7 +2415,9 @@ A snapshot of queued remote messages, in the order they will be delivered. Remov
 `session.queue_remove`. An app edits one by taking it out with `session.queue_remove` and sending
 the edited words back with `mode: "queue"` and that entry's `ts` as `queue_ts` (6.3): the device
 holds them in the place the entry left (A43). The files of a held message stay on the device and
-no snapshot carries them, so an entry with `attachments` can be removed but not edited.
+no snapshot carries them, so an entry with `attachments` can be removed but not edited. The queue
+of a session the device holds stays, and stays editable, while a terminal holds the session, and
+goes out once the device has the session again (4.4, A64).
 
 `fixtures/events/queue.json`
 
@@ -3083,6 +3268,11 @@ there is nothing left to edit. The edited words go back as an ordinary `session.
 - `queue_ts` never decides whether a message queues; `mode` does, as above. An idle session
   delivers a `mode: "queue"` message at once, which is right for an edit that outlived the turn
   it was waiting for.
+- A session the device holds keeps its queue while a terminal holds the session (4.4, A64), and an
+  edit goes back into it there: a `session.send` with `mode: "queue"` and `queue_ts` is answered
+  `accepted: "queued"`, nothing is opened for it, and it goes out with the rest of the queue once
+  the device has the session again. Every other `session.send` to such a session, `mode: "queue"`
+  without `queue_ts` included, is refused with `conflict`.
 - A `queue_ts` that is not a non-negative integer is `bad_request`.
 
 An entry whose snapshot carries `attachments` is not edited: its files are on the device, and no
@@ -3140,7 +3330,9 @@ kept, and a device from before A55 still treats it so.
 #### Rules the device enforces
 
 - `session.send` to a session with `control: "terminal"` is refused with `conflict`
-  ("controlled by terminal; take over first").
+  ("controlled by terminal; take over first"), except an edited queued message (`mode: "queue"`
+  with `queue_ts`) for a session the device holds, which goes back into the queue to wait for the
+  device to have the session again (A43, A64).
 - `session.send` to a session with `control: "none"` makes the device resume the session first
   (Claude `resume`, Codex `thread/resume`) and then send, and hold the session until it is closed
   (4.4, A58): the device publishes `control: "remote"` before the turn's first output, and the
@@ -3167,28 +3359,32 @@ kept, and a device from before A55 still treats it so.
 
 A terminal offers its agent's commands the moment `/` is typed; an app offers the same list the same
 way, for the agents that can take them. `AgentInfo.capabilities` carries `commands` for an agent
-whose sessions can list and run commands remotely — Codex, Grok Build and pi today — and never for
-Claude, whose channel carries user text and nothing else. An app draws nothing for an agent without
-it: `/` is then ordinary text.
+whose sessions can list and run commands remotely — Codex, Grok Build, pi and Antigravity today
+(A64) — and never for Claude, whose channel carries user text and nothing else. An app draws
+nothing for an agent without it: `/` is then ordinary text.
 
 `session.commands {session_id}` returns `{commands: Command[]}` (4.11): what the session's agent
-offers **now**. For a session with a live process the device asks the agent — Grok Build advertises
-its list over ACP when a session opens, pi answers `get_commands`; Codex has no such call, so the
-device ships a fixed table. For a session with no live process (`control: "none"`, or `remote` for
-one the device holds with none running, A58) the device answers from what it knows without starting
-one: Codex's table, pi's prompt templates and skills on disk, the list Grok last advertised on this
-device. That may be `[]`, and an app that receives `[]` draws nothing until it asks again. Apps ask
-when a conversation opens and again when `/` is typed if the last answer is older than a minute or
-was empty. `unsupported` for an agent without the capability.
+offers **now**. For a session with a live process the device asks the agent — Grok Build and
+Antigravity advertise their lists over ACP when a session opens, pi answers `get_commands`; Codex
+has no such call, so the device ships a fixed table. For a session with no live process
+(`control: "none"`, or `remote` for one the device holds with none running, A58) the device answers
+from what it knows without starting one: Codex's table, pi's prompt templates and skills on disk,
+the list Grok or Antigravity last advertised on this device. That may be `[]`, and an app that
+receives `[]` draws nothing until it asks again. Apps ask when a conversation opens and again when
+`/` is typed if the last answer is older than a minute or was empty. `unsupported` for an agent
+without the capability.
 
 `session.command {session_id, name, argument?}` runs one. The device echoes it as a `user_message`
 under the request's `id` with text `/name argument` and `source: "remote"` — A12 applies, the app
-has already drawn the row — and reports the outcome as ordinary events. For Grok Build and pi the
-command is handed to the agent as the text of a turn, which is how their agents interpret it: Grok
-runs its shell-side commands locally and answers in `assistant_text` at zero tokens, sometimes with
-no output at all; pi expands prompt templates, skill commands and extension commands before the
-turn. For Codex the device calls the method the command stands for and reports a `notice` for a
-state change (`compact`), the turn's own blocks (`review`, `init`), or a `tool_call` block for
+has already drawn the row — and reports the outcome as ordinary events. For Grok Build, pi and
+Antigravity the command is handed to the agent as the text of a turn, which is how their agents
+interpret it: Grok runs its shell-side commands locally and answers in `assistant_text` at zero
+tokens, sometimes with no output at all; pi expands prompt templates, skill commands and extension
+commands before the turn; Antigravity's are the ones `agy` advertises, its workflows and skills
+among them, each a name and a description with no argument hint, and `agy` runs `/compact` itself,
+answering with no text at all (A64). For Codex the device calls the method the command stands for
+and reports a `notice` for a state change (`compact`), the turn's own blocks (`review`, `init`), or
+a `tool_call` block for
 information a terminal would have printed: `tool_kind: "other"`, `tool` and `title` `/name`,
 `status: "succeeded"`, `output` the text — `fixtures/events/tool_call.command.json`. The result is `{}`;
 the effects are in the stream. Refusals: `not_found` for a name the session does not offer,
@@ -4088,10 +4284,11 @@ than any the gateway had seen of the session. Nothing fetched is written to the 
 
 ### 7.2 Resuming after a usage limit
 
-Claude Code and Codex stop a turn when the vendor's usage window is used up — the five-hour window,
-or the weekly one — and say when it resets. The device tells such an end apart from a completed
-turn whatever the account prefers (`turn_completed` with `limit`, 5.9), and when the account's
-`resume_after_limit` (3.2) is on, resumes the session itself (amendment A35):
+Claude Code, Codex and Antigravity stop a turn when the vendor's usage window is used up — the
+five-hour window, or the weekly one — and the device learns when it resets: Claude Code and Codex
+say so, and for Antigravity `agy`'s usage query does (A64). The device tells such an end apart
+from a completed turn whatever the account prefers (`turn_completed` with `limit`, 5.9), and when
+the account's `resume_after_limit` (3.2) is on, resumes the session itself (amendment A35):
 
 - **Scheduling.** At a limit stop on a session whose `control` is `remote` or `shared`, the device
   sets `Session.resume` to one minute after `limit.resets_at` — or, when the vendor named no time,
@@ -4123,6 +4320,14 @@ turn whatever the account prefers (`turn_completed` with `limit`, 5.9), and when
   resume cancels it; so does turning `resume_after_limit` off, which cancels every pending resume on
   every device of the account, each with `resume {status: "cancelled"}`. Turning it on schedules
   nothing for stops that already happened.
+- **Antigravity** (A64). The device reads the limit from `agy`'s own usage query, never from words:
+  when an Antigravity turn ends with words that read like `agy`'s quota message — in `agy`'s text,
+  or in the error of a prompt `agy` failed — it runs that query afresh (4.2), and the turn ends
+  with `limit` only when the query reports a window with nothing left in the group whose
+  description names the session's model, or in any group when none names it. `window_minutes` and
+  `resets_at` are that window's, the later of the two when both of the group's windows are used up.
+  Otherwise the turn ends as it would have. The resume then goes as above; an Antigravity session a
+  terminal holds gets none.
 - **Grok Build and pi** report no limit stop the device can read; their turns never carry `limit`
   and no resume is scheduled for them. The device keeps one place where an agent's limit signal is
   read, so an agent that gains one joins without a change to the wire.
@@ -4436,9 +4641,9 @@ one app connection that asked. The gateway relays bytes and never reads them.
 ### 9.2 Device
 
 - [ ] Assigns `seq` per session, strictly increasing, persisted across restarts.
-- [ ] Reports every agent it knows how to drive — `claude`, `codex`, `grok`, `pi` — with
-      `available: false` when the binary is missing, and drives a session of any of them through
-      the same frames (A25, A26).
+- [ ] Reports every agent it knows how to drive — `claude`, `codex`, `grok`, `pi`, `antigravity` —
+      with `available: false` when the binary is missing, and drives a session of any of them
+      through the same frames (A25, A26, A64).
 - [ ] Lists capability `commands` only for an agent whose sessions can list and run slash
       commands remotely, answers `session.commands` with what the agent offers now, echoes every
       `session.command` as a `user_message` under the request's `id`, and refuses one while a
@@ -4456,8 +4661,13 @@ one app connection that asked. The gateway relays bytes and never reads them.
 - [ ] Includes at least one `primary` and one `danger` option in every `approval`.
 - [ ] Treats a repeated `session.send` id within a session as a duplicate and replays the original
       result.
-- [ ] Refuses `session.send` on a `control: "terminal"` session with `conflict`, and resumes a
-      `control: "none"` session before sending, holding it from then on (A58).
+- [ ] Refuses `session.send` on a `control: "terminal"` session with `conflict`, except an edited
+      queued message for a session it holds, which it puts back in the queue (A43, A64), and
+      resumes a `control: "none"` session before sending, holding it from then on (A58).
+- [ ] Delivers no queued message into a session whose `control` is `terminal`: keeps the queue,
+      removable and editable, when a terminal takes the session, leaving it behind when it stops
+      its own process for that terminal, and sends it, oldest first, once the terminal lets go of
+      a session it holds, starting the session's process again for it when none runs (A58, A64).
 - [ ] Echoes `id` and `from` in every `reply`.
 - [ ] Returns `session.history` exactly as 6.4 describes: latest event per block, ascending `seq`, no
       deltas, no `status`, no `meta`, no `queue`.
@@ -4593,8 +4803,10 @@ one app connection that asked. The gateway relays bytes and never reads them.
       one with no rollout on disk (A18, A48, A59).
 
 - [ ] Ends a turn the usage limit stopped with `stop_reason: "error"` and `limit`, read from the
-      agent's own signal — Claude's 429 result, Codex's `usageLimitExceeded` — never from words,
-      and publishes the vendor's sentence as `error`, not as the agent's text; with
+      agent's own signal — Claude's 429 result, Codex's `usageLimitExceeded`, a window
+      Antigravity's usage query reports used up (A64) — never from words, and publishes the
+      vendor's sentence as `error`, not as the agent's text, except Antigravity's, which stays
+      where `agy` put it; with
       `resume_after_limit` on, schedules the resume of 7.2 on a `remote` or `shared` session, keeps
       it across restarts, fires it a minute after the reset with the fixed prompt as `user_message
       {source: "resume"}` under `trigger: "resume"`, drops it when the terminal that owned a
@@ -4657,6 +4869,44 @@ one app connection that asked. The gateway relays bytes and never reads them.
       writes to a Claude session included; ranks a name from any surface above the agent's own
       summary and that above the first message; and lets a name the agent reports after a rename
       made elsewhere replace the title (A55).
+- [ ] Drives Antigravity only through `agy acp`, started with no other argument in the session's
+      directory, as client `sidecode`, declaring form elicitation and neither file system nor
+      terminal access; sends no `_meta` and no MCP server, and no prompt but what the person sent —
+      their words and files, or a command they chose — or the fixed resume sentence of 7.2; never
+      calls `authenticate`, never reads `agy`'s files or credentials and never calls Google itself;
+      reports an `agy` older than 1.5.13 `available` with its `version` and refuses to start a
+      session on it (A64).
+- [ ] Lists `worktree`, `interrupt`, `queue`, `steer`, `attachments`, `effort`, `history` and
+      `commands` for Antigravity, never `takeover`, `rename` or `close_terminal`, with `attach`
+      null; publishes the models, modes and defaults `agy` offered the newest session the device
+      opened and `agy`'s thinking levels, kept per model as 4.3 says; and sets the session's model,
+      effort and mode again in every new `agy acp` before the first prompt (A64).
+- [ ] Derives Antigravity `origin` and `control` from the `agy` processes it did not start, as 4.4
+      says, every ten seconds and again just before it opens a conversation: holds a conversation
+      while such an `agy` names it on its command line or runs in its directory, and one `agy`
+      keeps without a directory while any such `agy` runs, except that a session it created and
+      still holds is held only by an `agy` naming it; never reads `agy`'s own lock files; refuses
+      `session.send` and `session.command` on a held conversation with `conflict` and the words of
+      4.4; stops its own idle `agy acp` for a holder of a held session and warns once while its own
+      turn runs, giving the conversation up when that turn ends and before its queue drains; looks
+      for a holder before a queued message goes out; never opens with `session/load` a
+      conversation `agy` no longer lists; and publishes from a replay only the rows it has not
+      published (A64).
+- [ ] Ends an Antigravity turn when the last prompt it sent returns; steers with another prompt
+      but queues a message while an approval or a question of the turn is open; offers `agy`'s
+      allow-once and reject-once options only; raises an `agy` form as one `question` block, a
+      question per `qN` with `qN_other` as its words; expires every approval and question still
+      open when the turn ends; and starts a turn `agy` begins by itself with `trigger: "agent"` and
+      no `user_message` (A64).
+- [ ] Hands Antigravity an image as image content, a text file as embedded text and any other file
+      as a link to a file it wrote, allowing `agy`'s read of the session's own files itself (4.8,
+      A64).
+- [ ] Carries no Antigravity `accounts` in `hello` or `agents.updated`; answers `device.agents` with
+      one `google` account whose windows come from `agy -p "/usage" --output-format json`, mapped as
+      4.2 says, held a minute and stood in for up to 30, with `limits_error` when neither can
+      answer and `accounts: []` when `agy` is not signed in; runs that query for such a reply and to
+      confirm a limit stop only, never on a timer; and ends a turn with `limit` only when the query
+      shows a window used up (7.2, A64).
 
 ### 9.3 App
 
@@ -4797,6 +5047,10 @@ one app connection that asked. The gateway relays bytes and never reads them.
       item text as plain text; keeps the highest `revision`, decoded as a 64-bit integer, and
       clears the board on a frame with `board: null`; never writes `task_board` from a local value,
       and always lets the person turn it off while it is on (A62).
+- [ ] Labels `antigravity` "Antigravity" in every interface language, with the generic letter
+      mark until the app ships an official one; names the provider `google` "Google"; and draws
+      Antigravity from its capabilities and `control` alone, with nothing of its own beyond the
+      name and the mark (A64).
 
 - [ ] Decodes every fixture under `fixtures/` in its test suite.
 
@@ -4810,7 +5064,7 @@ one app connection that asked. The gateway relays bytes and never reads them.
 | `fixtures/device/` | One frame per device-socket type |
 | `fixtures/device/forwarded/` | All seventeen forwarded requests as the device receives them, plus the A9 backfill, A43 re-queue, A55 rename and A60 brief history variants |
 | `fixtures/events/` | One event per kind, and one `tool_call` per `tool_kind` |
-| `fixtures/objects/` | Bare `Session` and `AgentInfo` objects that no frame fixture carries, including the two attachable agents and the shared sessions, and the task board of A62 (`board.json`) |
+| `fixtures/objects/` | Bare `Session` and `AgentInfo` objects that no frame fixture carries, including the two attachable agents and the shared sessions, Antigravity as a `device.agents` reply carries it (A64), and the task board of A62 (`board.json`) |
 | `fixtures/app/board.*.json`, `fixtures/app/reply.board.*.json` | The task board's requests, replies and `board.updated` (A62) |
 | `fixtures/http/` | One body per HTTP request and response |
 | `fixtures/stt/` | The five speech-to-text text frames |
@@ -5748,3 +6002,47 @@ person has answered there. Known limits: the menu is read from the text the term
 which a long stretch of other output can push the menu out of, and that menu is then answered in the
 terminal; a device that restarts while the menu is up expires its block and does not raise it again.
 See 5.8, 6.3, 7.2 and 9.
+
+**2026-11-22 A64 — Antigravity, driven over its own ACP server.** The device knows a fifth agent,
+Google's Antigravity CLI (`agy`), id `antigravity`, and drives it as an editor does: one `agy acp`
+for each session it runs, started with no other argument in the session's directory, speaking the
+Agent Client Protocol as client `sidecode`, on the person's own `agy` sign-in and in the store `agy`
+itself keeps, so a conversation started from an app goes on in a terminal and an idle terminal
+conversation goes on from an app. The device declares form questions and nothing else, sends no
+`_meta`, no MCP server and no words of its own beyond the fixed resume sentence of 7.2, never calls
+`authenticate`, never reads `agy`'s files or credentials and never calls Google itself; `agy` 1.5.13
+or later is required. Nothing on the wire is new beyond the id, which an app that does not know it
+renders generically (1.1). `capabilities` are `worktree`, `interrupt`, `queue`, `steer`,
+`attachments`, `effort`, `history` and `commands`; `agy` offers a client no rename and no way into a
+terminal, so `attach` is null and there is no `takeover`, `rename` or `close_terminal`. `models` and
+the defaults are what `agy` offered the newest session the device opened, `efforts` its thinking
+levels, set per model, and `permission_modes` its session modes. `agy` keeps who has a
+conversation open in lock files of its own, which the device does not read, and tells an ACP client
+nothing of it; a terminal's command line goes stale once the TUI moves to another conversation, and
+two writers lose a message. So the device judges conservatively from the `agy` processes it did not
+start (4.4): a conversation is held — `terminal`, `readonly`, and refused with `conflict` — while
+such an `agy` names it or runs in its directory, and one `agy` keeps without a directory while any
+such `agy` runs; a session the device created and still holds is held only by an `agy` that names
+it. Whatever the agent, the queue of a session the device holds now waits while a terminal holds
+the session — kept, removable and editable (A43), every other send refused — and goes out by itself,
+the process started again for it, once the device has the session again; an Antigravity turn of
+the device's own that ends with a holder present gives the conversation up before its queue
+drains. One known only from `agy`'s own list and held by nothing is `none`, and the message that
+continues it opens it in an `agy acp` of the device's own — with `session/resume`, or with
+`session/load` and a replay the device publishes only where it is new — which stops after 30
+minutes unused as a Claude or pi process does; and because `agy` restores none of a conversation's
+settings in a new process, the device sets the session's model, effort and mode again each time.
+A message sent during a turn steers it, but is queued while an approval or a question is open, and
+the turn ends when the last prompt returns; approvals offer `agy`'s allow-once and reject-once
+options only, an `agy` form is one `question` block, and both expire when the turn ends, since
+`agy` closes neither. A turn `agy` starts by itself, when a background command or a scheduled wake
+finishes, carries `trigger: "agent"`. `usage` carries the tokens `agy` reports for each prompt,
+summed, and its context. A `device.agents` reply carries one `google` account whose windows, two
+for each of `agy`'s model groups, come from `agy -p "/usage" --output-format json`, run for that
+reply and never on a timer; and Antigravity joins A35: a turn that ends in words that read like
+`agy`'s quota message makes the device run that query afresh, and only a window it reports used up
+ends the turn with `limit`, after which the resume goes as for Claude Code and Codex. The device's
+refusals — `agy` missing, older than 1.5.13, not signed in, a conversation an `agy` may have open,
+a conversation `agy` no longer has — are listed in 4.4. `fixtures/objects/agent.antigravity.json`
+and `fixtures/app/reply.error.antigravity-signed-out.json` are the worked examples. See 1.1, 4.2,
+4.3, 4.4, 4.7, 4.8, 5.7, 5.8, 5.9, 5.12, 6.3, 7.2, 9 and 10.

@@ -1,0 +1,9 @@
+{
+  "type": "reply",
+  "id": "c093f459-7f67-4596-b650-53945593379f",
+  "ok": false,
+  "error": {
+    "code": "agent_unavailable",
+    "message": "Antigravity is not signed in on this computer. Run agy in a terminal there and sign in, then try again."
+  }
+}

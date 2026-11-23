@@ -36,7 +36,8 @@
         "claude",
         "codex",
         "grok",
-        "pi"
+        "pi",
+        "antigravity"
       ]
     },
     "Platform": {
@@ -149,7 +150,7 @@
       "type": "object",
       "properties": {
         "provider": {
-          "description": "The vendor the credential belongs to, as the agent names it: anthropic, openai, xai, or another id.",
+          "description": "The vendor the credential belongs to, as the agent names it: anthropic, openai, xai, google (A64), or another id.",
           "type": "string",
           "minLength": 1
         },

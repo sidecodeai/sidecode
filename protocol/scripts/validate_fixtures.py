@@ -239,6 +239,7 @@ PATH_SCHEMAS = {
     "objects/session.codex-shared-running.json": ("objects.json", "Session"),
     "objects/agent.grok.json": ("objects.json", "AgentInfo"),
     "objects/agent.pi.json": ("objects.json", "AgentInfo"),
+    "objects/agent.antigravity.json": ("objects.json", "AgentInfo"),
     "objects/session.resume-pending.json": ("objects.json", "Session"),
     "app/reply.session.create.json": ("app_frames.json", "ReplySessionCreate"),
     "app/reply.session.send.json": ("app_frames.json", "ReplySessionSend"),
