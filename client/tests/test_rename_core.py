@@ -494,10 +494,16 @@ async def test_a_plugin_that_lists_the_rename_capability_has_the_hook(
             assert callable(getattr(plugin, "rename", None)), agent
 
 
-def test_every_agent_can_be_renamed() -> None:
-    """Grok lists the capability only while its leader is ready, but the hook is always there."""
+def test_every_agent_of_a55_can_be_renamed() -> None:
+    """Grok lists the capability only while its leader is ready, but the hook is always there.
+
+    Antigravity never lists it: nothing `agy` offers a client renames a conversation (A64).
+    """
     for agent in AGENT_IDS:
-        assert callable(getattr(registry.plugin(agent), "rename", None)), agent
+        plugin = registry.plugin(agent)
+        hook = getattr(plugin, "rename", None)
+        assert callable(hook) or agent == "antigravity", agent
+    assert getattr(registry.plugin("antigravity"), "rename", None) is None
 
 
 # ----------------------------------------------------------- the protocol fixtures

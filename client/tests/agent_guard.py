@@ -1,7 +1,7 @@
 """Keeps the test suite away from the agents installed on the machine it runs on.
 
 A test that detects, resolves or probes an agent must meet a fake in a
-temporary directory, never the person's own `codex`, `claude`, `grok` or `pi`:
+temporary directory, never the person's own `codex`, `claude`, `grok`, `pi` or `agy`:
 running one costs tokens and touches their state, and a test has no business
 doing either. Two layers, both wired in `conftest.py`:
 
@@ -18,6 +18,10 @@ doing either. Two layers, both wired in `conftest.py`:
 A program that is not there starts nothing, so a made-up path such as
 `/bin/pi` is let through. `RC_REAL_AGENTS=1` is the opt-in for the smoke tests
 that do mean to drive the agents on this machine.
+
+A third layer holds whatever the opt-in says: the device drives Antigravity as a thin client and
+reads nothing of its home (A64), so the same hook refuses, and records, any open, listing, change
+or removal of a path under `~/.gemini` by the test process.
 """
 
 from __future__ import annotations
@@ -31,8 +35,8 @@ from pathlib import Path
 from typing import Any
 
 OPT_IN = "RC_REAL_AGENTS"
-# The agents' executables. `agent` is the name of Grok Build's own launcher.
-AGENT_NAMES = frozenset({"claude", "codex", "grok", "pi", "agent"})
+# The agents' executables. `agent` is the name of Grok Build's own launcher, `agy` Antigravity's.
+AGENT_NAMES = frozenset({"claude", "codex", "grok", "pi", "agent", "agy"})
 # The audit events that start a program, and what each one's arguments are.
 SPAWNS = frozenset({"subprocess.Popen", "os.posix_spawn", "os.exec", "os.spawn"})
 
@@ -44,10 +48,40 @@ ROOTS: list[str] = [
 ]
 # The attempts made so far in the running test, which `conftest.py` checks.
 VIOLATIONS: list[str] = []
+# Antigravity's home, which nothing of the device's may touch (A64), and the audit events that
+# would: each names the path it acts on first.
+GEMINI_HOME = os.path.realpath(os.path.expanduser("~/.gemini"))
+FILE_EVENTS = frozenset(
+    {
+        "open",
+        "os.listdir",
+        "os.scandir",
+        "os.chdir",
+        "os.mkdir",
+        "os.rmdir",
+        "os.remove",
+        "os.rename",
+        "os.truncate",
+        "os.utime",
+        "os.chmod",
+        "os.chown",
+        "os.symlink",
+        "os.link",
+        "shutil.rmtree",
+        "shutil.copyfile",
+        "shutil.copytree",
+        "shutil.move",
+        "glob.glob",
+    }
+)
 
 
 class RealAgentStarted(RuntimeError):
     """A test tried to start an agent that is installed on this machine."""
+
+
+class AgentHomeTouched(RuntimeError):
+    """A test touched a path under an agent's home the device must never read (A64)."""
 
 
 def opted_in() -> bool:
@@ -133,7 +167,32 @@ def _programs(event: str, args: tuple[Any, ...]) -> tuple[list[Any], Any, Any]:
     return [path, argv[0] if argv else None], None, env
 
 
+def in_gemini_home(path: Any) -> bool:
+    """Whether `path` names Antigravity's home or anything under it."""
+    if isinstance(path, int) or path is None:
+        return False
+    try:
+        text = os.fsdecode(path)
+    except TypeError:
+        return False
+    if ".gemini" not in text:
+        return False
+    real = os.path.realpath(os.path.expanduser(text))
+    return real == GEMINI_HOME or real.startswith(GEMINI_HOME + os.sep)
+
+
+def _audit_home(event: str, args: tuple[Any, ...]) -> None:
+    if event not in FILE_EVENTS or not args or not in_gemini_home(args[0]):
+        return
+    message = (
+        f"a test touched {GEMINI_HOME} through {event}; the device reads nothing of agy's home"
+    )
+    VIOLATIONS.append(message)
+    raise AgentHomeTouched(message)
+
+
 def _audit(event: str, args: tuple[Any, ...]) -> None:
+    _audit_home(event, args)
     if event not in SPAWNS or opted_in():
         return
     try:
@@ -157,12 +216,13 @@ def hide_agents(monkeypatch: Any) -> None:
 
     For a test that detects every agent and has no fake of its own to offer.
     """
+    from rc_client.agents.antigravity import runtime as antigravity
     from rc_client.agents.claude import runtime as claude
     from rc_client.agents.codex import runtime as codex
     from rc_client.agents.grok import runtime as grok
     from rc_client.agents.pi import runtime as pi
 
-    for runtime in (claude, codex, grok, pi):
+    for runtime in (claude, codex, grok, pi, antigravity):
         monkeypatch.setattr(runtime, "resolve_binary", lambda: None)
 
 

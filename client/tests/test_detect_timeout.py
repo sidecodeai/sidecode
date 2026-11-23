@@ -51,8 +51,14 @@ async def test_a_slow_agent_that_has_answered_before_is_reported_as_it_last_was(
     elapsed = time.monotonic() - started
 
     assert elapsed < 2, "the slow agent must not make the reply wait for it"
-    assert [info.agent for info in agents] == ["claude", "codex", "grok", "pi"]
-    assert versions(agents) == {"claude": "2.0", "codex": "2.0", "grok": "2.0", "pi": "1.0"}
+    assert [info.agent for info in agents] == ["claude", "codex", "grok", "pi", "antigravity"]
+    assert versions(agents) == {
+        "claude": "2.0",
+        "codex": "2.0",
+        "grok": "2.0",
+        "pi": "1.0",
+        "antigravity": "2.0",
+    }
     [record] = warnings(caplog)
     assert record.levelno == logging.WARNING
     assert record.getMessage() == "agent detection timed out"

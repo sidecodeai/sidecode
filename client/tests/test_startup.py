@@ -383,6 +383,7 @@ async def test_an_agent_whose_service_fails_is_still_asked_what_it_offers() -> N
         "codex": THIS_RUN["codex"],
         "grok": None,
         "pi": None,
+        "antigravity": None,
     }
     await startup.stop()
 

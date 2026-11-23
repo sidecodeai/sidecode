@@ -25,15 +25,16 @@ from .base import SessionRunner
 from .detection import Detections
 
 if TYPE_CHECKING:  # pragma: no cover - imported for types only
+    from ..config import MirrorConfig
     from ..sessions.channel import SessionChannel
-    from ..sessions.hub import SessionEntry
+    from ..sessions.hub import SessionEntry, SessionHub
     from ..sessions.shared import SharedControl
     from .codex.daemon.service import CodexDaemonService
     from .grok.service import GrokLeaderService
     from .pi.service import PiExtensionService
 
 # Detection order, and the order `hello` reports agents in.
-AGENT_IDS = ("claude", "codex", "grok", "pi")
+AGENT_IDS = ("claude", "codex", "grok", "pi", "antigravity")
 
 TurnEndCallback = Callable[[], Awaitable[None]]
 SessionIdCallback = Callable[[str], Awaitable[None]]
@@ -155,6 +156,23 @@ class AgentPlugin(Protocol):
     build_runner: Callable[[RunnerSpec], Awaitable[SessionRunner]]
 
 
+# Re-detects one agent and says the agents again when that changed what they offer.
+Refresh = Callable[[], Awaitable[None]]
+
+
+class AgentService(Protocol):
+    """What an agent keeps running beside its sessions, from its start to the device's stop.
+
+    A plugin with one exposes `def service() -> AgentService`; the daemon starts it once the agent
+    has started, with the hub, a way to have the agent detected again and the bounds `[mirror]`
+    sets on what the device takes on from the agent's own history, and stops it with itself.
+    """
+
+    async def start(self, hub: SessionHub, refresh: Refresh, limits: MirrorConfig) -> None: ...
+
+    async def stop(self) -> None: ...
+
+
 _loaded: dict[str, AgentPlugin] = {}
 # What the device knows of its agents between two detections (`detection.py`).
 detections = Detections()
@@ -210,6 +228,23 @@ async def _ask(agent: str, context: DetectContext) -> AgentInfo:
 
 async def runner_for(agent: str, spec: RunnerSpec) -> SessionRunner:
     return await (await load(agent)).build_runner(spec)
+
+
+async def service_for(agent: str) -> AgentService | None:
+    """The service `agent`'s plugin keeps beside its sessions, or None when it keeps none."""
+    hook = getattr(await load(agent), "service", None)
+    return cast("AgentService", hook()) if hook is not None else None
+
+
+def terminal_conflict(agent: str) -> str | None:
+    """The words an agent's plugin refuses a message to a session a terminal holds with, if its own.
+
+    A plugin may set `TERMINAL_CONFLICT` when the hub's own sentence would say more than the device
+    knows. Only a plugin already loaded is asked: a session of an agent that never loaded has no
+    terminal of its to be held by.
+    """
+    words = getattr(_loaded.get(agent), "TERMINAL_CONFLICT", None)
+    return words if isinstance(words, str) and words else None
 
 
 async def offline_commands(agent: str, session: Session) -> list[Command]:

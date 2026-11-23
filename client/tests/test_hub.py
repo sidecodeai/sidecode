@@ -20,6 +20,7 @@ from tests.helpers import drain
 
 class FakeRunner:
     agent = "claude"
+    private_process = True
 
     def __init__(self, channel: SessionChannel, *, steer: bool = False) -> None:
         self.channel = channel

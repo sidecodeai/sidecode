@@ -11,6 +11,11 @@ import pytest
 
 from rc_client import daemon as daemon_module
 from rc_client.agents import anthropic_usage, registry
+from rc_client.agents.antigravity import plugin as antigravity_plugin
+from rc_client.agents.antigravity import presence as antigravity_presence
+from rc_client.agents.antigravity import runtime as antigravity_runtime
+from rc_client.agents.antigravity.presence import Holders
+from rc_client.agents.antigravity.service import AntigravityService
 from rc_client.agents.claude import account as claude_account
 from rc_client.agents.claude import keychain as claude_keychain
 from rc_client.agents.claude import runtime as claude_runtime
@@ -84,7 +89,7 @@ def agent_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def nothing_remembered(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Start every test with no quota, sign-in, detection or rollout head remembered.
+    """Start every test with no quota, sign-in, detection, rollout head or agy service remembered.
 
     The device keeps the last good answer of each in memory, for a read that fails later
     (A33), and the first record of every rollout it has read: a test that left one behind
@@ -94,6 +99,8 @@ def nothing_remembered(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(claude_account, "signed_in", claude_account.SignIn())
     monkeypatch.setattr(registry, "detections", Detections())
     monkeypatch.setattr(codex_rollouts, "heads", Heads())
+    # Antigravity's list process, quota readings and sign-in, which its service keeps (A64).
+    monkeypatch.setattr(antigravity_plugin, "SERVICE", AntigravityService())
 
 
 @pytest.fixture(autouse=True)
@@ -118,7 +125,13 @@ def no_real_agents(
         monkeypatch.setattr(codex_runtime, "STANDALONE", absent)
         monkeypatch.setattr(codex_setup, "STANDALONE", absent)
         monkeypatch.setattr(pi_runtime, "SYSTEM_PREFIXES", ())
-        for runtime in (claude_runtime, codex_runtime, grok_runtime, pi_runtime):
+        for runtime in (
+            claude_runtime,
+            codex_runtime,
+            grok_runtime,
+            pi_runtime,
+            antigravity_runtime,
+        ):
             monkeypatch.setattr(
                 runtime, "resolve_binary", agent_guard.fakes_only(runtime.resolve_binary)
             )
@@ -131,6 +144,19 @@ def no_real_agents(
     attempts = list(agent_guard.VIOLATIONS)
     agent_guard.VIOLATIONS.clear()
     assert not attempts, "\n".join(attempts)
+
+
+@pytest.fixture(autouse=True)
+def no_agy_holders(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Find no `agy` process of anybody's: the machine running the suite may have some (A64).
+
+    A test of the presence rules hands in the holders it means.
+    """
+
+    async def nobody(binary: str | None, *, cwds: bool) -> Holders:
+        return Holders()
+
+    monkeypatch.setattr(antigravity_presence, "scan", nobody)
 
 
 @pytest.fixture(autouse=True)

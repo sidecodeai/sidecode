@@ -1,8 +1,8 @@
 # rc-client — SideCode device daemon
 
 `rc-client` runs on a developer machine, drives the coding agents installed
-there (Claude Code, Codex, Grok Build and pi), and answers requests forwarded
-from the SideCode gateway. It dials out only: nothing listens on the
+there (Claude Code, Codex, Grok Build, pi and Antigravity), and answers requests
+forwarded from the SideCode gateway. It dials out only: nothing listens on the
 device, and model credentials never leave it.
 
 It also picks up sessions you started yourself in a terminal. A Claude session
@@ -14,9 +14,11 @@ CLI keeps running, and the apps can send to it, stop it, change its model and
 effort, attach files and answer its permission prompts. The one-line installer
 runs both setup commands. Any other Claude, Codex or Grok session is mirrored
 read-only, and a Claude one can be taken over while its terminal is idle; a pi
-session started without the extension does not reach the apps. See "Attached
-terminal sessions", "Codex on the shared daemon", "Grok Build" and "pi" in
-`docs/CLIENT.md`.
+session started without the extension does not reach the apps. Antigravity's
+conversations are listed from `agy`'s own list and continued from an app once
+no `agy` the device did not start may have them open; they are never joined.
+See "Attached terminal sessions", "Codex on the shared daemon", "Grok Build",
+"pi" and "Antigravity" in `docs/CLIENT.md`.
 
 ## Install
 
@@ -128,8 +130,10 @@ survives logout).
   drives a private `codex app-server` over stdio JSON-RPC; `agents/grok/` speaks
   the Agent Client Protocol to Grok Build, on the machine's leader when it runs
   one; `agents/pi/` runs `pi --mode rpc` over JSONL and joins terminal pi
-  sessions through the extension it installs. All four translate their agent's
-  output into the same block timeline.
+  sessions through the extension it installs; `agents/antigravity/` drives one
+  `agy acp` per session as a thin ACP client, lists `agy`'s conversations with a
+  process of its own and reads its quota with `agy -p "/usage"`, never its files.
+  All five translate their agent's output into the same block timeline.
 * **Codex daemon** (`agents/codex/daemon/`) — one JSON-RPC connection, spoken as
   WebSocket over the machine's shared `codex app-server` control socket, that
   becomes the session index and the event stream for every Codex thread when the

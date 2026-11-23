@@ -67,6 +67,8 @@ class ClaudeRunner:
     """One live Claude session: the SDK client, its pump and pending prompts."""
 
     agent = "claude"
+    # The CLI the SDK runs is the device's own, which it stops when nobody uses it (A58).
+    private_process = True
 
     def __init__(
         self,

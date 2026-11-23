@@ -56,7 +56,13 @@ async def test_an_agent_that_fails_is_reported_as_it_last_was_and_the_others_sti
         agents = await detect_all()
 
     assert [info.agent for info in agents] == list(AGENT_IDS)
-    assert versions(agents) == {"claude": "2.0", "codex": "2.0", "grok": "2.0", "pi": "1.0"}
+    assert versions(agents) == {
+        "claude": "2.0",
+        "codex": "2.0",
+        "grok": "2.0",
+        "pi": "1.0",
+        "antigravity": "2.0",
+    }
     [record] = failures(caplog)
     assert record.levelno == logging.WARNING
     assert record.__dict__["context"] == {"agent": "pi", "error": "RuntimeError"}
@@ -69,7 +75,7 @@ async def test_an_agent_that_never_answered_and_fails_is_left_out_and_the_others
 
     agents = await detect_all()
 
-    assert [info.agent for info in agents] == ["claude", "grok", "pi"]
+    assert [info.agent for info in agents] == ["claude", "grok", "pi", "antigravity"]
 
 
 async def test_a_plugin_that_cannot_be_imported_fails_that_agent_alone(
@@ -88,7 +94,7 @@ async def test_a_plugin_that_cannot_be_imported_fails_that_agent_alone(
     with caplog.at_level(logging.INFO, logger=LOGGER):
         agents = await detect_all()
 
-    assert [info.agent for info in agents] == ["claude", "codex", "pi"]
+    assert [info.agent for info in agents] == ["claude", "codex", "pi", "antigravity"]
     [record] = failures(caplog)
     assert record.__dict__["context"] == {"agent": "grok", "error": "ImportError"}
 
@@ -100,7 +106,7 @@ async def test_an_error_the_agent_raises_on_purpose_is_a_failure_too(
         monkeypatch, {**everyone("1.0"), "pi": raising(RcError("agent_unavailable", "pi is gone"))}
     )
 
-    assert [info.agent for info in await detect_all()] == ["claude", "codex", "grok"]
+    assert [info.agent for info in await detect_all()] == ["claude", "codex", "grok", "antigravity"]
 
 
 async def test_a_failure_is_logged_once_however_many_wait_for_it(

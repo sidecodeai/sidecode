@@ -7,6 +7,7 @@ import contextlib
 import platform
 import signal
 import socket
+from functools import partial
 from typing import Any
 
 from . import __version__, attachments
@@ -19,7 +20,14 @@ from .agents.grok.service import GrokLeaderService
 from .agents.pi import paths as pi_paths
 from .agents.pi.link import PiExtensionServer
 from .agents.pi.service import PiExtensionService
-from .agents.registry import AGENT_IDS, DetectContext, detect_all, detect_one
+from .agents.registry import (
+    AGENT_IDS,
+    AgentService,
+    DetectContext,
+    detect_all,
+    detect_one,
+    service_for,
+)
 from .agents.startup import AgentStartup
 from .build import as_digest, read_build
 from .channel import paths as channel_paths
@@ -114,6 +122,8 @@ class Daemon:
         self._said: list[dict[str, Any]] | None = None
         # What the last run detected, said by a hello that comes before this run's detection.
         self._last_detected: list[dict[str, Any]] = []
+        # What the agents' plugins keep running beside their sessions, once each agent has started.
+        self._services: list[AgentService] = []
         # Every agent starts on its own once the link is up, and a request waits for its own alone.
         self._startup = AgentStartup(
             detect=self._detect_one,
@@ -123,8 +133,7 @@ class Daemon:
                 "codex": lambda: self.codex.start(resolve_codex()),
                 "grok": lambda: self.grok.ensure(resolve_grok()),
             },
-            # Withdrawing the Codex sessions that are not the device's comes last (A59).
-            after={"codex": lambda: self.codex.prune_foreign()},
+            after={agent: partial(self._after_start, agent) for agent in AGENT_IDS},
         )
         self._refresh_task: asyncio.Task[None] | None = None
         self._lag_task: asyncio.Task[None] | None = None
@@ -231,6 +240,24 @@ class Daemon:
             known[agent] = info
         self.agents = [known[each] for each in AGENT_IDS if each in known]
 
+    async def _after_start(self, agent: str) -> None:
+        """What follows an agent's start, which nothing waits for.
+
+        Withdrawing the Codex sessions that are not the device's comes last (A59), and an agent
+        whose plugin keeps a service beside its sessions has it started.
+        """
+        if agent == "codex":
+            await self.codex.prune_foreign()
+        service = await service_for(agent)
+        if service is not None and not self.hub.closing:
+            await service.start(self.hub, partial(self._refresh_agent, agent), self.config.mirror)
+            self._services.append(service)
+
+    async def _refresh_agent(self, agent: str) -> None:
+        """An agent's service learnt something its detection reports: the agent is asked again."""
+        self._found(agent, await self._detect_one(agent))
+        await self._agents_changed()
+
     async def _detected(self, agents: list[AgentInfo]) -> None:
         """A detection of every agent: keep it, and say it when it is news."""
         self.agents = agents
@@ -305,6 +332,12 @@ class Daemon:
                     await task
                 setattr(self, name, None)
         await self.hub.resumes.stop()
+        for service in self._services:
+            try:
+                await service.stop()
+            except Exception:
+                log.exception("stopping an agent's service failed")
+        self._services.clear()
         await self.mirror.stop()
         await self.codex.stop()
         await self.grok.stop()

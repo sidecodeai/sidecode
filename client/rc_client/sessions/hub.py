@@ -22,7 +22,7 @@ from ..agents.grok.adapter import GrokRunner
 from ..agents.grok.service import GrokLeaderService
 from ..agents.pi.adapter import PiRunner
 from ..agents.pi.service import PiExtensionService
-from ..agents.registry import RunnerSpec, offline_commands, runner_for
+from ..agents.registry import RunnerSpec, offline_commands, runner_for, terminal_conflict
 from ..errors import RcError, TerminalNotReady
 from ..events import brief_event
 from ..git import create_worktree, remove_worktree, session_git, slugify
@@ -295,24 +295,31 @@ class SessionHub:
             await self._publish_control(entry, "remote")
 
     def own_process(self, entry: SessionEntry) -> bool:
-        """Whether the session runs in a Claude or pi process this device started and holds."""
+        """Whether the session runs in a process this device started, holds, and may stop.
+
+        A runner says so with `private_process`: Claude's and pi's always, Antigravity's while
+        `agy` has nothing of its own still to come (A64).
+        """
         runner = entry.runner
         if runner is None or not self.holds(entry):
             return False
-        return entry.session.agent == "claude" or isinstance(runner, PiRunner)
+        return bool(getattr(runner, "private_process", False))
 
-    async def release_process(self, entry: SessionEntry) -> bool:
+    async def release_process(self, entry: SessionEntry, *, keep_queue: bool = False) -> bool:
         """Stop the device's own process of a session nothing is going on in; the row stays (A58).
 
         The session keeps `remote` and `idle`, and the next message starts the
         process again. False when something is going on after all: a request
-        on its way through, a turn, a queued message.
+        on its way through, a turn, a queued message. With `keep_queue` the
+        queued messages stay behind instead: a terminal that may have the
+        session open takes it even while they wait, and they go out once the
+        device has it again (A64).
         """
         runner = entry.runner
-        if runner is None or not unused(entry) or entry.lock.locked():
+        if runner is None or not unused(entry, queued=keep_queue) or entry.lock.locked():
             return False
         async with entry.lock:
-            if entry.runner is not runner or not unused(entry):
+            if entry.runner is not runner or not unused(entry, queued=keep_queue):
                 return False
             entry.runner = None
             with contextlib.suppress(Exception):
@@ -740,7 +747,14 @@ class SessionHub:
                     self.registry.remember_request(session_id, request_id, result)
                 return result
             if entry.session.control == "terminal":
-                raise RcError("conflict", self._terminal_conflict_message(entry))
+                if not self._edit_waits(entry, mode, queue_ts):
+                    raise RcError("conflict", self._terminal_conflict_message(entry))
+                # A43: the edited words go back where they waited, and go out with the rest of
+                # the queue once the device has the session again (A64).
+                result = await self._enqueue(entry, request_id, text, attachments, source, queue_ts)
+                if request_id:
+                    self.registry.remember_request(session_id, request_id, result)
+                return result
             if entry.session.control == "none":
                 await self._hold(entry)
             if entry.runner is None:
@@ -850,7 +864,13 @@ class SessionHub:
             raise RcError("unsupported", "attachments cannot be delivered to a terminal session")
 
     def _terminal_conflict_message(self, entry: SessionEntry) -> str:
-        """Only offer "take over" when this agent can actually be taken over."""
+        """Only offer "take over" when this agent can actually be taken over.
+
+        An agent whose plugin words the refusal itself says what it knows of the terminal (A64).
+        """
+        own = terminal_conflict(entry.session.agent)
+        if own is not None:
+            return own
         try:
             info = self.agent_info(entry.session.agent)
         except RcError:
@@ -858,6 +878,15 @@ class SessionHub:
         if "takeover" in info.capabilities:
             return "controlled by terminal; take over first"
         return "controlled by the terminal on this device; stop it there to continue here"
+
+    def _edit_waits(self, entry: SessionEntry, mode: str, queue_ts: int | None) -> bool:
+        """Whether a send to a session a terminal holds puts an edited queued message back.
+
+        A message queued for a session the device holds waits while a terminal has it (A64), and
+        stays editable meanwhile: the edit comes back with `mode: "queue"` and its `queue_ts`
+        (A43). Any other send to such a session is refused.
+        """
+        return mode == "queue" and queue_ts is not None and self.holds(entry)
 
     async def _enqueue(
         self,
@@ -948,16 +977,37 @@ class SessionHub:
             await drainer
 
     async def _drain_queue_locked(self, entry: SessionEntry) -> None:
-        """Launch the oldest queued message if the agent is idle; the caller holds the lock."""
+        """Launch the oldest queued message if the agent is idle; the caller holds the lock.
+
+        A session a terminal took while messages waited lost its process and kept them; once it is
+        the device's again, it opens again for them as it would for a message (A58, A64).
+        """
+        if self._reopens_for_queue(entry):
+            await self._resume(entry)
         item = self._take_queued(entry)
         if item is not None:
             await self._send_queued(entry, item)
 
+    def _reopens_for_queue(self, entry: SessionEntry) -> bool:
+        """Whether messages wait for a session the device holds and runs no process for."""
+        session = entry.session
+        return (
+            bool(entry.queue)
+            and entry.runner is None
+            and entry.shared is None
+            and session.control == "remote"
+            and self.holds(entry)
+            and not entry.channel.closing
+        )
+
     def _take_queued(self, entry: SessionEntry) -> dict[str, Any] | None:
-        """The next held message, unless a turn runs or the session is being closed (A39)."""
+        """The next held message, unless a turn runs or the session is being closed (A39).
+
+        Nor while a terminal holds the session: the messages wait until it is the device's again.
+        """
         if not entry.queue or entry.runner is None or entry.runner.busy:
             return None
-        if entry.channel.closing:
+        if entry.session.control == "terminal" or entry.channel.closing:
             return None
         return entry.queue.pop(0)
 
@@ -1629,9 +1679,10 @@ class SessionHub:
         """Say what a scan, or a watched process, found about a session the device does not drive.
 
         A terminal holding it makes it `terminal`, `readonly` while idle (A7); nothing holding it
-        hands it back: to the device when it holds the session (A58), to nobody otherwise. An
-        archived session nothing has revived reads back as `stopped` (`load`), and finding no
-        terminal has taught nothing that would change that.
+        hands it back: to the device when it holds the session (A58), which then sends what waited
+        in its queue meanwhile (A64), to nobody otherwise. An archived session nothing has revived
+        reads back as `stopped` (`load`), and finding no terminal has taught nothing that would
+        change that.
         """
         if entry.ending:
             # A close from an app is ending the terminal's CLI (A61); it says what happened.
@@ -1647,6 +1698,9 @@ class SessionHub:
             await entry.channel.set_state("stopped" if entry.session.archived else "idle")
         if changed:
             await entry.channel.publish_summary()
+        if not holds and control == "remote" and entry.queue:
+            # What waited in the queue while the terminal had it goes out now (A64).
+            self.schedule_drain(entry)
 
     # --------------------------------------------------- the session behind it
 

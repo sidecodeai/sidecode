@@ -71,8 +71,12 @@ class IdleRelease:
         return stopped
 
 
-def unused(entry: SessionEntry) -> bool:
-    """Whether nothing is going on in a session the device drives: it can be let go of."""
+def unused(entry: SessionEntry, *, queued: bool = False) -> bool:
+    """Whether nothing is going on in a session the device drives: it can be let go of.
+
+    `queued` is whether messages waiting in its queue may stay behind, there for the process the
+    device starts once it has the session again.
+    """
     runner = entry.runner
     session = entry.session
     return (
@@ -80,6 +84,6 @@ def unused(entry: SessionEntry) -> bool:
         and not runner.busy
         and session.turn is None
         and session.state == "idle"
-        and not entry.queue
+        and (queued or not entry.queue)
         and not entry.gate.locked()
     )

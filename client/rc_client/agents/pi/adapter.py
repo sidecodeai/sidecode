@@ -34,6 +34,8 @@ SessionIdCallback = Callable[[str], Awaitable[None]]
 
 class PiRunner:
     agent = "pi"
+    # The `pi --mode rpc` child is the device's own, which it stops when nobody uses it (A58).
+    private_process = True
 
     def __init__(
         self,
