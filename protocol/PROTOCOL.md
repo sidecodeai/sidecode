@@ -1012,7 +1012,7 @@ the leader act on the session everyone is in (A28), and `shared_attachments` tru
 | Codex | `untrusted` "Ask for everything", `on-request` "Ask when needed", `never` "Never ask" |
 | Grok Build | `default` "Ask when needed", `acceptEdits` "Auto-accept edits", `auto` "Auto mode", `dontAsk` "Deny unless allowed", `plan` "Plan mode", `bypassPermissions` "Bypass permissions" (A25) |
 | pi | `untrusted` "Ask for everything", `on-request` "Ask when needed", `never` "Never ask". pi itself has no permission system; these are the device's, enforced by the extension it loads into every pi session it drives or is attached to. `on-request` asks before `bash`, `edit`, `write` and every tool that is not one of pi's built-in readers (`read`, `grep`, `find`, `ls`); `untrusted` asks before every tool; `never` is pi's own behaviour (A26) |
-| Antigravity | `default` "Default", `accept-edits` "Accept edits", `auto` "Auto", `plan` "Plan": `agy`'s own session modes by its own ids and names, as it offered them to the newest session the device opened, and these four until the device has opened one (A64) |
+| Antigravity | `default` "Default", `accept-edits` "Accept edits", `auto` "Auto", `plan` "Plan": `agy`'s own session modes by its own ids and names, as it offered them to the newest session the device opened, and these four until the device has opened one (A64); then `device-bypass-permissions` "Bypass permissions", the device's own: `agy` runs in `accept-edits` and the device approves every tool `agy` asks about itself (A67) |
 
 Model ids are the agents' native ids. Effort ids are too: Claude's and Codex's reasoning
 efforts, Grok's `reasoning_effort` levels as its model catalogue lists them per model, pi's
@@ -1322,9 +1322,10 @@ last had it until the holder quits, when the session becomes `remote` if the dev
   before the first prompt.
 - **Settings.** `models` and the three defaults are what `agy` offered the newest session the
   device opened — its `model` session option, and the values it started that session on — empty
-  and null until the device has opened one; `permission_modes` are its session modes (4.3) and
-  `efforts` its thinking levels, set per model (4.3). `session.create` and `session.set` set `agy`'s
-  session options, and the device publishes what `agy` then runs as `meta`.
+  and null until the device has opened one; `permission_modes` are its session modes and, after
+  them, the device's own Bypass permissions (4.3, A67), and `efforts` its thinking levels, set per
+  model (4.3). `session.create` and `session.set` set `agy`'s session options, and the device
+  publishes what `agy` then runs as `meta`, Bypass permissions for a session in that mode.
 - **Listing.** The device reads `agy`'s list of its conversations with an `agy acp` of its own that
   opens none, while its gateway link is up. It publishes each conversation it does not have yet as
   the table says, with the title, the directory and the time of the last write `agy` lists, follows
@@ -1342,11 +1343,21 @@ last had it until the holder quits, when the session becomes `remote` if the dev
   itself after its prompt has returned, when a background command or a scheduled wake finishes, and
   marks neither end of that: the device publishes such a turn with `trigger: "agent"` and no
   `user_message`, from the first text, thought or new tool `agy` sends after the prompt returned
-  until three seconds after `agy` last reported the context in use with nothing after it. Stop is
-  `session/cancel`. `agy` closes no approval or question that the end of a turn left open, so the
-  device expires them when the turn ends, whatever ended it (5.7, 5.8). `agy` keeps no to-do list
-  and raises no plan to approve: in its plan mode the plan is a file it writes, shown as that
-  tool's row, and approving it is the person's next message.
+  until three seconds after `agy` last reported the context in use with nothing after it. Since
+  `agy` 1.5.15 that is a daemon's alone, a development server's, say: a background command that is
+  no daemon, a sub-agent or a one-time scheduled wake keeps the prompt open, and `agy` answers it
+  only once that work is done and `agy` has replied to it, with the tokens of all of it. Such a
+  turn is longer — the reply comes some 30 seconds after the work finished, and the answer up to a
+  minute after the last update — and the reply after a result is a text
+  block of its own: words that begin a new line once a tool has finished begin a new block, while
+  words `agy` was still writing as it finished go on in theirs. Since 1.5.16 `agy` sends a
+  sub-agent's permission requests and questions in the parent session, under its id, with the
+  sub-agent's tools as rows of the session; the device raises them as the session's own, or in
+  Bypass permissions approves them (A67). Stop is `session/cancel`. `agy` closes no approval or
+  question that the end of a turn left open, so the device expires them when the turn ends,
+  whatever ended it (5.7, 5.8). `agy` keeps no to-do list and raises no plan to approve: in its plan
+  mode the plan is a file it writes, shown as that tool's row, and approving it is the person's next
+  message.
 - **Errors.** What the device answers for Antigravity, in its own words; an app shows `message`
   and branches on `code` (2.2). An `agy` older than 1.5.13 is still reported `available`, with its
   `version`, and is refused only when a session would start.
@@ -2088,6 +2099,9 @@ the model. `agy` sends nothing to close a request that Stop or the end of the tu
 the device expires every approval still pending when the turn ends, and a `message` with an answer
 has nowhere to go. The read of a file the device wrote for the session's own attachments is allowed
 by the device itself and raises no block (4.8). Antigravity's plan mode raises no plan to approve.
+In the device's own Bypass permissions mode (4.3, A67) the device answers every request with
+`agy`'s allow-once option as it arrives, a sub-agent's forwarded request included, and raises no
+block; an approval already open when the session switched to that mode stays for the person.
 
 `fixtures/events/approval.pending.json`
 
@@ -2284,7 +2298,7 @@ answered.
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `turn_id` | uuid | yes | Matches `Session.turn.turn_id` |
-| `trigger` | `remote` \| `terminal` \| `queue` \| `agent` \| `resume` | yes | `turn_started` only. `agent` is a turn started by a message another agent put into the conversation (A30), or one Antigravity starts by itself when a background command or a scheduled wake finishes after its prompt has returned (A64); `resume` is a turn the device started once a usage limit reset (A35) |
+| `trigger` | `remote` \| `terminal` \| `queue` \| `agent` \| `resume` | yes | `turn_started` only. `agent` is a turn started by a message another agent put into the conversation (A30), or one Antigravity starts by itself when a background command or a scheduled wake finishes after its prompt has returned (A64; with `agy` 1.5.15 and later, a daemon's alone); `resume` is a turn the device started once a usage limit reset (A35) |
 | `stop_reason` | `completed` \| `interrupted` \| `error` | yes | `turn_completed` only |
 | `duration_ms` | integer | yes | `turn_completed` only |
 | `usage` | `Usage` | no | `turn_completed` only |
@@ -5093,6 +5107,13 @@ with A65: the words carry `%@` for the gateway's name.
       question per `qN` with `qN_other` as its words; expires every approval and question still
       open when the turn ends; and starts a turn `agy` begins by itself with `trigger: "agent"` and
       no `user_message` (A64).
+- [ ] Offers Antigravity's `device-bypass-permissions` "Bypass permissions" after `agy`'s own
+      modes, and among the modes it reports before it has opened a session, never as a default;
+      runs a session in it with `agy` in `accept-edits`, set again in every new `agy acp`; answers
+      each `session/request_permission` of such a session with `agy`'s allow-once option at once,
+      raising no `approval` block, while `agy`'s questions still go to the person and an approval
+      open when the session switched to the mode stays for the person; and stops approving the
+      moment the session switches to another mode, which it then sets in `agy` (A67).
 - [ ] Hands Antigravity an image as image content, a text file as embedded text and any other file
       as a link to a file it wrote, allowing `agy`'s read of the session's own files itself (4.8,
       A64).
@@ -6276,6 +6297,13 @@ a conversation `agy` no longer has — are listed in 4.4. `fixtures/objects/agen
 and `fixtures/app/reply.error.antigravity-signed-out.json` are the worked examples. See 1.1, 4.2,
 4.3, 4.4, 4.7, 4.8, 5.7, 5.8, 5.9, 5.12, 6.3, 7.2, 9 and 10.
 
+A64 erratum (2026-11-25): `agy` 1.5.15 keeps a prompt open while a background command that is no
+daemon, a sub-agent or a one-time scheduled wake of it runs, and answers it with the tokens of all
+of it once that work is done and replied to, so only a daemon's end still brings a turn
+`trigger: "agent"`; and 1.5.16 sends a sub-agent's permission requests and questions in the parent
+session. The device's rules are unchanged; once a tool has finished, words that begin a new line
+begin a new text block, so the reply to a result is a block of its own. See 4.4 and 5.9.
+
 **2026-11-23 A65 — AI provider names and a permission per feature.** An app should say what
 personal data it sends to a third-party AI service and who receives it, and ask before it sends
 anything; the apps named nobody, and gateway transcription and AI polish asked nothing. The
@@ -6316,3 +6344,25 @@ that cannot start says why in a notice that stays until closed, with the action 
 change the language, use gateway transcription, open Settings, retry — and every app says so for a
 press of the microphone during a voice assistant call (rule 24, 8.1). Nothing changes on the wire.
 See 3.2, 8, 8.1 and 9.
+
+**2026-11-25 A67 — Antigravity's Bypass permissions, a mode of the device's.** `agy` offers an ACP
+client no mode that runs without asking: its one switch for that, `--dangerously-skip-permissions`,
+is a flag of the whole process. So the device adds a mode of its own after the modes `agy` offers,
+`device-bypass-permissions` "Bypass permissions", also among those it reports before it has opened
+a session (4.3). The `device-` prefix is one `agy`'s own ids never carry, and a mode `agy` offered
+under that id would not be listed. A session in the mode runs `agy` in `accept-edits`, which every
+account has, so `agy` approves edits in the workspace by itself; and the device answers every
+`session/request_permission` of the session with `agy`'s allow-once option as it arrives — a
+sub-agent's request `agy` forwards included — raising no `approval` block, so the tools show as
+rows as they always do, as for Claude's `bypassPermissions`. `agy`'s questions
+(`elicitation/create`) still go to the person, and what the person's own `agy` deny rules refuse is
+refused by `agy` before anything is asked; everything `agy` asks about is approved. An approval open
+when the session switches to the mode stays for the person to answer, and the requests after it are
+approved; switching to another mode stops the approvals at once and sets that mode in `agy`. The
+mode is the session's `permission_mode` like any other — `session.create` and `session.set` may name
+it, and a new process keeps it (an idle release, a resume, a daemon restart), the device setting
+`accept-edits` again before the first prompt — but it is never a default: `default_permission_mode`
+stays the mode `agy` started its newest session on. A session a terminal holds stays read-only
+whatever its mode (4.4). Nothing changes in the gateway or the apps, which show the mode by the
+label the device sends; `fixtures/objects/agent.antigravity.json` stays the example of A64, before
+the device's mode. See 4.3, 4.4, 5.7 and 9.2.
