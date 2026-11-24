@@ -1050,11 +1050,11 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 32,
-          "description": "The language a phone that recognises speech itself listens for (A41, A44); Chinese when unset, and an auto written before A44 reads as unset."
+          "description": "The language a phone that recognises speech itself listens for (A41, A44); when unset, the language of the app's interface, en for English and zh for 简体中文 (A66), and an auto written before A44 reads as unset."
         },
         "polish_enabled": {
           "type": "boolean",
-          "description": "Whether a finished dictation goes through the gateway's polish model (A29, A41)."
+          "description": "Whether a finished dictation goes through the gateway's polish model (A29, A41), on a device that also holds its own polish permission (A65)."
         },
         "polish_model": {
           "type": "string",
@@ -1079,7 +1079,7 @@
         },
         "task_board": {
           "type": "boolean",
-          "description": "Whether the gateway keeps task boards for this account (A62). Absent is off; never written from an app's local value."
+          "description": "Whether the gateway keeps task boards for this account (A62). Absent is off; never written from an app's local value; turned off for every account when the gateway starts with another BOARD_PROVIDER_NAME (A65)."
         }
       },
       "required": [

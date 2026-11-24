@@ -315,6 +315,26 @@ gateway itself, as soon as it can (A36), or by an app retrying after a failure (
 object. A gateway older than A62 sends neither, and an app then offers no board anywhere; with
 `enabled: false` an app draws no board in a conversation and shows the setting disabled with a note.
 
+`provider_name` (A65) names the third-party AI service behind a feature, as the operator wrote it in
+the gateway's `.env`: `stt.provider_name` from `STT_PROVIDER_NAME`, `polish.provider_name` from
+`POLISH_PROVIDER_NAME` and `board.provider_name` from `BOARD_PROVIDER_NAME`; `GET
+/api/live/status` carries `provider_name` from `LIVE_PROVIDER_NAME` beside `enabled`, `available`
+and `reason` (`docs/LIVE_ASSISTANT.md`). Each is plain text, trimmed, at most 40 characters —
+`Example AI`, say — and a gateway refuses to start with a longer one. It is present whenever it is
+set, whatever `enabled` says, and absent when unset, which means unnamed. `hello` carries the same
+objects. An app puts the name, as it is, into the words of that feature's permission screen and
+Settings sentence and asks the person again when it changes (rule 23, 8.1); with no name it uses
+the unnamed words, as it does with a gateway older than A65. A gateway offers a feature whether or
+not its provider is named. With every name set, the objects read:
+
+```json
+{
+  "stt": { "enabled": true, "languages": ["auto"], "streaming": false, "provider_name": "Example AI" },
+  "polish": { "enabled": true, "provider_name": "Example AI" },
+  "board": { "enabled": true, "provider_name": "Example AI" }
+}
+```
+
 `fixtures/http/config.response.json`
 
 ```json
@@ -362,12 +382,16 @@ The first was `resume_after_limit`: whether a session that stopped because the v
 was reached is resumed by its device once the limit resets (7.2); off until the person turns it on.
 Since A41 the Settings screen's own preferences are there too: `language` (the app's interface
 language, `en` or `zh-Hans`), `stt_language` (the language a phone that recognises speech itself
-listens for — `zh`, `en`, `ja`, … — Chinese when unset; an `auto` written before A44 reads as
-unset, because the gateway's provider is the only recogniser that detects the language and it
-needs no setting, A44), `polish_enabled`, `polish_model`, `polish_strength` (`moderate` or `strong`,
-A29) and `timeline_detail` (`simple` or `detailed`). Every field but `resume_after_limit` is
-optional: absent means nobody has set it yet, and an app then keeps the value it has and writes it
-up the first time it connects, so an account that arrives at A41 keeps what its first app had.
+listens for — `zh`, `en`, `ja`, … — and, when unset, the language of the app's interface: `en` for
+English and `zh` for 简体中文 (A66); an `auto` written before A44 reads as unset, because the
+gateway's provider is the only recogniser that detects the language and it needs no setting, A44),
+`polish_enabled`, `polish_model`, `polish_strength` (`moderate` or `strong`, A29) and
+`timeline_detail` (`simple` or `detailed`). Every field but `resume_after_limit` is optional: absent
+means nobody has set it yet, and an app then keeps the value it has and writes it up the first time
+it connects, so an account that arrives at A41 keeps what its first app had; an app that has no
+dictation language of its own, because the person never picked one on it, writes up the one its
+interface language resolves to (A66). `polish_enabled` is the person's choice for the account, and
+a device polishes only while it also holds its own polish permission (rule 23, A65).
 The gateway is the one writer and the order of arrival is the order of truth: a `PATCH` sets the
 fields present, and the whole object goes out at once as `preferences.updated` to every app socket
 of the account and as `preferences` to its devices — the latest write to reach the gateway wins,
@@ -386,7 +410,11 @@ account-wide, because the gateway keeps the boards for every app of the account,
 not clear it at sign-out. Turning it off deletes every board of the account at once. An app lets
 the person turn it off whenever it is on, whatever the plan or `board.enabled`, and writes `true`
 only when the account can use the board. A `PATCH` validates it as a boolean, needs a login alone
-like every preference, and devices ignore it.
+like every preference, and devices ignore it. The disclosure names the board's provider (A65), so a
+gateway remembers the `BOARD_PROVIDER_NAME` it last started with, and when it starts with another
+one — an unset name becoming set, and a set one becoming unset, included — it turns `task_board` off
+for every account through the off path above, every board deleted, before it serves anyone; each
+person then agrees again to the service now named.
 
 `fixtures/http/preferences.response.json`
 
@@ -486,6 +514,11 @@ dictation produced together with the recent conversation and gets the same reque
 cleanly. `hello` and `GET /api/config` report `polish.enabled` so an app can show or disable the
 setting. The gateway stores nothing from either call and never forwards the polished text to a
 device: the result is a draft in the app's composer, and sending it is the user's own action.
+
+An app makes no request of this section — `POST /api/stt/transcribe`, `POST /api/polish` — and
+opens no `/ws/stt` (3.8) before the person has given it the permission for that feature, dictation
+or polish, on that gateway and account (rule 23, A65). `GET /api/polish/models` sends nothing of the
+person's and needs none.
 
 `PolishRequest.strength` is `moderate` or `strong`. Moderate removes fillers, false starts and
 repetitions, corrects what the recogniser plainly misheard, punctuates, and otherwise keeps the
@@ -646,7 +679,8 @@ it receives.
 
 `WS /ws/stt`, authenticated as above. The provider detects the language (A44); a `language`
 query parameter an older app sends is ignored, and `stt.final.language` is the language the
-provider reported, or `auto`.
+provider reported, or `auto`. An app opens it only with the person's dictation permission for this
+gateway and account (rule 23, A65).
 
 The client sends **binary** frames of PCM16LE, 16 kHz, mono, 100–200 ms per frame. It sends
 `stt.stop` to finish and transcribe everything received, or `stt.cancel` to discard the utterance.
@@ -2566,7 +2600,7 @@ device is answered `not_found`, exactly as one naming nothing would be.
 
 | Type | Payload | When |
 | --- | --- | --- |
-| `hello` | `protocol`, `gateway_version`, `user`, `devices`, `sessions`, `stt`, `polish`, `board`, `apps`, `preferences`, `server_time` | First frame. `polish` (A29) may be absent on a gateway older than it, which means disabled; `apps` (A31) likewise, which means no minimum; `preferences` (A35) likewise, which means the switches it holds are not offered; `stt.streaming` (A57) likewise, which means live partials (3.5); `board` (A62) likewise, which means no task board (3.2) |
+| `hello` | `protocol`, `gateway_version`, `user`, `devices`, `sessions`, `stt`, `polish`, `board`, `apps`, `preferences`, `server_time` | First frame. `polish` (A29) may be absent on a gateway older than it, which means disabled; `apps` (A31) likewise, which means no minimum; `preferences` (A35) likewise, which means the switches it holds are not offered; `stt.streaming` (A57) likewise, which means live partials (3.5); `board` (A62) likewise, which means no task board (3.2); `stt.provider_name`, `polish.provider_name` and `board.provider_name` (A65) likewise, which means unnamed (3.2) |
 | `device.updated` | `device` | A device connects, disconnects, is renamed or re-detects agents |
 | `device.removed` | `device_id` | A device is deleted |
 | `session.updated` | `session` | Any change to a session summary |
@@ -4512,6 +4546,159 @@ one app connection that asked. The gateway relays bytes and never reads them.
     front of them, so a session already on screen when its turn ends never keeps a dot: that
     conversation draws none and is left out of the count while its `session.seen` is on its way, so
     nothing flickers during the round trip. Signing out clears the badge (A47).
+23. **A third-party AI service gets nothing until the person agrees, and the app names it.** Four
+    features send what the person says or wrote to a third-party AI service through the gateway:
+    gateway transcription, AI polish, the voice assistant and the task board. Each asks first, on a
+    screen of its own in the words of 8.1: what is sent and when, who receives it — the gateway's
+    `provider_name` for that feature (3.2) in the named words, the unnamed words where it reports
+    none — **Agree and continue** and **Not now**. Nothing is sent for a feature, and no microphone
+    is asked for it, until the person has agreed on its screen; Not now changes nothing else, and
+    typing, on-device dictation and every other feature keep working.
+    - **Dictation, polish and the assistant are the device's permissions.** Each is kept on the
+      device and never uploaded, per gateway origin, account and feature — `dictation`, `polish`,
+      `assistant` — as `<text version>|<provider name>`, the name empty where the gateway reports
+      none: version 1 for dictation and for polish, 2 for the assistant. A permission whose version
+      or name differs from the current ones is none, and the screen comes back. Each is withdrawn by
+      the feature's own control in Settings — Transcribe switched back to the device on a phone, the
+      Dictation switch on the Mac, Windows and the web, the polish switch, the Voice assistant switch,
+      which also ends an open call — and all three are cleared at sign-out and with the account; a
+      session the gateway ended keeps them. The demo is an account of its own: it shows every screen
+      and sends nothing.
+    - **Dictation on a phone** (iOS, Android). Choosing Gateway under Transcribe asks; Not now
+      leaves the phone recognising. A phone whose Transcribe reads Gateway without the permission —
+      chosen before A65, or agreed for another name — asks at the next press of the microphone,
+      before anything is recorded: Agree starts that dictation through the gateway; Not now switches
+      Transcribe back to the device and records nothing.
+    - **Dictation on the Mac, Windows and the web,** which transcribe only through the gateway. The
+      first press of the microphone asks; Agree starts that dictation, Not now records nothing, and
+      the next press asks again. Settings › Voice › **Dictation** is a switch that reads the
+      permission — on asks, off withdraws — and replaces the Transcribe row, which offers no choice
+      there. It works wherever the gateway transcribes and wherever the permission is held; where
+      the gateway does not transcribe and no permission is held, the row is drawn disabled with that
+      client's existing note that the gateway has no transcription service, never hidden, so the
+      Voice section keeps its row as today and needs no new words.
+    - **Polish across devices.** The polish switch reads on exactly while the account's
+      `polish_enabled` is true and this device holds the polish permission. Turning it on asks first
+      and then writes `polish_enabled: true`; turning it off withdraws this device's permission and
+      writes `false`, as before. When `polish_enabled` is true on a device without the permission —
+      another device turned it on, or the version or the name changed — the first dictation there
+      that would be polished asks after its words are in the composer and before `POST /api/polish`:
+      Agree polishes it; Not now keeps the words as dictated, and the device does not ask again at
+      dictation time until the switch is turned on there or the version or the name changes, a
+      refusal it keeps beside its permissions and clears with them.
+    - **The voice assistant** asks on its entry and on its Settings switch, as before. Version 2 asks
+      everyone again, in every app; the web, which had no screen before A65, asks too and gains the
+      Voice assistant switch in Settings › Voice.
+    - **The task board's permission is the account's** `task_board` (3.2), because the gateway
+      sends its messages: written `true` only from its disclosure, kept at sign-out, withdrawn by its
+      switch, which deletes every board, and turned off by the gateway itself when the board's
+      provider changes.
+24. **A dictation that cannot start says why, and stays.** On a phone, a dictation that cannot
+    start, or stops short, says why in a notice above the composer in the words of 8.1, with the
+    action that fixes it: **Change language** for a language the device cannot recognise, with
+    **Use gateway transcription** beside it where the gateway transcribes (which goes through the
+    dictation permission of rule 23); **Open
+    Settings** for dictation turned off on the device or a permission the person refused; **Retry**
+    for a recogniser that is unavailable. On every client, a press of the microphone while a voice
+    assistant call holds it says so, with **Hang up**. The notice stays until the person closes it
+    (**Close**) or uses its action — it never fades by itself — and the next dictation replaces it.
+    A press of the microphone always answers: it records, asks for a permission or shows such a
+    notice (A66).
+
+### 8.1 The words of the AI permissions and the dictation notices (A65, A66)
+
+Every app draws these words as they are, in both languages, on the screens the second table gives
+it, each from its own string table. `%@` is the gateway's `provider_name`, drawn verbatim — or, in
+N1, the dictation language's name in the interface language. Where a line has a named and an
+unnamed form, the app draws the named one when the gateway reports a name. *Existing* lines keep
+their key and words and are listed for their place on a screen;
+*changed* lines replace the words they say, and *replaces* names the key a new line takes the place
+of. The Mac, Windows and the web say "click Send" in A8 where the phones say "tap Send", the Chinese
+the same, as the Mac and Windows do today.
+
+| Id | Status | Where | English | 简体中文 |
+| --- | --- | --- | --- | --- |
+| S1 | existing | Every permission screen: the primary button | Agree and continue | 同意并继续 |
+| S2 | existing | Every permission screen: the second button | Not now | 暂不 |
+| S4 | existing | Every dictation notice: the close control | Close | 关闭 |
+| S5 | existing | Notices N2, N3, N4: the action | Open Settings | 打开设置 |
+| S6 | existing | Notice N5: the action | Retry | 重试 |
+| S7 | existing | Notice N6: the action | Hang up | 挂断 |
+| D1 | new | Dictation permission, phones: title | Use gateway transcription? | 使用网关转写？ |
+| D2 | new | Dictation permission, Mac, Windows, web: title | Turn on dictation? | 开启听写？ |
+| D3 | new | Dictation permission, phones: lead | Gateway transcription sends your speech to a speech recognition service instead of recognising it on this device. | 网关转写会把你的语音交给语音识别服务转成文字，而不是在本机识别。 |
+| D4 | new | Dictation permission, Mac, Windows, web: lead | Dictation sends your speech to a speech recognition service, which turns it into text. | 听写会把你的语音交给语音识别服务，由它转成文字。 |
+| D5 | new | Dictation permission: first bullet | Each time you dictate: the audio you record, from when you start until you stop. Nothing else goes with it: no messages and no account details. | 每次听写时：你录下的音频，从开始录音到停止为止。不会附带其他内容：不含消息，也不含账户信息。 |
+| D6 | new | Dictation permission: second bullet, named | It goes through the gateway you connect to, to %@, a third-party speech recognition service, which returns the text and handles the audio under its own privacy policy. | 音频经由你连接的网关发送给第三方语音识别服务 %@，由它返回文字，并按它自己的隐私政策处理音频。 |
+| D7 | new | Dictation permission: second bullet, unnamed | It goes through the gateway you connect to, to a third-party speech recognition service chosen by this gateway's operator, which returns the text and handles the audio under its own privacy policy. | 音频经由你连接的网关，发送给该网关运营者选用的第三方语音识别服务，由它返回文字，并按它自己的隐私政策处理音频。 |
+| D8 | new | Dictation permission: third bullet | The text becomes an editable draft. Nothing reaches your agent until you send it. | 识别出的文字会成为可编辑的草稿，在你发送之前不会发给 Agent。 |
+| D10 | new | Dictation permission, phones: last paragraph | Nothing is sent unless you dictate. To stop and withdraw this permission, switch Transcribe back to this device in Settings. | 不听写就不会发送任何内容。在“设置”中把“转写方式”改回本机，即可停止并撤回此许可。 |
+| D11 | new | Dictation permission, Mac, Windows, web: last paragraph | Nothing is sent unless you dictate. You can withdraw this permission in Settings. | 不听写就不会发送任何内容。你可以随时在“设置”中撤回此许可。 |
+| D12 | new | Phones, Settings › Voice › Transcribe, under Gateway, named | Audio is streamed to the gateway you connect to and passed to %@, a third-party speech recognition service, which recognises the language itself. | 音频会实时发送到你连接的网关，再转交给第三方语音识别服务 %@，由它自动识别语言。 |
+| D13 | existing | Phones, Settings › Voice › Transcribe, under Gateway, unnamed | Audio is streamed to the gateway you connect to and passed to a third-party speech recognition service, which recognises the language itself. | 音频会实时发送到你连接的网关，再转交给第三方语音识别服务，由它自动识别语言。 |
+| D14 | new | Mac, Windows, web, Settings › Voice: the switch's title; replaces the Transcribe row | Dictation | 听写 |
+| D15 | new | Mac, Windows, web, Settings › Voice › Dictation: sentence, named | Sends the audio of each dictation through this gateway to %@, a third-party speech recognition service. Nothing is sent while it is off. | 通过此网关把每次听写的音频发送给第三方语音识别服务 %@。关闭时不会发送任何内容。 |
+| D16 | new | Mac, Windows, web, Settings › Voice › Dictation: sentence, unnamed | Sends the audio of each dictation through this gateway to a third-party speech recognition service. Nothing is sent while it is off. | 通过此网关把每次听写的音频发送给第三方语音识别服务。关闭时不会发送任何内容。 |
+| P1 | new | Polish permission: title | Turn on AI polish? | 开启 AI 润色？ |
+| P2 | new | Polish permission: lead | AI polish turns a dictation into a clear message for your agent, using the conversation it is for. | AI 润色会结合当前对话，把你的听写整理成发给 Agent 的清晰消息。 |
+| P3 | new | Polish permission: first bullet | Each time a dictation finishes: the text you dictated and, as context, up to the 20 most recent messages of the conversation (yours and the agent's replies, never tool output). They can include anything an agent wrote, such as secrets. | 每次听写结束时：你听写的文字，以及作为上下文的当前对话最近最多 20 条消息（你的消息和 Agent 的回复，不含工具输出）。其中可能包含 Agent 写出的任何内容，例如密钥。 |
+| P4 | new | Polish permission: second bullet, named | It goes through the gateway you connect to, to %@, a third-party AI model provider, which returns the polished text and handles the request under its own privacy policy. | 这些内容经由你连接的网关发送给第三方 AI 模型服务商 %@，由它返回润色后的文字，并按它自己的隐私政策处理。 |
+| P5 | new | Polish permission: second bullet, unnamed | It goes through the gateway you connect to, to a third-party AI model provider chosen by this gateway's operator, which returns the polished text and handles the request under its own privacy policy. | 这些内容经由你连接的网关，发送给该网关运营者选用的第三方 AI 模型服务商，由它返回润色后的文字，并按它自己的隐私政策处理。 |
+| P6 | new | Polish permission: third bullet | The polished text is a draft you can edit. It is never sent to your agent automatically. | 润色结果是可以编辑的草稿，不会自动发给 Agent。 |
+| P8 | new | Polish permission: last paragraph | Nothing is sent while AI polish is off. Turning it off in Settings withdraws this permission. | AI 润色关闭时不会发送任何内容。在“设置”中关闭它即可撤回此许可。 |
+| P9 | new | Settings › Voice › Polish dictation with AI: sentence, named | Sends what you dictated and the last few messages through this gateway to %@, a third-party AI model provider. Nothing is sent while it is off. | 通过此网关把你的听写内容和最近几条消息发送给第三方 AI 模型服务商 %@。关闭时不会发送任何内容。 |
+| P10 | existing | Settings › Voice › Polish dictation with AI: sentence, unnamed; the web's own note gives way to it | Sends what you dictated and the last few messages through this gateway to a third-party AI model. Nothing is sent while it is off. | 通过此网关把你的听写内容和最近几条消息发送给第三方 AI 模型。关闭时不会发送任何内容。 |
+| A1 | existing | Voice assistant permission: heading | Talk to your sessions. A call shares the following: | 和你的会话聊聊。一次通话会共享以下内容： |
+| A2 | existing | Voice assistant permission: first bullet | Your voice, from the moment the call starts until you hang up, silence included. | 你的声音：从通话开始到挂断，无人说话的时间也包括在内。 |
+| A3 | changed | Voice assistant permission: second bullet | When you ask about your sessions: their titles, project folder names, computer names and states, what is waiting for your approval or an answer, and short excerpts of recent messages, tool call titles and errors, which can include anything an agent printed, such as secrets. | 你询问会话情况时：会话标题、项目文件夹名称、电脑名称和状态，等待你批准或回答的事项，以及最近消息、工具调用标题和错误的一小段摘录，其中可能包含 Agent 打印出的任何内容，例如密钥。 |
+| A4 | existing | Voice assistant permission: third bullet | The text of any message the assistant drafts for you. | 助手替你起草的消息的文字。 |
+| A5 | new | Voice assistant permission: paragraph, named | All of it goes through the gateway you connect to, to %@, a third-party AI speech service, which handles it under its own privacy policy. | 这些内容都会经由你连接的网关，发送给第三方 AI 语音服务 %@，由它按自己的隐私政策处理。 |
+| A6 | changed | Voice assistant permission: paragraph, unnamed | All of it goes through the gateway you connect to, to a third-party AI speech service chosen by this gateway's operator, which handles it under its own privacy policy. | 这些内容都会经由你连接的网关，发送给该网关运营者选用的第三方 AI 语音服务，由它按自己的隐私政策处理。 |
+| A8 | existing | Voice assistant permission: paragraph | The assistant sends a message only after it has read it back and you say yes, or you tap Send. It can mishear, so cancel a draft that is wrong. | 助手把消息念给你听、你回答“好”之后，或你点“发送”之后，才会发出消息。它可能听错，所以草稿不对时请取消。 |
+| A9 | existing | Voice assistant permission: last paragraph | Nothing is sent unless you start a call. You can withdraw this permission in Settings. | 不开始通话，就不会发送任何内容。你可以随时在“设置”中撤回此许可。 |
+| A10 | new | Settings › Voice › Voice assistant: sentence, named | Talk to an assistant about your sessions. Sends your voice and what the assistant reads from your sessions through this gateway to %@, a third-party AI speech service, during a call. Nothing is sent while it is off. | 与助手聊聊你的会话。通话期间，会通过此网关把你的声音和助手读取的会话内容发送给第三方 AI 语音服务 %@；关闭时不会发送任何内容。 |
+| A11 | existing | Settings › Voice › Voice assistant: sentence, unnamed | Talk to an assistant about your sessions. Sends your voice and what the assistant reads from your sessions through this gateway to a third-party AI speech service during a call. Nothing is sent while it is off. | 与助手聊聊你的会话。通话期间，会通过此网关把你的声音和助手读取的会话内容发送给第三方 AI 语音服务；关闭时不会发送任何内容。 |
+| B1 | existing | Task board disclosure: title | Turn on the task board? | 开启任务看板？ |
+| B2 | existing | Task board disclosure: lead | The task board lists what you asked for in a conversation, what is being done and what is left, so you don't have to read it all again. | 任务看板会列出你在对话里提出的要求、正在做的和还剩下的，省去重读长对话。 |
+| B3 | new | Task board disclosure: first bullet, named | For conversations you opened in the last 7 days, recent messages (yours, the agent's replies, the names of the tools it ran and its errors) go through this gateway to %@, a third-party AI model provider, after each round and when you open them. Tool output is not sent. | 对你最近 7 天打开过的对话，每轮结束后和你打开时，最近的消息（你的消息、Agent 的回复、它运行的工具名称和报错）会经由此网关发送给第三方 AI 模型服务商 %@。工具输出不会发送。 |
+| B4 | changed | Task board disclosure: first bullet, unnamed | For conversations you opened in the last 7 days, recent messages (yours, the agent's replies, the names of the tools it ran and its errors) go through this gateway to a third-party AI model chosen by this gateway's operator after each round and when you open them. Tool output is not sent. | 对你最近 7 天打开过的对话，每轮结束后和你打开时，最近的消息（你的消息、Agent 的回复、它运行的工具名称和报错）会经由此网关发送给该网关运营者选用的第三方 AI 模型。工具输出不会发送。 |
+| B5 | existing | Task board disclosure: second bullet | The gateway keeps the task list, not the messages. It deletes the list when the conversation, the device or the account is deleted, when you turn the board off, or when the conversation has not been opened for 30 days. | 网关只保存任务列表，不保存消息。对话、设备或账户被删除、你关闭看板，或对话 30 天未被打开时，网关会删除任务列表。 |
+| B6 | existing | Task board disclosure: third bullet | Replies can include anything an agent printed, such as secrets. The list is made by AI and can be wrong. | 回复可能包含 Agent 打印的任何内容，例如密钥。任务列表由 AI 生成，可能有误。 |
+| B7 | new | Task board disclosure: fourth bullet | This permission is your account's, on every device, because the gateway makes the boards. Signing out does not withdraw it; turning the board off in Settings does, and deletes every board. | 此许可属于你的账户、对所有设备生效，因为看板由网关生成。退出登录不会撤回它；在“设置”中关闭看板会撤回它，并删除所有看板。 |
+| B8 | new | Settings › General › Reading › Task board: sentence, named | Lists what you asked for in each conversation, what is being done and what is left. For conversations you opened in the last 7 days, recent messages go through this gateway to %@, a third-party AI model provider, after each round and when you open them. Tool output is not sent. Nothing is sent while it is off, and turning it off deletes every board. | 为每个对话列出你提出的要求、正在做的和还剩下的。对你最近 7 天打开过的对话，每轮结束后和你打开时，最近的消息会经由此网关发送给第三方 AI 模型服务商 %@。工具输出不会发送。关闭时不会发送任何内容，关闭后会删除所有看板。 |
+| B9 | existing | Settings › General › Reading › Task board: sentence, unnamed | Lists what you asked for in each conversation, what is being done and what is left. For conversations you opened in the last 7 days, recent messages go through this gateway to a third-party AI model after each round and when you open them. Tool output is not sent. Nothing is sent while it is off, and turning it off deletes every board. | 为每个对话列出你提出的要求、正在做的和还剩下的。对你最近 7 天打开过的对话，每轮结束后和你打开时，最近的消息会经由此网关发送给第三方 AI 模型。工具输出不会发送。关闭时不会发送任何内容，关闭后会删除所有看板。 |
+| X2 | new | Add device, under its first paragraph | Messages you send go to your computer. The coding agent there sends them to its own AI provider, under your account with that provider. SideCode sends your messages to an AI service only for the AI features you turn on, and each one asks you first. | 你发送的消息会发到你的电脑。电脑上的 Coding Agent 会把它们发送给自己的 AI 服务商，使用的是你在该服务商的账户。只有在你开启的 AI 功能中，随码才会把你的消息发送给 AI 服务，并且每项功能都会先征求你的同意。 |
+| N1 | new; replaces "No on-device model for this language. Switch to gateway transcription in Settings." | Notice: the dictation language has no recognition on the device | %@ can't be recognised on this device. | 本机无法识别%@。 |
+| N2 | new | Notice: dictation is turned off on the device (iOS) | Dictation is turned off on this device. Turn on Enable Dictation in Settings > General > Keyboard. | 本机已关闭听写。请在“设置”>“通用”>“键盘”中打开“启用听写”。 |
+| N3 | new; replaces "Allow microphone access in Settings, or keep typing." | Notice: microphone permission refused | SideCode isn't allowed to use the microphone. Allow it in Settings. | 随码没有使用麦克风的权限。请在“设置”中允许。 |
+| N4 | new; replaces "Allow speech recognition in Settings, or keep typing." | Notice: speech recognition permission refused (iOS) | SideCode isn't allowed to use speech recognition. Allow it in Settings. | 随码没有使用语音识别的权限。请在“设置”中允许。 |
+| N5 | new; replaces "Transcription is unavailable right now. Keep typing instead." | Notice: the device's recogniser is unavailable | Speech recognition on this device isn't available right now. Try again in a moment, or keep typing. | 本机的语音识别暂时不可用。请稍后再试，或继续打字。 |
+| N6 | new; replaces "Hang up the voice assistant call to dictate" | Notice: the microphone is held by a voice assistant call | The voice assistant call is using the microphone. Hang up to dictate. | 语音助手通话正在使用麦克风。挂断后才能语音输入。 |
+| N7 | new | Notice N1: the first action | Change language | 更换语言 |
+| N8 | new | Notice N1: the second action, where rule 24 offers it | Use gateway transcription | 改用网关转写 |
+
+Each screen draws its lines in this order, and each client has these:
+
+| Screen or line | Lines, in order | iOS | Android | Mac | Windows | Web |
+| --- | --- | --- | --- | --- | --- | --- |
+| Dictation permission, phone words | D1, D3, bullets D5, D6 or D7, D8; D10; S1, S2 | yes | yes | — | — | — |
+| Dictation permission, desktop words | D2, D4, bullets D5, D6 or D7, D8; D11; S1, S2 | — | — | yes | yes | yes |
+| Transcribe, under Gateway | D12 or D13 | yes | yes | — | — | — |
+| Settings › Voice › Dictation switch | D14, D15 or D16; disabled, D14 with the client's existing no-transcription note | — | — | yes | yes | yes |
+| Polish permission | P1, P2, bullets P3, P4 or P5, P6; P8; S1, S2 | yes | yes | yes | yes | yes |
+| Polish switch's sentence | P9 or P10 | yes | yes | yes | yes | yes |
+| Voice assistant permission, version 2 | A1, bullets A2, A3, A4; A5 or A6; A8; A9; S1, S2 | yes | yes | yes | yes | yes, new |
+| Voice assistant switch's sentence | A10 or A11 | yes | yes | yes | yes | yes, new |
+| Task board disclosure | B1, B2, bullets B3 or B4, B5, B6, B7; S1, S2 | yes | yes | yes | yes | yes |
+| Task board switch's sentence | B8 or B9 | yes | yes | yes | yes | yes |
+| Pairing line | X2 | yes | yes | yes | yes | yes |
+| Notices N1 (with N7, and N8 where offered), N3 (S5), N5 (S6); S4 on each | N1, N3, N5 | yes | yes | — | — | — |
+| Notices N2, N4 (S5); S4 on each | N2, N4 | yes | — | — | — | — |
+| Notice N6 (S7); S4 | N6 | yes | yes | yes | yes | yes |
+
+Each app draws a permission screen as it draws the voice assistant's today, and the task board's
+disclosure where it draws it today. The checks that each app's words name no provider are retired
+with A65: the words carry `%@` for the gateway's name.
 
 ## 9. Conformance checklist
 
@@ -4637,6 +4824,14 @@ one app connection that asked. The gateway relays bytes and never reads them.
       owner's sockets watching that board; makes no model call when nothing new happened; deletes
       boards with the session, the device, the account, the preference turned off, and after 30 days
       unopened; logs no content (A62).
+- [ ] Reports `stt.provider_name`, `polish.provider_name` and `board.provider_name` in `hello` and
+      `GET /api/config`, and `provider_name` in `GET /api/live/status`, from `STT_PROVIDER_NAME`,
+      `POLISH_PROVIDER_NAME`, `BOARD_PROVIDER_NAME` and `LIVE_PROVIDER_NAME`: trimmed plain text of at
+      most 40 characters, refused at startup when longer, present whenever set and absent when
+      unset (A65).
+- [ ] Keeps the `BOARD_PROVIDER_NAME` it last started with and, when it starts with another — unset
+      becoming set and set becoming unset included — turns `task_board` off for every account
+      through the A62 off path, every board deleted, before it serves anyone (A65).
 
 ### 9.2 Device
 
@@ -5004,7 +5199,9 @@ one app connection that asked. The gateway relays bytes and never reads them.
       transcription backend, the terminal font size, list folds.
 - [ ] Offers no dictation language where the gateway transcribes, which detects it (A44); where
       the phone's own recogniser transcribes, offers that recogniser's languages without an
-      automatic choice, Chinese when `stt_language` is unset or `auto`.
+      automatic choice and, when `stt_language` is unset or `auto`, listens for the language of the
+      app's interface — `en` for English, `zh` for 简体中文 — which an app with no dictation
+      language of its own writes up on its first connect (A66).
 - [ ] Dictating through the gateway while `stt.streaming` is `false`, opens `/ws/stt?partials=0`
       and inserts the transcript whole when the dictation ends; with `true`, or with no field,
       keeps the live partial text and sends no `partials`; leaves the phone's own recogniser as it
@@ -5051,6 +5248,37 @@ one app connection that asked. The gateway relays bytes and never reads them.
       mark until the app ships an official one; names the provider `google` "Google"; and draws
       Antigravity from its capabilities and `control` alone, with nothing of its own beyond the
       name and the mark (A64).
+- [ ] Keeps the dictation, polish and assistant permissions on the device per gateway origin,
+      account and feature as `<text version>|<provider name>` — versions 1, 1 and 2 — and treats one
+      whose version or name differs from the current ones as none; sends nothing for a feature and
+      asks for no microphone for it — no `/ws/stt`, `POST /api/stt/transcribe`, `POST /api/polish` or
+      `/ws/live` — before the person agrees on its screen; withdraws each with the feature's
+      Settings control; clears the three at sign-out and with the account and keeps them when the
+      gateway ends the session; writes `task_board: true` only from the board's disclosure (rule 23,
+      A65).
+- [ ] Draws the words of 8.1 as they are, on the screens and clients 8.1 lists: the named form with
+      the gateway's `provider_name` verbatim where it reports one, the unnamed form otherwise (A65).
+- [ ] (iOS, Android) Asks for the dictation permission when Gateway is chosen under Transcribe, and
+      at the microphone when Transcribe reads Gateway without it, before recording: Agree starts
+      that dictation, Not now switches Transcribe back to the device and records nothing (A65).
+- [ ] (Mac, Windows, web) Asks for the dictation permission at the first press of the microphone,
+      before asking for the microphone itself, and offers Settings › Voice › Dictation in place of
+      the Transcribe row, a switch that reads the permission, asks when turned on and withdraws when
+      turned off, drawn disabled with the client's existing no-transcription note, never hidden,
+      where the gateway does not transcribe and no permission is held (A65).
+- [ ] Draws the polish switch on exactly while `polish_enabled` is true and this device holds the
+      polish permission; turning it on asks and then writes `true`, turning it off withdraws and
+      writes `false`; with `polish_enabled` true and no permission, asks at the first dictation that
+      would be polished, before `POST /api/polish`, and after Not now keeps the words as dictated and
+      does not ask at dictation time again until the switch is turned on there or the version or the
+      name changes (A65).
+- [ ] (web) Asks for the voice assistant permission before the first call for each gateway and
+      account, as the other apps do, and offers the Voice assistant switch in Settings › Voice,
+      which withdraws it and ends an open call (A65).
+- [ ] (iOS, Android) Says why a dictation could not start in a notice that stays until it is closed
+      or its action is used, with the words and actions of rule 24 and 8.1; every app does the same
+      for a press of the microphone during a voice assistant call; a press of the microphone always
+      answers (A66).
 
 - [ ] Decodes every fixture under `fixtures/` in its test suite.
 
@@ -5538,8 +5766,9 @@ way to be wrong; a phone's own recogniser cannot detect it and must be told. The
 its provider detect the language of every transcription, ignores a `language` a client sends —
 the `/ws/stt` query parameter, the `POST /api/stt/transcribe` field — and reports `stt.languages`
 as `["auto"]`, kept for the apps that read it; `STT_LANGUAGES` is gone. `stt_language` is the
-language a phone that recognises speech itself listens for, Chinese when unset, and an `auto`
-written before this amendment reads as unset. Apps draw no dictation-language control for gateway
+language a phone that recognises speech itself listens for, and an `auto` written before this
+amendment reads as unset; an unset one is now the language of the app's interface (A66, which
+replaced "Chinese when unset"). Apps draw no dictation-language control for gateway
 transcription and offer the recogniser's languages without Automatic where the phone transcribes.
 Nothing else changes on the wire. See 3.2, 3.5, 3.8 and 9.
 
@@ -6046,3 +6275,44 @@ refusals — `agy` missing, older than 1.5.13, not signed in, a conversation an 
 a conversation `agy` no longer has — are listed in 4.4. `fixtures/objects/agent.antigravity.json`
 and `fixtures/app/reply.error.antigravity-signed-out.json` are the worked examples. See 1.1, 4.2,
 4.3, 4.4, 4.7, 4.8, 5.7, 5.8, 5.9, 5.12, 6.3, 7.2, 9 and 10.
+
+**2026-11-23 A65 — AI provider names and a permission per feature.** An app should say what
+personal data it sends to a third-party AI service and who receives it, and ask before it sends
+anything; the apps named nobody, and gateway transcription and AI polish asked nothing. The
+gateway now names the service behind each feature from four optional lines of its `.env`,
+`STT_PROVIDER_NAME`, `POLISH_PROVIDER_NAME`, `BOARD_PROVIDER_NAME` and `LIVE_PROVIDER_NAME` — plain
+text, trimmed, at most 40 characters, refused at startup when longer — reported as
+`stt.provider_name`, `polish.provider_name` and `board.provider_name` in `hello` and
+`GET /api/config`, and as `provider_name` in `GET /api/live/status`, each absent when unset, which
+means unnamed. A gateway keeps the `BOARD_PROVIDER_NAME` it last
+started with, and starting with another turns `task_board` off for every account through the A62 off
+path, so each person agrees again to the board's new provider. Each of the four features asks on a
+screen of its own before it first sends anything, in the words of 8.1, naming the gateway's
+provider where it reports one: gateway transcription, AI polish and the voice assistant keep their
+permission on the device, per gateway origin, account and feature, as `<text version>|<provider
+name>` — versions 1, 1 and 2, the assistant's words having changed — ask again when either part
+changes, are withdrawn by the feature's Settings control and are cleared at sign-out; the task board
+keeps A62's account-wide `task_board`, kept at sign-out. Nothing is sent for a feature and no
+microphone is asked for it before the person agrees. A phone that had Gateway chosen asks at its
+next dictation; the Mac, Windows and the web ask at the first press of the microphone and gain a
+Dictation switch in Settings › Voice; the polish switch reads on only with this device's
+permission, and a device that meets `polish_enabled` turned on elsewhere asks at its first
+dictation to be polished; the web gains the voice assistant's permission screen and switch. Every
+app's Add device page says how AI services are used (X2).
+Older apps and gateways interoperate unchanged: an app ignores names it does not know and an older
+app sends as before. Fixtures are unchanged; 3.2 shows the objects with every name set. See 3.2,
+3.5, 3.8, 6.1, 8, 8.1 and 9.
+
+**2026-11-23 A66 — local dictation follows the interface language.** A phone with no
+`stt_language` listened for Chinese (A44), so a person reading the app in English who never picked a
+dictation language was listened to in Chinese, and a device without a Chinese model could not
+dictate at all.
+When `stt_language` is unset, or `auto` from before A44, a phone that recognises speech itself now
+listens for the language of the app's interface — `en` for English, `zh` for 简体中文 — and an app
+that has no dictation language of its own writes that value up on its first connect, as A41 writes
+any field an account lacks, so the account's devices then agree until the person picks another.
+Gateway transcription is unchanged: its provider detects the language (A44). A phone's dictation
+that cannot start says why in a notice that stays until closed, with the action that fixes it —
+change the language, use gateway transcription, open Settings, retry — and every app says so for a
+press of the microphone during a voice assistant call (rule 24, 8.1). Nothing changes on the wire.
+See 3.2, 8, 8.1 and 9.

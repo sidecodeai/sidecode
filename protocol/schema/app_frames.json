@@ -312,6 +312,9 @@
       "properties": {
         "enabled": {
           "type": "boolean"
+        },
+        "provider_name": {
+          "$ref": "#/$defs/ProviderName"
         }
       },
       "required": [
@@ -325,11 +328,20 @@
       "properties": {
         "enabled": {
           "type": "boolean"
+        },
+        "provider_name": {
+          "$ref": "#/$defs/ProviderName"
         }
       },
       "required": [
         "enabled"
       ]
+    },
+    "ProviderName": {
+      "description": "A65: the third-party AI service behind the feature, as the operator wrote it in the gateway's .env (STT_PROVIDER_NAME, POLISH_PROVIDER_NAME, BOARD_PROVIDER_NAME): plain text, trimmed, at most 40 characters. Present whenever set, whatever enabled says; absent when unset, which means unnamed.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40
     },
     "SttInfo": {
       "type": "object",
@@ -347,6 +359,9 @@
         "streaming": {
           "description": "A57: true when the backend returns words while the audio is still arriving (STT_PROVIDER=realtime), false when it transcribes the recording afterwards. Sent by every gateway since A57, also when enabled is false; absent from an older gateway, which means live partials.",
           "type": "boolean"
+        },
+        "provider_name": {
+          "$ref": "#/$defs/ProviderName"
         }
       },
       "required": [
