@@ -45,7 +45,7 @@ export interface HelloFrame {
    * language. A57: `streaming` says whether its words arrive while the audio
    * does; a gateway too old to say leaves it out, which is live.
    */
-  stt: { enabled: boolean; languages: string[]; streaming?: boolean };
+  stt: { enabled: boolean; languages: string[]; streaming?: boolean; provider_name?: string };
   /** A29: absent from a gateway too old to polish dictation, which is "off". */
   polish?: PolishInfo;
   /** A35: absent from a gateway too old to hold the account's preferences. */

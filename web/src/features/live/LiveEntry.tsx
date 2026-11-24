@@ -44,7 +44,7 @@ export function LiveEntry() {
     useLive.getState().announce(waiting);
     // The first sight of a call the account itself ended: the gateway is asked how things stand,
     // so that the panel says why in place of Start.
-    if (first && waiting === ended) refresh();
+    if (first && waiting === ended) void refresh();
   }, [waiting, ended, refresh]);
 
   useEffect(() => {
@@ -74,7 +74,13 @@ export function LiveEntry() {
         {inCall ? <span className="live-dot" data-speaker={speaker} aria-hidden /> : null}
       </button>
       {open ? (
-        <LivePanel call={call} status={status} anchor={anchor} onClose={() => setOpen(false)} />
+        <LivePanel
+          call={call}
+          status={status}
+          refresh={refresh}
+          anchor={anchor}
+          onClose={() => setOpen(false)}
+        />
       ) : null}
     </>
   );

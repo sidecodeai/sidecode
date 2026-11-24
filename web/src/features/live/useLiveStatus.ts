@@ -9,8 +9,8 @@ interface Answer {
 export interface LiveStatusHook {
   /** What the gateway says of the assistant for this account; null until it has said. */
   status: LiveStatus | null;
-  /** Ask the gateway again now; a failure keeps the answer given before. */
-  refresh: () => void;
+  /** Ask the gateway again now, answering with what it said; a failure keeps the answer given before. */
+  refresh: () => Promise<LiveStatus>;
 }
 
 /**
@@ -26,9 +26,14 @@ export function useLiveStatus(username: string, open: boolean): LiveStatusHook {
     return known === undefined ? null : { username, status: known };
   });
 
-  const refresh = useCallback(() => {
-    void refreshLiveStatus(username).then((status) => setAnswer({ username, status }));
-  }, [username]);
+  const refresh = useCallback(
+    () =>
+      refreshLiveStatus(username).then((status) => {
+        setAnswer({ username, status });
+        return status;
+      }),
+    [username],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -42,7 +47,7 @@ export function useLiveStatus(username: string, open: boolean): LiveStatusHook {
 
   useEffect(() => {
     const known = knownLiveStatus(username);
-    if (open && known?.enabled && !known.available) refresh();
+    if (open && known?.enabled && !known.available) void refresh();
   }, [open, username, refresh]);
 
   const status = answer !== null && answer.username === username ? answer.status : null;

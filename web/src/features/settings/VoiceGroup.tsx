@@ -1,9 +1,15 @@
 /**
- * A29 — the Voice section: who transcribes dictation, and whether a model tidies
- * it up before it is sent. One surface with no caption, since the section's
- * title already says Voice. A gateway that offers no transcription and a
- * gateway with no polish model each say so in their own row; the surface never
- * collapses to a note.
+ * A29, A65 — the Voice section: the AI features that send what the person says
+ * or dictates to a third-party AI service, each a switch with the sentence that
+ * names the service, and each asking first: dictation, whether a model tidies it
+ * up before it is sent, and the voice assistant. One surface with no caption,
+ * since the section's title already says Voice. A gateway that offers no
+ * transcription and a gateway with no polish model each say so in their own
+ * row; the surface never collapses to a note.
+ *
+ * The polish switch reads on while the account's polish is on and this browser
+ * holds its permission: turning it on asks, then writes it on; turning it off
+ * withdraws the permission and writes it off.
  */
 import { useEffect, useState } from 'react';
 import { Menu } from '../../components/Popover';
@@ -12,49 +18,72 @@ import { Switch } from '../../components/Switch';
 import { api } from '../../lib/api';
 import type { PolishModel, PolishStrength } from '../../protocol/types';
 import { strings } from '../../strings';
+import { useConsent, withdrawConsent } from '../../stores/aiConsent';
+import { useAuth } from '../../stores/auth';
 import { useConnection } from '../../stores/connection';
 import { useSettings } from '../../stores/settings';
+import { PolishConsent } from '../consent/PolishConsent';
+import { useProviderNames } from '../consent/providerNames';
+import { LiveSettingRow } from '../live/LiveSettingRow';
+import { DictationRow } from './DictationRow';
 import { SettingsGroup } from './SettingsGroup';
 import { SettingsRow } from './SettingsRow';
 
 export function VoiceGroup() {
-  const stt = useConnection((s) => s.stt);
   const polish = useConnection((s) => s.polish);
   const polishEnabled = useSettings((s) => s.polishEnabled);
   const setPolishEnabled = useSettings((s) => s.setPolishEnabled);
+  const username = useAuth((s) => s.username);
+  const names = useProviderNames();
+  const polishHeld = useConsent(username, 'polish', names.polish);
+  const [askPolish, setAskPolish] = useState(false);
+  // What the switch shows and what the rows under it follow: the account's
+  // choice, and this browser's permission to send what is polished.
+  const polishOn = polish.enabled && polishEnabled && polishHeld;
 
   return (
-    <SettingsGroup>
-      {/* A44: the web only transcribes on the gateway, whose provider detects
-          the language, so the row names the gateway and has nothing to choose:
-          no menu here, and no language anywhere. */}
-      <SettingsRow
-        title={strings.settings.transcribe}
-        sentence={
-          stt.enabled ? strings.settings.transcribeNote : strings.settings.voiceServerDisabled
-        }
-        control={<span className="pill quiet">{strings.settings.transcribeGateway}</span>}
-      />
+    <>
+      <SettingsGroup>
+        {/* A44, A65: the web only transcribes on the gateway, whose provider
+            detects the language, so its one choice is the permission to send
+            the audio there: no menu, and no language anywhere. */}
+        <DictationRow />
 
-      {/* The switch is always drawn, so the feature exists even where this
-          gateway cannot offer it; the model and the strength appear once it is
-          on, because they mean nothing while it is off. */}
-      <SettingsRow
-        title={strings.settings.polish}
-        sentence={polish.enabled ? strings.settings.polishNote : strings.settings.polishServerDisabled}
-        target
-        control={
-          <Switch
-            label={strings.settings.polish}
-            checked={polish.enabled && polishEnabled}
-            disabled={!polish.enabled}
-            onChange={setPolishEnabled}
-          />
-        }
-      />
+        {/* The switch is always drawn, so the feature exists even where this
+            gateway cannot offer it; the model and the strength appear once it is
+            on, because they mean nothing while it is off. */}
+        <SettingsRow
+          title={strings.settings.polish}
+          sentence={
+            polish.enabled ? strings.settings.polishNote(names.polish) : strings.settings.polishServerDisabled
+          }
+          target
+          control={
+            <Switch
+              label={strings.settings.polish}
+              checked={polishOn}
+              disabled={!polish.enabled}
+              onChange={(next) => {
+                if (!next) {
+                  if (username) withdrawConsent(username, 'polish');
+                  setPolishEnabled(false);
+                } else setAskPolish(true);
+              }}
+            />
+          }
+        />
 
-      {polish.enabled && polishEnabled ? <PolishRows /> : null}
-    </SettingsGroup>
+        {polishOn ? <PolishRows /> : null}
+
+        <LiveSettingRow />
+      </SettingsGroup>
+
+      <PolishConsent
+        open={askPolish}
+        onClose={() => setAskPolish(false)}
+        onAgreed={() => setPolishEnabled(true)}
+      />
+    </>
   );
 }
 

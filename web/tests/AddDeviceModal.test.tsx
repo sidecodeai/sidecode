@@ -5,6 +5,7 @@ import { AddDeviceModal } from '../src/features/devices/AddDeviceModal';
 import { useConnection } from '../src/stores/connection';
 import { claudeAgent, codexAgent } from '../mock/fixtures';
 import type { Device } from '../src/protocol/types';
+import { strings } from '../src/strings';
 
 const CODE = 'RC-7K42-QX9M';
 // Two one-liners are on screen now: this one, and the scan flow's (A23).
@@ -74,6 +75,15 @@ describe('AddDeviceModal', () => {
     expect(await screen.findAllByText(new RegExp(CODE))).toHaveLength(2);
     expect(screen.getByText(PAIR_COMMAND)).toHaveTextContent(CODE);
     expect(screen.getByText(/single use/)).toHaveTextContent(/expires in \d+:\d\d/);
+  });
+
+  it('says under its first paragraph where messages go, naming no agent vendor (A65)', async () => {
+    render(<AddDeviceModal open onClose={vi.fn()} />);
+
+    const intro = await screen.findByText(strings.pairing.intro);
+    const note = screen.getByText(strings.pairing.aiNote);
+    expect(intro.nextElementSibling).toBe(note);
+    expect(note).not.toHaveTextContent(/Anthropic|OpenAI/);
   });
 
   it('asks nobody which platform they are on and shows the one command', async () => {

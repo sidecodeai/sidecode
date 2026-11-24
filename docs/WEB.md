@@ -10,12 +10,12 @@ hand-written CSS with no framework. It talks only to the gateway and follows
 | --- | --- |
 | `/` | Decides where an open lands and goes there; the `*` fallback does the same |
 | `/login` | Username and password sign-in against the gateway, and **Create an account** when the gateway takes registrations (A24) |
-| `/devices` | Device list: a computer glyph, the name, a status line of online state, platform, session count and reach, the agents as logos, and — only while an update runs or has failed — "Updating…" or "Update failed · <reason>"; Rename and Revoke on every row, **Retry update** on a failed one; **Add device** with the copyable one-liner, the pairing code, its expiry, live handshake steps, and the scan flow beside them. The row itself opens the device |
+| `/devices` | Device list: a computer glyph, the name, a status line of online state, platform, session count and reach, the agents as logos, and — only while an update runs or has failed — "Updating…" or "Update failed · <reason>"; Rename and Revoke on every row, **Retry update** on a failed one; **Add device** with the line on where messages go (A65), the copyable one-liner, the pairing code, its expiry, live handshake steps, and the scan flow beside them. The row itself opens the device |
 | `/devices/:deviceId` | One device: the machine's own facts, including the hostname and the architecture the row drops, then a card per agent it found, how each is signed in, and a meter per rate-limit window (A33) |
 | `/pair` | Claims the token a host printed as a QR code and shows the same handshake (A23) |
 | `/sessions` | Every session across every device: one collapsible group per device, its active rows and then its own collapsed **Archive**, a search, a status filter, an agent filter and a device filter, and **New session** in a right-hand drawer; a right-click on a row offers **Rename** (A55) |
 | `/sessions/:deviceId/:sessionId` | The chat: sidebar, timeline, composer, status line; the title renames the session (A55) |
-| `/settings`, `/settings/<section>` | Settings (`docs/DESIGN.md` § "The Settings screen"), one page of sections, each at its own address: **General** (`general`: Reading — language, timeline detail, the task board (A62); While you're away — Notify me, "Resume after the limit resets", A35), **Voice** (`voice`: Transcribe, which names the gateway and offers nothing to choose, A44; polish and its model and strength) and **Account** (`account`: the identity header — initials, name, `role · connection dot · host` — then Sign-in: Change password for every account but `admin`; then, under no caption, Users for the admin role and Sign out, which asks first). Wider than 760 px a nav of the sections sits beside the one on show, with the footer caption under it — the gateway and protocol versions — and `/settings` shows General; at 760 px and below `/settings` is the list of sections, which a section replaces, with a way back. An address that names no section leads to `/settings` |
+| `/settings`, `/settings/<section>` | Settings (`docs/DESIGN.md` § "The Settings screen"), one page of sections, each at its own address: **General** (`general`: Reading — language, timeline detail, the task board (A62); While you're away — Notify me, "Resume after the limit resets", A35), **Voice** (`voice`: Dictation, the permission to send the audio to the gateway's speech service; polish and its model and strength; the voice assistant — A44, A65) and **Account** (`account`: the identity header — initials, name, `role · connection dot · host` — then Sign-in: Change password for every account but `admin`; then, under no caption, Users for the admin role and Sign out, which asks first). Wider than 760 px a nav of the sections sits beside the one on show, with the footer caption under it — the gateway and protocol versions — and `/settings` shows General; at 760 px and below `/settings` is the list of sections, which a section replaces, with a way back. An address that names no section leads to `/settings` |
 | `/users` | The admin's accounts screen: the registration switch, one row per account, Reset password / Disable / Delete, and **Add user** (A24). A member who types it lands on Sessions |
 
 ## Commands
@@ -148,7 +148,7 @@ terminals in its folder), "Refactor relay routing" answers `conflict` after 3 s 
 not exit), and an agent without the capability answers `unsupported`.
 
 The mock keeps task boards (A62, `mock/board.ts`) with no model behind them: `hello` and
-`GET /api/config` say `board: {enabled: true}`, `PATCH /api/preferences` takes `task_board` as a
+`GET /api/config` say `board: {enabled: true, provider_name: "Example AI"}`, `PATCH /api/preferences` takes `task_board` as a
 boolean, and `board.get` and `board.refresh` are answered by the mock itself, never by a device.
 With the board off it answers `off` and keeps nothing. On, "Fix flaky auth test" has the demo
 board: its first open answers `updating`, and the board arrives as `board.updated` 1.5 s later with
@@ -168,7 +168,7 @@ src/
   stores/      zustand stores; timeline.ts is the pure event -> renderable-items reducer
   components/  buttons, modal, drawer, popover, context menu, tooltip, segmented control, status dots
   layout/      the signed-in shell, the mark, and the landing rule
-  features/    login, devices, sessions, chat, voice, live, settings, users, account-menu
+  features/    login, devices, sessions, chat, voice, live, consent, settings, users, account-menu
   push/        Web Push subscription and service worker registration
   styles/      tokens.css and base.css
 mock/          the mock gateway
@@ -264,7 +264,9 @@ is appended after whatever was typed when it lands, then polished under the job 
 composer that is disabled mid-dictation (the device goes offline, the terminal takes the session)
 hands a batch dictation on the same way. The field's own programmatic focus — taking a command
 row, say — is not a pointer and ends nothing. The mic is hidden entirely when the gateway reports
-`stt.enabled: false`.
+`stt.enabled: false`. Before any of this a press asks for the dictation permission, and while a voice
+assistant call holds the microphone it says so instead (§ "The AI features' permissions (A65,
+A66)").
 
 A batch dictation's words exist only in each segment's final, so losing a segment never goes
 unsaid. A failure of a segment, a socket that closes without its final, or a cut whose new socket
@@ -412,8 +414,10 @@ Settings page's Voice group offers three things only when it can: the switch "Po
 with AI", a model menu filled from `GET /api/polish/models` when the rows render with the switch on
 (the first model is chosen when none was; a failed fetch keeps the menu and puts "The model list
 could not be loaded." in the Model row's own line), and a Moderate / Strong control. The switch's
-row says what leaves the browser and when: what was dictated and the last few messages, sent to
-the gateway's model only while the switch is on. A gateway without the feature shows the switch
+row says what leaves the browser and when: what was dictated and the last few messages, sent
+through the gateway to the model provider it names (A65) only while the switch is on. The switch
+reads on only while this browser also holds the polish permission, which turning it on asks for
+(§ "The AI features' permissions (A65, A66)"). A gateway without the feature shows the switch
 disabled with "This gateway has no polish model configured" as that row's sentence. The three
 values live in the settings store per account
 (`polishEnabled`, `polishModel`, `polishStrength`).
@@ -435,7 +439,7 @@ request. Which of the three the slot holds is one pure function of the dictation
 polish phase (`src/features/voice/primarySlot.ts`), read by the listening row and the ordinary row
 alike. Nothing is ever sent by itself: polished text is a draft like any other.
 
-**The mock** reports `polish.enabled: true`, serves two models, and polishes with a 600 ms delay by
+**The mock** reports `polish.enabled: true` with `provider_name: "Example AI"` (A65), serves two models, and polishes with a 600 ms delay by
 dropping "um"/"uh", merging doubled words, capitalising and closing the sentence, so the whole flow
 can be watched; its speech-to-text final transcript carries fillers on purpose. Tests cover the pure
 helpers, the slot over every pair of phases, the composer flow (success, failure, the slot and the
@@ -455,6 +459,11 @@ signs out, or the page is closed. Each call's conversation is kept in this brows
 under the signed-in account, the newest 20, and never goes to the gateway. The player (`player.ts`)
 is the only jitter buffer in the path, since the Live API's audio arrives at real time. Tests are in
 `tests/live/`; they run the panel against a fake socket and fake audio.
+
+Start talking asks the gateway for the status again and, without this browser's permission for the
+service it names now, asks for it before anything is dialled; Settings › Voice ends with the Voice
+assistant switch, which withdraws it and hangs up (A65, § "The AI features' permissions (A65,
+A66)").
 
 ## The task board (A62)
 
@@ -528,14 +537,17 @@ makes nothing itself.
   panel shows the three still lines alone.
 - **Turning it on.** Enable in the panel closes it and opens the disclosure
   (`BoardConsent.tsx`), the same one the Settings row opens: "Turn on the task board?" (开启任务看板？),
-  what it is for, then what is sent, what is kept and what to be careful of, as three points, and
-  **Not now** (暂不) beside **Agree and continue** (同意并继续). Only Agree writes, with
+  what it is for, then four points — what is sent and to which model provider, named where the
+  gateway names one (A65), what is kept, what to be careful of, and that the permission is the
+  account's on every device — and **Not now** (暂不) beside **Agree and continue** (同意并继续).
+  Only Agree writes, with
   `PATCH /api/preferences` `{task_board: true}`; the account holds it once the gateway's reply says
   so, never ahead of it, so the `board.refresh` that follows finds the board on. A refusal stays in
   the dialog.
 - **Settings › General › Reading** ends with the **Task board** row (`settings/TaskBoardRow.tsx`): a
-  switch that shows the account's stored value, with the note that says what turning it on sends
-  and that turning it off deletes every board. Turning it off is always possible while it is on,
+  switch that shows the account's stored value, with the note that says what turning it on sends,
+  to the model provider the gateway names where it names one (A65), and that turning it off deletes
+  every board. Turning it off is always possible while it is on,
   whatever the gateway says, and writes `{task_board: false}` at once, so the promise that turning
   it off deletes every board can always be kept. Turning it on brings the disclosure first, and
   only where the account can use the board: on a gateway that keeps none the off switch is disabled
@@ -552,6 +564,86 @@ text, every state, Refresh, Start over, Turn off in Settings, Enable and the dis
 gateway that keeps no boards, never written up), `tests/board-fixtures.test.ts` (the protocol's
 examples) and `tests/mock-board.test.ts`.
 
+## The AI features' permissions (A65, A66)
+
+Four features send what the person says or wrote through the gateway to a third-party AI service:
+dictation, AI polish, the voice assistant and the task board (`protocol/PROTOCOL.md` § 8 rule 23).
+Each asks first, on a screen of its own in the words of § 8.1, and nothing is sent for it, and no
+microphone is asked for it, until the person agrees.
+
+- **The screen** is `features/consent/ConsentDialog.tsx`, which every permission uses: the title,
+  what the feature is for, its points as a list, the paragraphs after them, then **Not now** (暂不),
+  which has the focus, beside **Agree and continue** (同意并继续). Agreeing runs what the caller
+  keeps and closes; a refusal of it stays in the open dialog. Not now, Escape, the close button and
+  a press outside are a decline.
+- **The names.** The words name the service the gateway names: `stt.provider_name`,
+  `polish.provider_name` and `board.provider_name` from the last `hello`, and from
+  `GET /api/config` before the first one (`features/consent/providerNames.ts`), and the voice
+  assistant's `provider_name` from `GET /api/live/status`. A name is read as data
+  (`lib/providerName.ts`): trimmed, and none when it is empty, longer than 40 characters or holds a
+  control character. With none the screen draws the unnamed words.
+- **Where they are kept.** Dictation, polish and the assistant are this browser's permissions, per
+  account and feature, in its storage under `rc.consent.<feature>.<account>` — each gateway origin
+  has storage of its own — as `<text version>|<provider name>`: version 1 for dictation and polish,
+  2 for the assistant, the name empty where the gateway names none (`stores/aiConsent.ts`, over
+  `stores/browserStorage.ts`). One
+  whose version or name differs from the current ones is none, and the screen comes back. Each is
+  withdrawn by its switch in Settings › Voice. All three, and the polish refusal below, are removed
+  when the account signs out here, and kept when the gateway ends the session. Other tabs follow
+  through the `storage` event. Nothing of it is uploaded.
+- **Dictation** asks at the first press of the microphone, before `getUserMedia` and `WS /ws/stt`:
+  "Turn on dictation?" (开启听写？). Agree and continue starts that dictation; Not now records
+  nothing, and the next press asks again. Settings › Voice opens on **Dictation** (听写,
+  `settings/DictationRow.tsx`), a switch that reads the permission — on asks, off withdraws — over
+  the sentence that names the service. Where the gateway transcribes nothing and no permission is
+  held it is drawn disabled with "This gateway has no transcription service configured."; a
+  permission held there can still be withdrawn.
+- **Polish.** "Polish dictation with AI" reads on exactly while the account's `polish_enabled` is
+  true and this browser holds the polish permission. On asks "Turn on AI polish?" (开启 AI 润色？)
+  and then writes `polish_enabled: true`; off withdraws the permission and writes `false`. When the
+  account's polish is on and this browser never agreed — another device turned it on, or the
+  version or the name changed — the first dictation to be polished asks once its words are in the
+  field and before `POST /api/polish`: Agree polishes it; Not now keeps the words as dictated and
+  keeps a refusal (`rc.consent.declined.polish.<account>`, the same `<version>|<name>`), so
+  dictation does not ask again until the switch is turned on here or the version or the name
+  changes. A dictation handed to the background (§ "Background dictation") is polished only with
+  the permission held; without it its words land as dictated and nothing asks.
+- **The voice assistant.** Start talking (开始对话) asks the gateway for the status again, since the
+  service it names may have changed since the panel opened, then starts the call for a permission
+  that matches, asks "Talk to your sessions. A call shares the following:" (和你的会话聊聊。一次通话会共享以下内容：)
+  for the service named now, or does nothing when the assistant is no longer available, the page
+  is closing or the account changed meanwhile (`features/live/startCheck.ts`). Closing the panel
+  before the answer comes cancels the start, so no call opens after it is closed
+  (`useStartTalking.ts`). Agree and continue
+  starts the call; Not now starts nothing. The screen is drawn inside the panel
+  (`LiveConsent.tsx`). Settings › Voice ends with **Voice assistant** (语音助手,
+  `LiveSettingRow.tsx`), drawn wherever the gateway offers the assistant or the permission is held:
+  a switch that reads the permission, asks when turned on and, turned off, withdraws it and hangs up
+  a call that is open.
+- **The task board's** permission is the account's `task_board`, as § "The task board (A62)" says:
+  its disclosure and its Settings note name the model provider, and the disclosure's fourth point
+  says the permission is the account's on every device, kept at sign-out and withdrawn by turning
+  the board off.
+- **A microphone the call holds** (A66). A press of the microphone while a voice assistant call is
+  connecting or live records nothing and says "The voice assistant call is using the microphone.
+  Hang up to dictate." (语音助手通话正在使用麦克风。挂断后才能语音输入。) under the field, with
+  **Hang up** (挂断), which ends the call, and **Close** (`chat/MicHeldNotice.tsx`). It stays until
+  one of them is used or the next dictation begins.
+- **Add device** says under its first paragraph where messages go: to the computer, whose coding
+  agent sends them to its own AI provider under the person's account there, while SideCode sends
+  them to an AI service only for the features turned on, each asking first.
+
+The words are the protocol's in both languages; A8 says "click Send", as on the Mac and Windows. The
+mock names `Example AI` for dictation, polish and the board, so `npm run dev:mock` shows the named
+words; it serves no voice assistant.
+
+Tests: `tests/ai-consent.test.ts` (keys, versions, names, the polish refusal and sign-out),
+`tests/consent-dialog.test.tsx`, `tests/voice-consent-composer.test.tsx` (the microphone, the notice
+and the first polish), `tests/live/consent.test.tsx` (Start and the Settings switch), the Voice cases
+of `tests/SettingsPage.test.tsx`, the named board in `tests/board-settings.test.tsx`, the Add device
+line in `tests/AddDeviceModal.test.tsx` and the status's name in `tests/live/api.test.ts`. The suites about what dictation and polish do once
+allowed start from an account that agreed to both (`tests/voiceConsent.ts`).
+
 ## No dictation language on the web (A44)
 
 The ruling is `docs/DESIGN.md` § "The control row" and the Voice row of § "The Settings screen";
@@ -566,10 +658,9 @@ provider detects the language of every transcription, so there is nothing to cho
 - `SttSocket` opens `WS /ws/stt` with no language, and `useVoice` takes none; the one query a socket
   can carry is a batch dictation's `partials=0` (A57). The polish
   request always says `language: "auto"`.
-- Settings → Voice starts with **Transcribe**: the word "Gateway" at the trailing edge, drawn as
-  state (`pill quiet`) rather than as a control, over the sentence "Your gateway transcribes and
-  recognises the language itself.", or "This gateway has no transcription service configured."
-  while `stt.enabled` is false. The row is not a target; there is nothing to open.
+- Settings → Voice offers no language. Its first row, **Dictation** (A65), is the permission to
+  send the audio to the gateway and nothing else, and reads "This gateway has no transcription
+  service configured." while `stt.enabled` is false and no permission is held.
 - The settings store has no dictation language: `sttLanguage`, `setSttLanguage` and the
   `stt_language` entry of the synced keys (`src/stores/preferenceFields.ts`) are gone, so the web
   never reads `stt_language` from `hello` or `preferences.updated` and never writes it up, not even
@@ -578,8 +669,9 @@ provider detects the language of every transcription, so there is nothing to cho
   store keeps `stt.enabled`, and since A57 `stt.streaming`, but not `stt.languages`, which is always
   `["auto"]`. `/api/config` carries the same `stt` and is typed to match; the composer reads `hello`,
   which is also where `stt.enabled` comes from.
-- The mock reports `stt.languages: ["auto"]` and, A57, `stt.streaming` — true, or false with
-  `RC_MOCK_STT=batch` — in `/api/config` and `hello`, and its `/ws/stt` reads no `language`, so one
+- The mock reports `stt.languages: ["auto"]`, A57's `stt.streaming` — true, or false with
+  `RC_MOCK_STT=batch` — and A65's `stt.provider_name: "Example AI"` in `/api/config` and `hello`,
+  and its `/ws/stt` reads no `language`, so one
   an older app sends is ignored as the gateway ignores it; it reads `partials=0` and then sends no
   partials. It still keeps
   an `stt_language` a `PATCH` carries, as the gateway does.
@@ -1843,3 +1935,6 @@ sticks above the keyboard.
   320 px, in English or in 中文, or measured in Safari or Firefox. The same holds for the Todos and
   Tasks chips' phone face: the suite checks both faces and reads the rule in `chat.css`, and how
   much of the title shows at 320 px and 390 px has not been measured.
+- The permissions of A65 and the notice of A66 are covered by the vitest suites and have not been
+  driven in a browser or against a gateway that names a provider: how the dialog lays out at
+  390 px and 320 px, in English and in 中文, is untried.

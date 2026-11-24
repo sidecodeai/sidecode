@@ -64,6 +64,27 @@ const en = {
   errorGeneric: 'Something went wrong. Try again.',
   errorSend: 'The message could not be sent.',
   close: 'Close',
+  /**
+   * A65: the permission asked before the first call, in the protocol's words (the second
+   * version, which asks everyone again), and the Settings switch's sentence. A line that names
+   * the AI speech service takes the gateway's name as it is.
+   */
+  consentHeading: 'Talk to your sessions. A call shares the following:',
+  consentVoice: 'Your voice, from the moment the call starts until you hang up, silence included.',
+  consentSessions:
+    'When you ask about your sessions: their titles, project folder names, computer names and states, what is waiting for your approval or an answer, and short excerpts of recent messages, tool call titles and errors, which can include anything an agent printed, such as secrets.',
+  consentDrafts: 'The text of any message the assistant drafts for you.',
+  consentGoesTo: (name: string | null) =>
+    name
+      ? `All of it goes through the gateway you connect to, to ${name}, a third-party AI speech service, which handles it under its own privacy policy.`
+      : "All of it goes through the gateway you connect to, to a third-party AI speech service chosen by this gateway's operator, which handles it under its own privacy policy.",
+  consentSend:
+    'The assistant sends a message only after it has read it back and you say yes, or you click Send. It can mishear, so cancel a draft that is wrong.',
+  consentWithdraw: 'Nothing is sent unless you start a call. You can withdraw this permission in Settings.',
+  settingNote: (name: string | null) =>
+    name
+      ? `Talk to an assistant about your sessions. Sends your voice and what the assistant reads from your sessions through this gateway to ${name}, a third-party AI speech service, during a call. Nothing is sent while it is off.`
+      : 'Talk to an assistant about your sessions. Sends your voice and what the assistant reads from your sessions through this gateway to a third-party AI speech service during a call. Nothing is sent while it is off.',
 };
 
 export type LiveStrings = typeof en;
@@ -127,6 +148,21 @@ const zhHans: LiveStrings = {
   errorGeneric: '出了点问题，请重试。',
   errorSend: '消息没有发送成功。',
   close: '关闭',
+  consentHeading: '和你的会话聊聊。一次通话会共享以下内容：',
+  consentVoice: '你的声音：从通话开始到挂断，无人说话的时间也包括在内。',
+  consentSessions:
+    '你询问会话情况时：会话标题、项目文件夹名称、电脑名称和状态，等待你批准或回答的事项，以及最近消息、工具调用标题和错误的一小段摘录，其中可能包含 Agent 打印出的任何内容，例如密钥。',
+  consentDrafts: '助手替你起草的消息的文字。',
+  consentGoesTo: (name) =>
+    name
+      ? `这些内容都会经由你连接的网关，发送给第三方 AI 语音服务 ${name}，由它按自己的隐私政策处理。`
+      : '这些内容都会经由你连接的网关，发送给该网关运营者选用的第三方 AI 语音服务，由它按自己的隐私政策处理。',
+  consentSend: '助手把消息念给你听、你回答“好”之后，或你点“发送”之后，才会发出消息。它可能听错，所以草稿不对时请取消。',
+  consentWithdraw: '不开始通话，就不会发送任何内容。你可以随时在“设置”中撤回此许可。',
+  settingNote: (name) =>
+    name
+      ? `与助手聊聊你的会话。通话期间，会通过此网关把你的声音和助手读取的会话内容发送给第三方 AI 语音服务 ${name}；关闭时不会发送任何内容。`
+      : '与助手聊聊你的会话。通话期间，会通过此网关把你的声音和助手读取的会话内容发送给第三方 AI 语音服务；关闭时不会发送任何内容。',
 };
 
 export const liveTables = { en, 'zh-Hans': zhHans };

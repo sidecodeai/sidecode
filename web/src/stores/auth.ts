@@ -1,6 +1,7 @@
 /** Session cookie state. The token itself never touches JavaScript. */
 import { create } from 'zustand';
 import { api, isUnauthorized, type ConfigResponse, type User, type UserRole } from '../lib/api';
+import { forgetConsents } from './aiConsent';
 
 type AuthStatus = 'unknown' | 'signed-in' | 'signed-out';
 
@@ -67,9 +68,13 @@ export const useAuth = create<AuthState>((set, get) => ({
   },
 
   logout: async () => {
+    const username = get().username;
     try {
       await api.logout();
     } finally {
+      // Signing out withdraws the permissions this browser keeps for the account's AI
+      // features; a session the gateway ends (`markSignedOut`) keeps them.
+      if (username) forgetConsents(username);
       set({ status: 'signed-out', username: null, role: null });
     }
   },

@@ -3,6 +3,7 @@
  * whether it can take a call from the account now. A gateway without the feature answers 404,
  * which reads as "off". The call itself is the `/ws/live` socket (`liveSocket.ts`).
  */
+import { providerName } from '../../lib/providerName';
 
 export interface LiveDraft {
   id: string;
@@ -18,9 +19,14 @@ export interface LiveStatus {
   available: boolean;
   /** Why not, in the gateway's words (`subscription_required`, `quota_exceeded`, ...); null when it said none. */
   reason: string | null;
+  /**
+   * The AI speech service a call goes to, as the gateway names it for the permission asked before
+   * the first call; null when it names none.
+   */
+  provider: string | null;
 }
 
-const OFF: LiveStatus = { enabled: false, available: false, reason: null };
+const OFF: LiveStatus = { enabled: false, available: false, reason: null, provider: null };
 
 /** Answers worth keeping for the life of the page, by account: a 200, or a 404 (no feature). */
 const known = new Map<string, LiveStatus>();
@@ -29,11 +35,13 @@ const asking = new Map<string, Promise<LiveStatus>>();
 /** Calls are offered only by an answer that says `available: true`; the reason is the gateway's word for why not. */
 function read(body: Record<string, unknown>): LiveStatus {
   if (body.enabled !== true) return OFF;
-  if (body.available === true) return { enabled: true, available: true, reason: null };
+  const provider = providerName(body.provider_name);
+  if (body.available === true) return { enabled: true, available: true, reason: null, provider };
   return {
     enabled: true,
     available: false,
     reason: typeof body.reason === 'string' ? body.reason : null,
+    provider,
   };
 }
 

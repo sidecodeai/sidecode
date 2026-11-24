@@ -259,7 +259,7 @@ const closePanel = (): void => void fireEvent.click(screen.getByRole('button', {
 
 describe('a call the account itself ended, with the panel closed', () => {
   it.each(REASONS)('brings the panel up for %s, and then says why in place of Start', async (reason, words, code) => {
-    const fetcher = gatewaySays(available, cannot(reason));
+    const fetcher = gatewaySays(available, available, cannot(reason));
     const ws = await startCall();
     said(ws, 'user', 'What is running?');
     closePanel();
@@ -270,13 +270,13 @@ describe('a call the account itself ended, with the panel closed', () => {
     expect(screen.getByText(words, { selector: '.live-note' })).toBeInTheDocument();
     // The gateway is asked how things stand, and its answer takes Start away.
     await waitFor(() => expect(screen.queryByRole('button', { name: en.start })).not.toBeInTheDocument());
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(3);
     expect(screen.getByText(words, { selector: '.live-note' })).toBeInTheDocument();
     expect(within(screen.getByRole('log')).getByText('What is running?')).toBeInTheDocument();
   });
 
   it('brings it up once: closing it, and a page drawn after, do not bring it back', async () => {
-    const fetcher = gatewaySays(available, cannot('quota_exceeded'));
+    const fetcher = gatewaySays(available, available, cannot('quota_exceeded'));
     const ws = await startCall();
     closePanel();
     endCall(ws, 'quota_exceeded', 4402);
@@ -289,11 +289,11 @@ describe('a call the account itself ended, with the panel closed', () => {
     renderEntry();
     await screen.findByRole('button', { name: en.open });
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
   it('brings it up for a page that is drawn after the call ended, the first page to see it', async () => {
-    const fetcher = gatewaySays(available, cannot('quota_exceeded'));
+    const fetcher = gatewaySays(available, available, cannot('quota_exceeded'));
     const ws = await startCall();
     closePanel();
     cleanup();
@@ -303,11 +303,18 @@ describe('a call the account itself ended, with the panel closed', () => {
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
     expect(screen.getByText(en.paused, { selector: '.live-note' })).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole('button', { name: en.start })).not.toBeInTheDocument());
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
   it('brings it up again for the next call that the account ends', async () => {
-    gatewaySays(available, cannot('quota_exceeded'), available, cannot('quota_exceeded'));
+    gatewaySays(
+      available,
+      available,
+      cannot('quota_exceeded'),
+      available,
+      available,
+      cannot('quota_exceeded'),
+    );
     const first = await startCall();
     closePanel();
     endCall(first, 'quota_exceeded', 4402);
@@ -329,16 +336,18 @@ describe('a call the account itself ended, with the panel closed', () => {
   it('leaves the panel closed, and the gateway unasked, for an end that is not about the account', async () => {
     const fetcher = gatewaySays(available);
     const ws = await startCall();
+    // Once for the entry, once again at Start (A65), and not after the end.
+    expect(fetcher).toHaveBeenCalledTimes(2);
     closePanel();
     endCall(ws, 'idle');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 });
 
 describe('a refusal before the call, after the panel was closed', () => {
   it.each(REASONS)('brings the panel up for %s, and then says why in place of Start', async (reason, words, code) => {
-    const fetcher = gatewaySays(available, cannot(reason));
+    const fetcher = gatewaySays(available, available, cannot(reason));
     await openPanel();
     const ws = await dial();
     closePanel();
@@ -351,11 +360,11 @@ describe('a refusal before the call, after the panel was closed', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(screen.getByText(words, { selector: '.live-note' })).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole('button', { name: en.start })).not.toBeInTheDocument());
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
   it('asks the gateway too when the panel was open all the time, so Start does not sit beside the reason', async () => {
-    gatewaySays(available, cannot('billing_not_configured'));
+    gatewaySays(available, available, cannot('billing_not_configured'));
     await openPanel();
     const ws = await dial();
     act(() => {
@@ -389,7 +398,8 @@ describe('a refusal before the call, after the panel was closed', () => {
       ws.serverClose(4429);
     });
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    // Once for the entry, once again at Start (A65), and not after the refusal.
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 });
 

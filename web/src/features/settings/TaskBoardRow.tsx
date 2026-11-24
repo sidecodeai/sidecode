@@ -16,11 +16,13 @@ import { strings } from '../../strings';
 import { useConnection } from '../../stores/connection';
 import { usePreferences } from '../../stores/preferences';
 import { BoardConsent } from '../chat/board/BoardConsent';
+import { useProviderNames } from '../consent/providerNames';
 import { SettingsRow } from './SettingsRow';
 
 export function TaskBoardRow() {
   const board = useConnection((s) => s.board);
   const preferences = usePreferences((s) => s.preferences);
+  const name = useProviderNames().board;
   const [consenting, setConsenting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -45,7 +47,7 @@ export function TaskBoardRow() {
     <>
       <SettingsRow
         title={s.taskBoard}
-        sentence={error ?? (board.enabled ? s.taskBoardNote : s.taskBoardUnsupported)}
+        sentence={error ?? (board.enabled ? s.taskBoardNote(name) : s.taskBoardUnsupported)}
         target
         control={
           <Switch

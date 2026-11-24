@@ -13,6 +13,7 @@ import { useSettings } from '../src/stores/settings';
 import type * as ReactModule from 'react';
 import type * as LevelFeedModule from '../src/features/voice/levelFeed';
 import type { PolishContextItem, Session } from '../src/protocol/types';
+import { agreedToVoice } from './voiceConsent';
 
 const voice = vi.hoisted(() => ({
   publish: null as null | ((text: string, isFinal: boolean) => void),
@@ -99,6 +100,7 @@ const reply = (status: number, body: unknown): Response =>
   });
 
 beforeEach(() => {
+  agreedToVoice();
   voice.publish = null;
   calls.length = 0;
   answer = null;

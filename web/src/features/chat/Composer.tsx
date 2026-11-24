@@ -28,7 +28,13 @@ import type {
   Session,
   SharedSettingKey,
 } from '../../protocol/types';
+import { declinePolish, useConsent, usePolishDeclined } from '../../stores/aiConsent';
 import { draftOf as answerDraftOf, useAnswers } from '../../stores/answers';
+import { useAuth } from '../../stores/auth';
+import { DictationConsent } from '../consent/DictationConsent';
+import { PolishConsent } from '../consent/PolishConsent';
+import { useProviderNames } from '../consent/providerNames';
+import { useLive } from '../live/store';
 import {
   jobOf,
   jobsEpoch,
@@ -52,6 +58,7 @@ import { CommandHint, CommandMenu } from './CommandMenu';
 import { commandQuery, completionFor, filterCommands, matchCommand } from './commands';
 import { fitField, useRefitOnResize } from './fieldFit';
 import { SizedBox } from './SizedBox';
+import { MicHeldNotice } from './MicHeldNotice';
 import { labelPairs, type LabelPair } from './modelLabels';
 import type { SessionOptions } from './sessionOptions';
 import { EditingStrip, UpNext } from './UpNext';
@@ -206,7 +213,25 @@ export function Composer({
    */
   const jobs = useDictationJobs;
   const job = useDictationJobs(jobOf(key));
-  const polishReady = polishEnabled && polishChosen && polishModel.length > 0;
+  /**
+   * A65: nothing goes to the speech service or the polish model until this browser holds the
+   * account's permission for the provider the gateway names now. Dictation asks at the press of the
+   * microphone, before anything is recorded; polish, when the account's polish is on but this
+   * browser never agreed to it, asks once a dictation's words are in the field, before they are sent
+   * to be polished, and Not now holds until polish is agreed to here or the words or the name change.
+   */
+  const username = useAuth((s) => s.username);
+  const names = useProviderNames();
+  const dictationHeld = useConsent(username, 'dictation', names.dictation);
+  const polishHeld = useConsent(username, 'polish', names.polish);
+  const polishDeclined = usePolishDeclined(username, names.polish);
+  const [askDictation, setAskDictation] = useState(false);
+  const [askPolish, setAskPolish] = useState<{ span: PolishSpan; mode: DictationMode } | null>(null);
+  // A66: a press of the microphone while the voice assistant's call holds it says so instead.
+  const callHoldsMic = useLive((s) => s.view.phase === 'connecting' || s.view.phase === 'live');
+  const [micHeld, setMicHeld] = useState(false);
+  const polishWanted = polishEnabled && polishChosen && polishModel.length > 0;
+  const polishReady = polishWanted && polishHeld;
 
   const dropPolish = useCallback(() => jobs.getState().drop(key), [jobs, key]);
   /**
@@ -398,20 +423,26 @@ export function Composer({
    * conversation the page already shows, and come back said cleanly. Only the
    * dictated span is ever replaced, and only while the field still holds it.
    */
+  const planFor = useCallback(
+    (): PolishPlan => ({
+      model: polishModel,
+      strength: polishStrength,
+      context: polishContext?.() ?? [],
+    }),
+    [polishModel, polishStrength, polishContext],
+  );
   const polishPlan = useCallback(
-    (): PolishPlan | null =>
-      polishReady
-        ? { model: polishModel, strength: polishStrength, context: polishContext?.() ?? [] }
-        : null,
-    [polishReady, polishModel, polishStrength, polishContext],
+    (): PolishPlan | null => (polishReady ? planFor() : null),
+    [polishReady, planFor],
   );
 
   const startPolish = useCallback(
     (span: PolishSpan, mode: DictationMode) => {
-      const plan = polishPlan();
-      if (plan && canPolish(span.dictated)) jobs.getState().polish(key, span, plan, mode);
+      if (!canPolish(span.dictated)) return;
+      if (polishReady) jobs.getState().polish(key, span, planFor(), mode);
+      else if (polishWanted && !polishDeclined) setAskPolish({ span, mode });
     },
-    [polishPlan, jobs, key],
+    [polishReady, polishWanted, polishDeclined, planFor, jobs, key],
   );
 
   /** Put the dictated words back, and take the note away with them. */
@@ -536,6 +567,17 @@ export function Composer({
   const slot = returning && voiceSlot === 'send' ? 'working' : voiceSlot;
 
   const startVoice = () => {
+    if (callHoldsMic) {
+      setMicHeld(true);
+      return;
+    }
+    if (dictationHeld) beginDictation();
+    else setAskDictation(true);
+  };
+
+  /** The dictation the microphone was pressed for, the permission held. */
+  const beginDictation = () => {
+    setMicHeld(false);
     forgetJob();
     const mode = dictationMode(sttStreaming);
     dictation.current = {
@@ -698,6 +740,8 @@ export function Composer({
           ))}
         </div>
       ) : null}
+
+      {micHeld ? <MicHeldNotice onClose={() => setMicHeld(false)} /> : null}
 
       {dictationNotice ? (
         <div className="composer-errors voice-error" role="alert">
@@ -928,6 +972,22 @@ export function Composer({
           onEdit={(item) => void editQueued(item)}
         />
       </ComposerBottomRow>
+
+      <DictationConsent
+        open={askDictation}
+        onClose={() => setAskDictation(false)}
+        onAgreed={beginDictation}
+      />
+      <PolishConsent
+        open={askPolish !== null}
+        onClose={() => setAskPolish(null)}
+        onAgreed={() => {
+          if (askPolish) jobs.getState().polish(key, askPolish.span, planFor(), askPolish.mode);
+        }}
+        onDeclined={() => {
+          if (username) declinePolish(username, names.polish);
+        }}
+      />
     </div>
   );
 

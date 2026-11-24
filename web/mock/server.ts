@@ -86,15 +86,29 @@ const GATEWAY_VERSION = '0.1.0-mock';
 const COOKIE = 'rc_session';
 
 /**
+ * A65: who receives what each AI feature sends, as this mock names them. The permissions
+ * the app asks for name this provider, so the named words can be seen.
+ */
+const PROVIDER = 'Example AI';
+
+/**
  * What `/api/config` and `hello` say about speech. A44: the provider detects
  * the language, so there is nothing to list. A57: `RC_MOCK_STT=batch` answers
  * as a gateway whose backend transcribes a recording afterwards; otherwise the
  * words stream, as with the realtime backend.
  */
-const STT = { enabled: true, languages: ['auto'], streaming: process.env.RC_MOCK_STT !== 'batch' };
+const STT = {
+  enabled: true,
+  languages: ['auto'],
+  streaming: process.env.RC_MOCK_STT !== 'batch',
+  provider_name: PROVIDER,
+};
 
 /** A62: this mock keeps task boards (`mock/board.ts`), for every account. */
-const BOARD = { enabled: true };
+const BOARD = { enabled: true, provider_name: PROVIDER };
+
+/** A29, A65: this mock polishes dictation, naming the same provider. */
+const POLISH = { enabled: true, provider_name: PROVIDER };
 
 /* ----------------------------------------------------------------- state */
 
@@ -707,7 +721,7 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<vo
     json(res, 200, {
       public_origin: `http://127.0.0.1:5173`,
       stt: STT,
-      polish: { enabled: true },
+      polish: POLISH,
       board: BOARD,
       push: { web_enabled: true, apns_enabled: false },
       version: GATEWAY_VERSION,
@@ -1010,7 +1024,7 @@ function onAppSocket(socket: WebSocket, account: Account): void {
     devices: devicesOf(account.username),
     sessions: sessionsOf(account.username),
     stt: STT,
-    polish: { enabled: true },
+    polish: POLISH,
     board: BOARD,
     // A35: absent here would be a gateway too old for the switch, which is what
     // the app draws disabled; this one holds them.

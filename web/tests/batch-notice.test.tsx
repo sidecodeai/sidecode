@@ -19,6 +19,7 @@ import { useDrafts } from '../src/stores/drafts';
 import { sessionKey } from '../src/stores/sessions';
 import { useSettings } from '../src/stores/settings';
 import { strings } from '../src/strings';
+import { agreedToVoice } from './voiceConsent';
 
 const session: Session = {
   session_id: 'ses-t',
@@ -95,6 +96,7 @@ class SilentAudioContext {
 }
 
 beforeEach(() => {
+  agreedToVoice();
   vi.useFakeTimers();
   gateway.length = 0;
   useDictationJobs.getState().reset();

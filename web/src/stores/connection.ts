@@ -30,9 +30,10 @@ interface ConnectionState {
    * Whether this gateway transcribes, and (A57) whether its words arrive while
    * the audio does — absent from a gateway too old to say. Its language list is
    * nothing to choose from since A44 — the provider detects the language — so
-   * it is not kept.
+   * it is not kept. A65: the provider the audio goes to, for the permission,
+   * like `polish` and `board`, which keep theirs in the objects themselves.
    */
-  stt: { enabled: boolean; streaming?: boolean };
+  stt: { enabled: boolean; streaming?: boolean; provider_name?: string };
   /** A29: whether this gateway can polish a dictation. Off until `hello` says so. */
   polish: PolishInfo;
   /**
@@ -117,7 +118,11 @@ function handleFrame(frame: PushFrame, set: Setter): void {
         gatewayVersion: frame.gateway_version,
         protocol: frame.protocol,
         username: frame.user.username,
-        stt: { enabled: frame.stt.enabled, streaming: frame.stt.streaming },
+        stt: {
+          enabled: frame.stt.enabled,
+          streaming: frame.stt.streaming,
+          provider_name: frame.stt.provider_name,
+        },
         polish: frame.polish ?? { enabled: false },
         board: frame.board ?? null,
         clockSkewMs:

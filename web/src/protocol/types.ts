@@ -659,6 +659,11 @@ export type SessionEventKind = SessionEvent['kind'];
 /** Whether the gateway can polish a dictation through the model its operator configured. */
 export interface PolishInfo {
   enabled: boolean;
+  /**
+   * The provider that receives what is polished, as `GET /api/config` names it for the
+   * permission the apps ask for; absent when the gateway names none.
+   */
+  provider_name?: string;
 }
 
 /** One model of the operator's OpenAI-compatible provider. */
@@ -705,6 +710,8 @@ export interface PolishResponse {
 /** Whether the gateway keeps task boards. Absent from a gateway older than A62. */
 export interface BoardInfo {
   enabled: boolean;
+  /** The provider whose model makes the boards, as `GET /api/config` names it; absent when none is named. */
+  provider_name?: string;
 }
 
 export type BoardItemStatus = 'todo' | 'doing' | 'done';

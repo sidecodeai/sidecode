@@ -352,6 +352,8 @@ describe('the actions', () => {
 
 describe('turning the board on from the panel', () => {
   const c = strings.settings.taskBoardConsent;
+  const agree = strings.consent.agree;
+  const notNow = strings.consent.notNow;
 
   beforeEach(() => {
     usePreferences.setState({ preferences: { resume_after_limit: false } });
@@ -364,13 +366,17 @@ describe('turning the board on from the panel', () => {
 
     const dialog = screen.getByRole('dialog', { name: c.title });
     expect(screen.queryByRole('region', { name: s.title })).toBeNull();
-    for (const sentence of [c.lead, c.sends, c.keeps, c.caution]) {
-      expect(within(dialog).getByText(sentence)).toBeInTheDocument();
-    }
-    expect(within(dialog).getAllByRole('listitem')).toHaveLength(3);
+    expect(within(dialog).getByText(c.lead)).toBeInTheDocument();
+    // A65: the gateway names no model provider here, so the unnamed words; and the permission is the account's.
+    expect(within(dialog).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+      c.sends(null),
+      c.keeps,
+      c.caution,
+      c.account,
+    ]);
     expect(patches).toEqual([]);
 
-    await user.click(within(dialog).getByRole('button', { name: c.notNow }));
+    await user.click(within(dialog).getByRole('button', { name: notNow }));
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(patches).toEqual([]);
   });
@@ -378,7 +384,7 @@ describe('turning the board on from the panel', () => {
   it('writes task_board: true on Agree and continue, and the account holds it once the gateway answers', async () => {
     const { user, panel } = await openPanel();
     await user.click(within(panel).getByRole('button', { name: s.enable }));
-    await user.click(screen.getByRole('button', { name: c.agree }));
+    await user.click(screen.getByRole('button', { name: agree }));
 
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(patches).toEqual([{ task_board: true }]);
@@ -389,7 +395,7 @@ describe('turning the board on from the panel', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 500 })));
     const { user, panel } = await openPanel();
     await user.click(within(panel).getByRole('button', { name: s.enable }));
-    await user.click(screen.getByRole('button', { name: c.agree }));
+    await user.click(screen.getByRole('button', { name: agree }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(strings.errors.setFailed);
     expect(screen.getByRole('dialog', { name: c.title })).toBeInTheDocument();

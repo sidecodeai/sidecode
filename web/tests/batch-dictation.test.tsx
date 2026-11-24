@@ -20,6 +20,7 @@ import { useDrafts } from '../src/stores/drafts';
 import { sessionKey } from '../src/stores/sessions';
 import { useSettings } from '../src/stores/settings';
 import { strings } from '../src/strings';
+import { agreedToVoice } from './voiceConsent';
 
 const session: Session = {
   session_id: 'ses-1',
@@ -99,6 +100,7 @@ class SilentAudioContext {
 }
 
 beforeEach(() => {
+  agreedToVoice();
   gateway.length = 0;
   // A test that ends while listening hands its dictation to the job store.
   useDictationJobs.getState().reset();

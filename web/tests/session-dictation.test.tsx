@@ -22,6 +22,7 @@ import { codexAgent, devices as deviceFixtures } from '../mock/fixtures';
 import type * as ReactModule from 'react';
 import type * as LevelFeedModule from '../src/features/voice/levelFeed';
 import type { Session } from '../src/protocol/types';
+import { agreedToVoice } from './voiceConsent';
 
 const { rpcMock } = vi.hoisted(() => ({ rpcMock: vi.fn() }));
 
@@ -118,6 +119,7 @@ const field = (): HTMLTextAreaElement =>
   screen.getByLabelText(strings.composer.placeholder) as HTMLTextAreaElement;
 
 beforeEach(() => {
+  agreedToVoice();
   voice.tornDown = 0;
   voice.say = null;
   rpcMock.mockReset();

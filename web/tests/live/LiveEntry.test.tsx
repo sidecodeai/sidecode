@@ -8,6 +8,7 @@ import { useSettings } from '../../src/stores/settings';
 import { FakeAudioContext, FakeWebSocket, READY } from './audioFakes';
 import {
   afterLive,
+  available,
   beforeLive,
   context,
   dial,
@@ -464,11 +465,38 @@ describe('ending a call', () => {
     fakes.getUserMedia.mockReturnValue(new Promise((resolve) => (grant = resolve)));
     await openPanel();
     fireEvent.click(screen.getByRole('button', { name: en.start }));
+    // The gateway is asked again (A65), then the microphone is.
+    await waitFor(() => expect(fakes.getUserMedia).toHaveBeenCalled());
     act(() => void window.dispatchEvent(new Event('pagehide')));
     await act(async () => grant(fakes.stream));
     expect(fakes.stream.track.stopped).toBe(true);
     expect(FakeWebSocket.instances).toHaveLength(0);
     expect(context().closed).toBe(true);
+  });
+
+  it('starts nothing when the page closes while the gateway is asked again at Start', async () => {
+    let answer: (response: Response) => void = () => undefined;
+    await openPanel();
+    vi.mocked(fetch).mockReturnValueOnce(new Promise<Response>((resolve) => (answer = resolve)));
+    fireEvent.click(screen.getByRole('button', { name: en.start }));
+    act(() => void window.dispatchEvent(new Event('pagehide')));
+    await act(async () => answer(status(available)));
+    expect(fakes.getUserMedia).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  it('starts nothing when the panel is closed while the gateway is asked again at Start', async () => {
+    let answer: (response: Response) => void = () => undefined;
+    await openPanel();
+    vi.mocked(fetch).mockReturnValueOnce(new Promise<Response>((resolve) => (answer = resolve)));
+    fireEvent.click(screen.getByRole('button', { name: en.start }));
+    fireEvent.click(screen.getByRole('button', { name: en.close }));
+    await act(async () => answer(status(available)));
+
+    expect(fakes.getUserMedia).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: en.open }));
+    expect(screen.getByRole('button', { name: en.start })).toBeEnabled();
   });
 
   it.each([

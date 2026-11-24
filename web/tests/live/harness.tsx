@@ -14,6 +14,7 @@ import { watchLifecycle } from '../../src/features/live/liveCall';
 import { LiveEntry } from '../../src/features/live/LiveEntry';
 import { useLive } from '../../src/features/live/store';
 import { liveTables } from '../../src/features/live/strings';
+import { forgetConsents, grantConsent } from '../../src/stores/aiConsent';
 import { useAuth } from '../../src/stores/auth';
 import { useSettings } from '../../src/stores/settings';
 import {
@@ -59,6 +60,10 @@ export function beforeLive(): LiveEnv {
   forgetHistory();
   useLive.getState().reset();
   useAuth.setState({ username: 'admin' });
+  // A65: the account has agreed to the assistant's words, for a gateway that names no service; the
+  // permission itself is `consent.test.tsx`'s.
+  forgetConsents('admin');
+  grantConsent('admin', 'assistant', null);
   useSettings.setState({ language: 'en' });
   const fakes = installAudioFakes();
   vi.stubGlobal(

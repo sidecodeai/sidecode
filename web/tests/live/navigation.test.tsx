@@ -167,8 +167,10 @@ describe('a call across the app', () => {
 
   it('asks the gateway about the feature once, not once for each page', async () => {
     await startInTopBar();
+    // Once for the entry, and once again at Start (A65).
+    expect(fetch).toHaveBeenCalledTimes(2);
     await goToChat();
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -339,6 +341,8 @@ describe('what ends a call', () => {
     render(<App />);
     fireEvent.click(await screen.findByRole('button', { name: en.open }));
     fireEvent.click(screen.getByRole('button', { name: en.start }));
+    // The gateway is asked again (A65), then the microphone is.
+    await waitFor(() => expect(env.fakes.getUserMedia).toHaveBeenCalled());
     act(() => useAuth.setState({ username: 'dana' }));
     await act(async () => grant(env.fakes.stream));
     expect(env.fakes.stream.track.stopped).toBe(true);

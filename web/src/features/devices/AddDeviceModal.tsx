@@ -92,6 +92,8 @@ function AddDevice({ onClose }: { onClose: () => void }) {
       }
     >
       <p className="hint pairing-intro">{strings.pairing.intro}</p>
+      {/* A65: where the messages go once the device is paired, and who sends them to an AI service. */}
+      <p className="hint pairing-intro">{strings.pairing.aiNote}</p>
 
       {error ? <p className="login-error">{error}</p> : null}
 

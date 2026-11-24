@@ -14,6 +14,7 @@ import userEvent from '@testing-library/user-event';
 import { connectionTone } from '../src/features/settings/connectionTone';
 import { api, type ConfigResponse } from '../src/lib/api';
 import { gatewayHost, initials } from '../src/lib/identity';
+import { forgetConsents, grantConsent, storedConsent } from '../src/stores/aiConsent';
 import { useAuth } from '../src/stores/auth';
 import { useConnection } from '../src/stores/connection';
 import { usePreferences } from '../src/stores/preferences';
@@ -449,11 +450,12 @@ describe("settings: while you're away", () => {
 });
 
 /**
- * A29 — Voice: who transcribes dictation, and whether a model tidies it up,
- * on one surface under no caption, since the section's title says Voice. A
- * gateway with neither keeps both rows and says so in them. A44: the web only
- * transcribes on the gateway, which detects the language, so there is no
- * language to choose.
+ * A29, A65 — Voice: the permission to send dictation's audio to the gateway's
+ * speech service, and whether a model tidies the words up, on one surface under
+ * no caption, since the section's title says Voice. Each switch asks before it
+ * turns on and withdraws when turned off. A gateway with neither keeps both rows
+ * and says so in them. A44: the web only transcribes on the gateway, which
+ * detects the language, so there is no language to choose.
  */
 describe('settings: voice', () => {
   const models = [
@@ -469,7 +471,9 @@ describe('settings: voice', () => {
 
   const voiceRows = () => rowTitles(document.querySelector('.settings-content') as HTMLElement);
 
-  const transcribeRow = () => screen.getByText(s.transcribe).closest('.settings-row') as HTMLElement;
+  const dictationSwitch = () => screen.getByRole('switch', { name: s.dictation });
+  const dictationRow = () => dictationSwitch().closest('.settings-row') as HTMLElement;
+  const c = strings.consent;
 
   const answerModels = (status = 200) =>
     vi.stubGlobal(
@@ -484,6 +488,7 @@ describe('settings: voice', () => {
     );
 
   beforeEach(() => {
+    forgetConsents('admin');
     useSettings.setState({ polishEnabled: false, polishModel: '', polishStrength: 'moderate' });
     answerModels();
   });
@@ -496,28 +501,66 @@ describe('settings: voice', () => {
     });
   });
 
-  it('opens on Transcribe, which names the gateway and offers nothing to choose', () => {
+  it('opens on Dictation, a switch that reads the permission to send the audio, off until it is given', () => {
     gateway(false);
     renderSettings('/settings/voice');
 
-    expect(voiceRows()).toEqual([s.transcribe, s.polish]);
-    expect(groups()).toEqual([{ caption: null, rows: [s.transcribe, s.polish] }]);
-    const row = transcribeRow();
-    expect(within(row).getByText(s.transcribeGateway)).toBeInTheDocument();
-    expect(within(row).getByText(s.transcribeNote)).toBeInTheDocument();
-    // No menu, no switch, and the row is not a target: there is no choice.
-    expect(within(row).queryByRole('button')).toBeNull();
-    expect(row).not.toHaveClass('target');
+    expect(voiceRows()).toEqual([s.dictation, s.polish]);
+    expect(groups()).toEqual([{ caption: null, rows: [s.dictation, s.polish] }]);
+    expect(within(dictationRow()).getByText(s.dictationNote(null))).toBeInTheDocument();
+    expect(dictationSwitch()).toHaveAttribute('aria-checked', 'false');
+    expect(dictationSwitch()).toBeEnabled();
   });
 
-  it('keeps the Transcribe row on a gateway with no speech-to-text, and says so in it', () => {
+  it('asks before turning dictation on, and turns it on only on Agree and continue', async () => {
+    const user = userEvent.setup();
+    gateway(false);
     renderSettings('/settings/voice');
 
-    expect(voiceRows()).toEqual([s.transcribe, s.polish]);
-    const row = transcribeRow();
-    expect(within(row).getByText(s.voiceServerDisabled)).toBeInTheDocument();
-    expect(within(row).queryByText(s.transcribeNote)).toBeNull();
-    expect(within(row).getByText(s.transcribeGateway)).toBeInTheDocument();
+    await user.click(dictationSwitch());
+    const dialog = screen.getByRole('dialog', { name: c.dictation.title });
+    await user.click(within(dialog).getByRole('button', { name: c.notNow }));
+    expect(dictationSwitch()).toHaveAttribute('aria-checked', 'false');
+
+    await user.click(dictationSwitch());
+    await user.click(screen.getByRole('button', { name: c.agree }));
+
+    expect(dictationSwitch()).toHaveAttribute('aria-checked', 'true');
+    expect(storedConsent('admin', 'dictation')).toBe('1|');
+  });
+
+  it('withdraws the permission when dictation is turned off, with no question', async () => {
+    const user = userEvent.setup();
+    gateway(false);
+    grantConsent('admin', 'dictation', null);
+    renderSettings('/settings/voice');
+    expect(dictationSwitch()).toHaveAttribute('aria-checked', 'true');
+
+    await user.click(dictationSwitch());
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(dictationSwitch()).toHaveAttribute('aria-checked', 'false');
+    expect(storedConsent('admin', 'dictation')).toBeNull();
+  });
+
+  it('keeps the Dictation row on a gateway with no speech-to-text, disabled, and says so in it', () => {
+    renderSettings('/settings/voice');
+
+    expect(voiceRows()).toEqual([s.dictation, s.polish]);
+    expect(within(dictationRow()).getByText(s.voiceServerDisabled)).toBeInTheDocument();
+    expect(dictationSwitch()).toBeDisabled();
+  });
+
+  it('lets a permission held on a gateway that stopped transcribing still be withdrawn', async () => {
+    const user = userEvent.setup();
+    grantConsent('admin', 'dictation', null);
+    renderSettings('/settings/voice');
+
+    expect(dictationSwitch()).toBeEnabled();
+    await user.click(dictationSwitch());
+
+    expect(storedConsent('admin', 'dictation')).toBeNull();
+    expect(dictationSwitch()).toBeDisabled();
   });
 
   it('offers the switch and, once it is on, the model and the strength', async () => {
@@ -528,18 +571,23 @@ describe('settings: voice', () => {
     const polish = screen.getByRole('switch', { name: s.polish });
     expect(polish).toBeEnabled();
     expect(polish).toHaveAttribute('aria-checked', 'false');
-    expect(screen.getByText(s.polishNote)).toBeInTheDocument();
+    expect(screen.getByText(s.polishNote(null))).toBeInTheDocument();
     // Nothing to choose while it is off.
     expect(screen.queryByRole('button', { name: labelled(s.polishModel) })).toBeNull();
 
+    // A65: it asks first, and nothing is written before Agree and continue.
     await user.click(polish);
+    expect(screen.getByRole('dialog', { name: c.polish.title })).toBeInTheDocument();
+    expect(useSettings.getState().polishEnabled).toBe(false);
+    await user.click(screen.getByRole('button', { name: c.agree }));
 
     expect(useSettings.getState().polishEnabled).toBe(true);
+    expect(storedConsent('admin', 'polish')).toBe('1|');
     // The first model the gateway listed is chosen, so the switch is enough.
     await waitFor(() => expect(useSettings.getState().polishModel).toBe('gpt-4.1-mini'));
     expect(screen.getByRole('button', { name: labelled(s.polishModel) })).toHaveTextContent('gpt-4.1-mini');
     expect(screen.getByText(s.polishModelNote)).toBeInTheDocument();
-    expect(voiceRows()).toEqual([s.transcribe, s.polish, s.polishModel, s.polishStrength]);
+    expect(voiceRows()).toEqual([s.dictation, s.polish, s.polishModel, s.polishStrength]);
 
     await user.click(screen.getByRole('button', { name: labelled(s.polishModel) }));
     await user.click(screen.getByRole('option', { name: 'gpt-4.1' }));
@@ -549,9 +597,34 @@ describe('settings: voice', () => {
     expect(useSettings.getState().polishStrength).toBe('strong');
   });
 
+  it('turns polish off with no question, withdrawing this browser’s permission', async () => {
+    const user = userEvent.setup();
+    gateway(true);
+    grantConsent('admin', 'polish', null);
+    useSettings.setState({ polishEnabled: true, polishModel: 'gpt-4.1' });
+    renderSettings('/settings/voice');
+    expect(screen.getByRole('switch', { name: s.polish })).toHaveAttribute('aria-checked', 'true');
+
+    await user.click(screen.getByRole('switch', { name: s.polish }));
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(useSettings.getState().polishEnabled).toBe(false);
+    expect(storedConsent('admin', 'polish')).toBeNull();
+  });
+
+  it('reads off while the account has polish on but this browser never agreed to it', () => {
+    gateway(true);
+    useSettings.setState({ polishEnabled: true, polishModel: 'gpt-4.1' });
+    renderSettings('/settings/voice');
+
+    expect(screen.getByRole('switch', { name: s.polish })).toHaveAttribute('aria-checked', 'false');
+    expect(screen.queryByRole('button', { name: labelled(s.polishModel) })).toBeNull();
+  });
+
   it('keeps the menu and says one line in the row when the model list cannot be read', async () => {
     const user = userEvent.setup();
     gateway(true);
+    grantConsent('admin', 'polish', null);
     useSettings.setState({ polishEnabled: true, polishModel: 'gpt-4.1' });
     answerModels(502);
     renderSettings('/settings/voice');
@@ -571,8 +644,9 @@ describe('settings: voice', () => {
 
     expect(screen.getByRole('switch', { name: s.polish })).toBeDisabled();
     expect(screen.getByText(s.polishServerDisabled)).toBeInTheDocument();
-    expect(screen.queryByText(s.polishNote)).toBeNull();
-    expect(fetch).not.toHaveBeenCalled();
+    expect(screen.queryByText(s.polishNote(null))).toBeNull();
+    // No model list is asked for a gateway that cannot polish.
+    expect(vi.mocked(fetch).mock.calls.map(([url]) => String(url))).not.toContain('/api/polish/models');
   });
 });
 
@@ -708,6 +782,8 @@ describe('settings: a change another app of the account made', () => {
   it('moves the polish switch where the reader is looking', () => {
     useConnection.setState({ polish: { enabled: true } });
     useSettings.setState({ polishEnabled: false });
+    // A65: it reads on only where this browser holds the permission to send what is polished.
+    grantConsent('admin', 'polish', null);
     renderSettings('/settings/voice');
     expect(screen.getByRole('switch', { name: s.polish })).toHaveAttribute('aria-checked', 'false');
 

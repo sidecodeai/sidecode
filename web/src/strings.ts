@@ -192,6 +192,9 @@ export const en = {
     title: 'Add device',
     intro:
       'Run one command on the machine where your agents live. It dials out to the gateway — nothing is exposed on the host.',
+    /** A65: where the messages go, under the first paragraph. */
+    aiNote:
+      'Messages you send go to your computer. The coding agent there sends them to its own AI provider, under your account with that provider. SideCode sends your messages to an AI service only for the AI features you turn on, and each one asks you first.',
     singleUse: 'single use',
     expiresIn: (clock: string) => `expires in ${clock}`,
     expired: 'expired',
@@ -600,6 +603,43 @@ export const en = {
     rowPolishing: 'Polishing…',
     rowReady: 'Draft ready',
     rowInterrupted: 'Dictation interrupted',
+    /** A press of the microphone while a voice assistant call holds it (A66), with Hang up. */
+    callHoldsMic: 'The voice assistant call is using the microphone. Hang up to dictate.',
+  },
+
+  /**
+   * A65 — the permission each AI feature asks for before it sends anything to a
+   * third-party AI service, in the words the protocol fixes. A line that names
+   * the service takes the gateway's `provider_name` as it is; the gateway that
+   * names none gets the unnamed line.
+   */
+  consent: {
+    agree: 'Agree and continue',
+    notNow: 'Not now',
+    dictation: {
+      title: 'Turn on dictation?',
+      lead: 'Dictation sends your speech to a speech recognition service, which turns it into text.',
+      sends:
+        'Each time you dictate: the audio you record, from when you start until you stop. Nothing else goes with it: no messages and no account details.',
+      goesTo: (name: string | null) =>
+        name
+          ? `It goes through the gateway you connect to, to ${name}, a third-party speech recognition service, which returns the text and handles the audio under its own privacy policy.`
+          : "It goes through the gateway you connect to, to a third-party speech recognition service chosen by this gateway's operator, which returns the text and handles the audio under its own privacy policy.",
+      draft: 'The text becomes an editable draft. Nothing reaches your agent until you send it.',
+      withdraw: 'Nothing is sent unless you dictate. You can withdraw this permission in Settings.',
+    },
+    polish: {
+      title: 'Turn on AI polish?',
+      lead: 'AI polish turns a dictation into a clear message for your agent, using the conversation it is for.',
+      sends:
+        "Each time a dictation finishes: the text you dictated and, as context, up to the 20 most recent messages of the conversation (yours and the agent's replies, never tool output). They can include anything an agent wrote, such as secrets.",
+      goesTo: (name: string | null) =>
+        name
+          ? `It goes through the gateway you connect to, to ${name}, a third-party AI model provider, which returns the polished text and handles the request under its own privacy policy.`
+          : "It goes through the gateway you connect to, to a third-party AI model provider chosen by this gateway's operator, which returns the polished text and handles the request under its own privacy policy.",
+      draft: 'The polished text is a draft you can edit. It is never sent to your agent automatically.',
+      withdraw: 'Nothing is sent while AI polish is off. Turning it off in Settings withdraws this permission.',
+    },
   },
 
   /**
@@ -642,14 +682,21 @@ export const en = {
       'When Claude Code, Codex or Antigravity stops at a usage limit, the device continues the session a minute after the limit resets.',
     resumeUnavailable: 'Your gateway does not offer this yet.',
 
-    /** A44: the web transcribes only on the gateway, so this row names it and offers nothing. */
-    transcribe: 'Transcribe',
-    transcribeGateway: 'Gateway',
-    transcribeNote: 'Your gateway transcribes and recognises the language itself.',
+    /**
+     * A65: the web transcribes only on the gateway, so its one control is the
+     * permission to send the audio there: on asks, off withdraws.
+     */
+    dictation: 'Dictation',
+    dictationNote: (name: string | null) =>
+      name
+        ? `Sends the audio of each dictation through this gateway to ${name}, a third-party speech recognition service. Nothing is sent while it is off.`
+        : 'Sends the audio of each dictation through this gateway to a third-party speech recognition service. Nothing is sent while it is off.',
     voiceServerDisabled: 'This gateway has no transcription service configured.',
     polish: 'Polish dictation with AI',
-    polishNote:
-      "Sends what you dictated and the last few messages to this gateway's model. Nothing is sent while it is off.",
+    polishNote: (name: string | null) =>
+      name
+        ? `Sends what you dictated and the last few messages through this gateway to ${name}, a third-party AI model provider. Nothing is sent while it is off.`
+        : 'Sends what you dictated and the last few messages through this gateway to a third-party AI model. Nothing is sent while it is off.',
     polishServerDisabled: 'This gateway has no polish model configured',
     polishModel: 'Model',
     polishModelNote: 'From the list this gateway serves.',
@@ -672,19 +719,23 @@ export const en = {
      * how long the gateway follows and keeps a conversation's board.
      */
     taskBoard: 'Task board',
-    taskBoardNote:
-      'Lists what you asked for in each conversation, what is being done and what is left. For conversations you opened in the last 7 days, recent messages go through this gateway to a third-party AI model after each round and when you open them. Tool output is not sent. Nothing is sent while it is off, and turning it off deletes every board.',
+    taskBoardNote: (name: string | null) =>
+      name
+        ? `Lists what you asked for in each conversation, what is being done and what is left. For conversations you opened in the last 7 days, recent messages go through this gateway to ${name}, a third-party AI model provider, after each round and when you open them. Tool output is not sent. Nothing is sent while it is off, and turning it off deletes every board.`
+        : 'Lists what you asked for in each conversation, what is being done and what is left. For conversations you opened in the last 7 days, recent messages go through this gateway to a third-party AI model after each round and when you open them. Tool output is not sent. Nothing is sent while it is off, and turning it off deletes every board.',
     taskBoardUnsupported: 'This gateway has no task board model configured',
     taskBoardConsent: {
       title: 'Turn on the task board?',
       lead: "The task board lists what you asked for in a conversation, what is being done and what is left, so you don't have to read it all again.",
-      sends:
-        "For conversations you opened in the last 7 days, recent messages (yours, the agent's replies, the names of the tools it ran and its errors) go through this gateway to a third-party AI model after each round and when you open them. Tool output is not sent.",
+      sends: (name: string | null) =>
+        name
+          ? `For conversations you opened in the last 7 days, recent messages (yours, the agent's replies, the names of the tools it ran and its errors) go through this gateway to ${name}, a third-party AI model provider, after each round and when you open them. Tool output is not sent.`
+          : "For conversations you opened in the last 7 days, recent messages (yours, the agent's replies, the names of the tools it ran and its errors) go through this gateway to a third-party AI model chosen by this gateway's operator after each round and when you open them. Tool output is not sent.",
       keeps:
         'The gateway keeps the task list, not the messages. It deletes the list when the conversation, the device or the account is deleted, when you turn the board off, or when the conversation has not been opened for 30 days.',
       caution: 'Replies can include anything an agent printed, such as secrets. The list is made by AI and can be wrong.',
-      agree: 'Agree and continue',
-      notNow: 'Not now',
+      account:
+        "This permission is your account's, on every device, because the gateway makes the boards. Signing out does not withdraw it; turning the board off in Settings does, and deletes every board.",
     },
 
     /** The footer caption: the versions, whose numbers come from the running code. */

@@ -1,0 +1,25 @@
+/* An AI feature's permission (A65): a lead, its points read top to bottom, then its paragraphs. */
+.consent-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.consent-points {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding-left: var(--sp-5);
+  font-size: var(--fs-13);
+  line-height: 1.55;
+  color: var(--ink-secondary);
+}
+
+/* The lines after the points: who keeps what, how to withdraw, and the policy. */
+.consent-paragraph {
+  margin: 0;
+  font-size: var(--fs-13);
+  line-height: 1.55;
+  color: var(--ink-secondary);
+}

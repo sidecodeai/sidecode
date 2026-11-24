@@ -45,6 +45,7 @@ vi.mock('../src/lib/ws', async (importOriginal) => ({
 
 const s = strings.settings;
 const c = s.taskBoardConsent;
+const { agree, notNow } = strings.consent;
 
 /** Every `PATCH /api/preferences` body, in the order sent. */
 const writes: Record<string, unknown>[] = [];
@@ -79,7 +80,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   setPreferencesHeld(false);
-  useConnection.setState({ board: null });
+  useConnection.setState({ board: null, helloAt: null });
   usePreferences.setState({ preferences: undefined });
 });
 
@@ -92,7 +93,7 @@ describe('the Task board row', () => {
     renderSettings('/settings/general');
 
     expect(readingRows()).toEqual([s.language, s.timelineDetail, s.taskBoard]);
-    expect(within(row()).getByText(s.taskBoardNote)).toBeInTheDocument();
+    expect(within(row()).getByText(s.taskBoardNote(null))).toBeInTheDocument();
     expect(toggle()).toHaveAttribute('aria-checked', 'false');
     expect(toggle()).toBeEnabled();
   });
@@ -157,11 +158,29 @@ describe('turning it on and off', () => {
     await user.click(toggle());
 
     const dialog = screen.getByRole('dialog', { name: c.title });
-    expect(within(dialog).getAllByRole('listitem').map((li) => li.textContent)).toEqual([c.sends, c.keeps, c.caution]);
+    expect(within(dialog).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      c.sends(null),
+      c.keeps,
+      c.caution,
+      c.account,
+    ]);
     expect(writes).toEqual([]);
-    await user.click(within(dialog).getByRole('button', { name: c.notNow }));
+    await user.click(within(dialog).getByRole('button', { name: notNow }));
     expect(writes).toEqual([]);
     expect(toggle()).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('names the model provider the gateway names (A65)', async () => {
+    useConnection.setState({ helloAt: 1, board: { enabled: true, provider_name: 'Example AI' } });
+    const user = userEvent.setup();
+    renderSettings('/settings/general');
+
+    expect(within(row()).getByText(s.taskBoardNote('Example AI'))).toBeInTheDocument();
+    await user.click(toggle());
+
+    const dialog = screen.getByRole('dialog', { name: c.title });
+    expect(within(dialog).getAllByRole('listitem')[0]).toHaveTextContent(c.sends('Example AI'));
+    expect(within(dialog).queryByRole('link')).toBeNull();
   });
 
   it('writes task_board: true on Agree and continue, and is on once the gateway answers', async () => {
@@ -169,7 +188,7 @@ describe('turning it on and off', () => {
     renderSettings('/settings/general');
 
     await user.click(toggle());
-    await user.click(screen.getByRole('button', { name: c.agree }));
+    await user.click(screen.getByRole('button', { name: agree }));
 
     await waitFor(() => expect(toggle()).toHaveAttribute('aria-checked', 'true'));
     expect(writes).toEqual([{ task_board: true }]);

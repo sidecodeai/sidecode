@@ -5,10 +5,12 @@ import { Button } from '../../components/Button';
 import type { LiveStatus } from './api';
 import { DraftCard } from './DraftCard';
 import { HistoryPanel } from './HistoryPanel';
+import { LiveConsent } from './LiveConsent';
 import { liveStrings as t } from './strings';
 import { Note } from './Note';
 import { TranscriptList } from './TranscriptList';
 import type { LiveCall } from './useLiveCall';
+import { useStartTalking } from './useStartTalking';
 import { statusText } from './words';
 import './live.css';
 
@@ -19,15 +21,19 @@ interface Props {
   call: LiveCall;
   /** What the gateway says of the assistant for this account: with no call on, a "not now" takes Start's place. */
   status: LiveStatus;
+  /** Ask the gateway again, answering with what it says now. */
+  refresh: () => Promise<LiveStatus>;
   /** The entry's button: the panel hangs under the bar it is in, whichever page the entry is on. */
   anchor: RefObject<HTMLElement | null>;
   onClose: () => void;
 }
 
-export function LivePanel({ call, status, anchor, onClose }: Props) {
+export function LivePanel({ call, status, refresh, anchor, onClose }: Props) {
   const { phase, speaker, secondsLeft, transcript, notice, muted } = call.view;
   const inCall = phase === 'live' || phase === 'ending' || phase === 'connecting';
   const panel = useRef<HTMLElement>(null);
+  // A65: nothing goes to the AI speech service before the person agrees to the one named now.
+  const startTalking = useStartTalking(refresh, () => void call.start());
 
   // A portal on the body, so no bar's own clipping or filter moves it: it is placed against the
   // viewport, under the bar the button sits in.
@@ -98,7 +104,12 @@ export function LivePanel({ call, status, anchor, onClose }: Props) {
               </Button>
             </>
           ) : (
-            <Button variant="primary" block onClick={() => void call.start()}>
+            <Button
+              variant="primary"
+              block
+              busy={startTalking.checking}
+              onClick={() => void startTalking.begin()}
+            >
               <Mic size={16} />
               {t.start}
             </Button>
@@ -109,6 +120,12 @@ export function LivePanel({ call, status, anchor, onClose }: Props) {
       {inCall || (!status.available && call.records.length === 0) ? null : (
         <HistoryPanel records={call.records} />
       )}
+
+      <LiveConsent
+        provider={startTalking.asking}
+        onClose={startTalking.stopAsking}
+        onAgreed={() => void call.start()}
+      />
     </section>,
     document.body,
   );

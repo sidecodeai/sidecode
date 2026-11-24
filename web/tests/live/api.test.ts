@@ -25,9 +25,14 @@ function gateway(...answers: (Response | Error)[]) {
   return fetcher;
 }
 
-const ON: LiveStatus = { enabled: true, available: true, reason: null };
-const OFF: LiveStatus = { enabled: false, available: false, reason: null };
-const unavailable = (reason: string | null): LiveStatus => ({ enabled: true, available: false, reason });
+const ON: LiveStatus = { enabled: true, available: true, reason: null, provider: null };
+const OFF: LiveStatus = { enabled: false, available: false, reason: null, provider: null };
+const unavailable = (reason: string | null): LiveStatus => ({
+  enabled: true,
+  available: false,
+  reason,
+  provider: null,
+});
 
 beforeEach(() => {
   forgetLiveStatus();
@@ -135,6 +140,31 @@ describe('what the answer says', () => {
   it('drops a reason from an answer that says available', async () => {
     gateway(reply(200, { enabled: true, available: true, reason: 'quota_exceeded' }));
     expect(await fetchLiveStatus('admin')).toEqual(ON);
+  });
+
+  it('names the AI speech service the gateway names, for the permission asked before a call', async () => {
+    gateway(
+      reply(200, { enabled: true, available: true, provider_name: ' OpenAI ' }),
+      reply(200, { enabled: true, available: false, reason: 'quota_exceeded', provider_name: 'OpenAI' }),
+    );
+    expect(await fetchLiveStatus('a')).toEqual({ ...ON, provider: 'OpenAI' });
+    expect(await fetchLiveStatus('b')).toEqual({ ...unavailable('quota_exceeded'), provider: 'OpenAI' });
+  });
+
+  it.each([
+    ['names none', {}],
+    ['names an empty one', { provider_name: '  ' }],
+    ['names something that is not text', { provider_name: 7 }],
+    ['names one longer than the protocol allows', { provider_name: 'x'.repeat(41) }],
+    ['names one with a line break', { provider_name: 'Open\nAI' }],
+  ])('leaves the provider unnamed when the gateway %s', async (_name, body) => {
+    gateway(reply(200, { enabled: true, available: true, ...body }));
+    expect(await fetchLiveStatus('admin')).toEqual(ON);
+  });
+
+  it('names no provider for an account that is not offered the assistant', async () => {
+    gateway(reply(200, { enabled: false, provider_name: 'OpenAI' }));
+    expect(await fetchLiveStatus('admin')).toEqual(OFF);
   });
 });
 

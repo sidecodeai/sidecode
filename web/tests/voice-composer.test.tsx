@@ -12,6 +12,7 @@ import { strings } from '../src/strings';
 import type * as ReactModule from 'react';
 import type * as LevelFeedModule from '../src/features/voice/levelFeed';
 import type { Session } from '../src/protocol/types';
+import { agreedToVoice } from './voiceConsent';
 
 const voice = vi.hoisted(() => ({
   publish: null as null | ((text: string, isFinal: boolean) => void),
@@ -128,6 +129,7 @@ const controlRowButtons = (): string[] =>
   [...document.querySelectorAll('.voice-controls button')].map((b) => b.textContent ?? '');
 
 beforeEach(() => {
+  agreedToVoice();
   voice.publish = null;
   voice.elapsedMs = 12_000;
 });
