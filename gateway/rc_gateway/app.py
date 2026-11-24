@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse
 
 from .apns import ApnsProvider
 from .auth_store import AuthSessionStore
-from .board import mount_board
+from .board import mount_board, renew_board_consent
 from .config import Config, load_config
 from .devices import DeviceStore
 from .headers import SecurityHeaders
@@ -134,6 +134,8 @@ def create_app(state: GatewayState | None = None) -> FastAPI:
         await resolved.sessions.start()
         await resolved.hub.start()
         await resolved.push.start()
+        # Before the boards are followed again: a new provider's boards start from no consent.
+        await renew_board_consent(resolved)
         if resolved.board is not None:
             await resolved.board.start()
         log.info(
@@ -191,7 +193,7 @@ def create_app(state: GatewayState | None = None) -> FastAPI:
     app.include_router(device_ws.router)
     app.include_router(app_ws.router)
     app.include_router(stt_ws.router)
-    mount_live(app, resolved)
+    mount_live(app, resolved, provider_name=resolved.config.provider_names.live)
     mount_board(app, resolved)
     app.include_router(static_routes.router)
 

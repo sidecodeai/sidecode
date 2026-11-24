@@ -97,8 +97,9 @@ class _HttpTranscriber:
 class OpenAiTranscriber(_HttpTranscriber):
     """Posts multipart audio to ``{base_url}/audio/transcriptions``.
 
-    OpenAI's default ``json`` answer carries the text alone; a compatible server that also names
-    the language it detected is believed.
+    The default ``json`` answer carries the text, and the language the provider detected is
+    believed when it names one: ``gpt-transcribe`` lists it in ``languages``, a compatible server
+    may name it in ``language``.
     """
 
     async def transcribe(self, audio: bytes, *, filename: str, content_type: str) -> Transcript:
@@ -116,11 +117,23 @@ class OpenAiTranscriber(_HttpTranscriber):
             raise _unreachable(exc) from exc
         payload = _decoded(response)
         text = payload.get("text") if isinstance(payload, dict) else None
-        detected = payload.get("language") if isinstance(payload, dict) else None
         return Transcript(
             text=text.strip() if isinstance(text, str) else "",
-            language=detected if isinstance(detected, str) and detected else "auto",
+            language=_detected_language(payload),
         )
+
+
+def _detected_language(payload: Any) -> str:
+    """``language``, else the first of ``languages``, else ``auto`` (A44)."""
+    if not isinstance(payload, dict):
+        return "auto"
+    named = payload.get("language")
+    if isinstance(named, str) and named:
+        return named
+    listed = payload.get("languages")
+    first = listed[0] if isinstance(listed, list) and listed else None
+    code = first.get("code") if isinstance(first, dict) else None
+    return code if isinstance(code, str) and code else "auto"
 
 
 class MimoTranscriber(_HttpTranscriber):

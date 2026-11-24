@@ -26,6 +26,8 @@ from .compat import (
     is_release_version,
 )
 from .origins import canonical_origin
+from .provider_names import ProviderNames
+from .provider_names import load as load_provider_names
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SESSION_TTL_SECONDS = 30 * 24 * 3600
@@ -35,6 +37,9 @@ PAIRING_TTL_SECONDS = 600
 #: ``qwen3-asr-flash-realtime`` speaks it), the only one that streams words as they are said.
 STT_BACKENDS = ("openai", "mimo", "realtime")
 STT_PROVIDERS = ("none", *STT_BACKENDS)
+#: The model when ``STT_MODEL`` names none: OpenAI's for recorded speech. ``whisper-1``, the default
+#: before it, is one of the transcription models OpenAI shuts down on 2027-02-26.
+DEFAULT_STT_MODEL = "gpt-transcribe"
 DEFAULT_TRUSTED_PROXIES = ("127.0.0.0/8", "::1/128")
 DEFAULT_POLISH_TIMEOUT_SECONDS = 20.0
 
@@ -132,6 +137,8 @@ class Config:
     android_update_url: str = ""
     windows_minimum_version: str = WINDOWS_MINIMUM_APP_VERSION
     windows_update_url: str = ""
+    #: A65: the name the apps show for each AI feature's provider (``provider_names.py``).
+    provider_names: ProviderNames = field(default_factory=ProviderNames)
 
     @property
     def https_origin(self) -> bool:
@@ -196,7 +203,7 @@ def _stt_config() -> SttConfig:
             f"STT_PROVIDER is not a supported provider: {provider!r} "
             f"(expected one of {', '.join(STT_PROVIDERS)})"
         )
-    model = _env("STT_MODEL", "whisper-1")
+    model = _env("STT_MODEL", DEFAULT_STT_MODEL)
     realtime_url = _realtime_url(provider, _env("STT_REALTIME_URL"), model)
     return SttConfig(
         provider=provider,
@@ -320,6 +327,10 @@ def load_config(*, load_env_file: bool = True) -> Config:
     # Before DATA_DIR is touched: a typo in the provider name should not leave secrets behind.
     stt = _stt_config()
     polish = _polish_config()
+    try:
+        provider_names = load_provider_names(_env)
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
     ios_minimum_version = _minimum_version("IOS_MIN_APP_VERSION", IOS_MINIMUM_APP_VERSION)
     ios_update_url = _update_url("IOS_UPDATE_URL")
     macos_minimum_version = _minimum_version("MACOS_MIN_APP_VERSION", MACOS_MINIMUM_APP_VERSION)
@@ -378,6 +389,7 @@ def load_config(*, load_env_file: bool = True) -> Config:
         android_update_url=android_update_url,
         windows_minimum_version=windows_minimum_version,
         windows_update_url=windows_update_url,
+        provider_names=provider_names,
     )
 
 

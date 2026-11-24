@@ -9,6 +9,9 @@ An account with no row has never touched a preference and reads the defaults, so
 needs no seeding and a deleted account leaves nothing behind. A41 added the Settings screen's own
 preferences beside A35's switch; each of them is absent until somebody sets it, so an app can tell
 "nobody has chosen" from "chosen, and this is the value", and write its own up the first time.
+
+Beside the accounts the file keeps the task board provider's name the permissions were last given
+under (A65), so a gateway that starts under another name can ask every account again.
 """
 
 from __future__ import annotations
@@ -65,8 +68,9 @@ class Preferences:
     #: The app's interface language: ``en`` or ``zh-Hans``.
     language: str | None = None
     #: The language a phone that recognises speech itself listens for — ``zh``, ``en``, … —
-    #: Chinese when unset, and an ``auto`` written before A44 reads as unset. The gateway's own
-    #: provider detects the language and never reads it; this stores what an app writes.
+    #: and while it is unset the app's interface language decides: ``en`` for English, ``zh`` for
+    #: 简体中文 (A66); an ``auto`` written before A44 reads as unset. The gateway's own provider
+    #: detects the language and never reads it; this stores what an app writes.
     stt_language: str | None = None
     #: Whether a finished dictation goes through the gateway's polish model (A29).
     polish_enabled: bool | None = None
@@ -112,6 +116,9 @@ _UPSERT = f"""
         updated_at=excluded.updated_at
 """
 
+#: The key of the task board provider's name in ``preference_meta`` (A65).
+BOARD_PROVIDER_KEY = "board_provider_name"
+
 
 class PreferenceStore:
     """One SQLite file holding one row per account."""
@@ -145,6 +152,14 @@ class PreferenceStore:
                     polish_strength TEXT,
                     timeline_detail TEXT,
                     task_board INTEGER
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS preference_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
                 )
                 """
             )
@@ -184,6 +199,40 @@ class PreferenceStore:
     def _remove_for_user(self, username: str) -> None:
         with self._connect() as connection:
             connection.execute("DELETE FROM preferences WHERE username=?", (username,))
+
+    async def board_accounts(self) -> list[str]:
+        """The accounts whose task board is on (A62)."""
+        return await asyncio.to_thread(self._board_accounts)
+
+    def _board_accounts(self) -> list[str]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT username FROM preferences WHERE task_board=1 ORDER BY username"
+            ).fetchall()
+        return [str(row["username"]) for row in rows]
+
+    async def board_provider(self) -> str:
+        """The task board provider's name the permissions were last given under, "" for none
+        (A65). A gateway that never recorded one had none."""
+        return await asyncio.to_thread(self._board_provider)
+
+    def _board_provider(self) -> str:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM preference_meta WHERE key=?", (BOARD_PROVIDER_KEY,)
+            ).fetchone()
+        return "" if row is None else str(row["value"])
+
+    async def record_board_provider(self, name: str) -> None:
+        await asyncio.to_thread(self._record_board_provider, name)
+
+    def _record_board_provider(self, name: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO preference_meta(key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (BOARD_PROVIDER_KEY, name),
+            )
 
 
 def _from_row(row: sqlite3.Row | None) -> Preferences:

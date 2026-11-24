@@ -6,7 +6,8 @@ rounds, which the gateway reads from the device itself. The account preference `
 the permission: nothing is read or kept while it is off. Who may have boards, and on whose model,
 is a policy (``policy.py``): a self-hosted gateway uses the operator's polish provider with its own
 ``BOARD_MODEL``, and a gateway that bills its model calls passes a policy of its own. This package
-imports none of it.
+imports none of it. A gateway that starts under a new ``BOARD_PROVIDER_NAME`` turns every account's
+task board off first (``provider.py``, A65).
 """
 
 from __future__ import annotations
@@ -21,10 +22,11 @@ from ..state import GatewayState
 from .config import BoardConfig, load_board_config
 from .llm import ChatModel
 from .policy import BoardPolicy, OperatorPolicy
+from .provider import renew_board_consent
 from .service import BoardService
-from .store import BoardStore
+from .store import STORE_FILE, BoardStore
 
-STORE_FILE = "boards.sqlite3"
+__all__ = ["mount_board", "renew_board_consent"]
 
 
 def mount_board(

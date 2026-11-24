@@ -5,7 +5,7 @@ whether it may start a call now (``admit``, which refuses with a ``LiveError`` w
 reason). The admission carries the meter the call reports its open time to (``meter.py``). A
 self-hosted gateway uses ``AllowlistPolicy``: the accounts in ``LIVE_ALLOWED_USERS``, each held to
 ``LIVE_DAILY_SECONDS`` of call time a day, nothing billed. A gateway that bills its calls hands the
-service a policy of its own; this package imports none of it.
+service a policy of its own; this package imports none of it. ``ClosedPolicy`` lets nobody call.
 """
 
 from __future__ import annotations
@@ -58,6 +58,24 @@ class LivePolicy(Protocol):
         ...
 
 
+#: The reason an account the assistant is not offered to reads, as it does on every gateway.
+NOT_ALLOWED = "not_allowed"
+
+
+class ClosedPolicy:
+    """Nobody may call, and the entry is not shown: the assistant reported off.
+
+    A gateway with a hosted service uses it while the assistant's provider has no name (A65), so
+    it never offers a provider the apps cannot name.
+    """
+
+    async def status(self, username: str) -> LiveStatus:
+        return LiveStatus(enabled=False, available=False, reason=NOT_ALLOWED)
+
+    async def admit(self, username: str) -> Admission:
+        raise LiveError(NOT_ALLOWED, "the assistant is not enabled for you")
+
+
 class AllowlistPolicy:
     """The self-hosted rules: only the listed accounts, and a daily cap on each one's call time."""
 
@@ -68,11 +86,11 @@ class AllowlistPolicy:
     async def status(self, username: str) -> LiveStatus:
         if username in self._allowed:
             return LiveStatus(enabled=True, available=True, reason=None)
-        return LiveStatus(enabled=False, available=False, reason="not_allowed")
+        return LiveStatus(enabled=False, available=False, reason=NOT_ALLOWED)
 
     async def admit(self, username: str) -> Admission:
         if username not in self._allowed:
-            raise LiveError("not_allowed", "the assistant is not enabled for you")
+            raise LiveError(NOT_ALLOWED, "the assistant is not enabled for you")
         left = self._budget.remaining(username)
         if left <= 0:
             raise LiveError("daily_limit", "today's voice time has been used")

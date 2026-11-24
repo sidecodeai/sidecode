@@ -13,9 +13,10 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from ..logging import logger
+from ..provider_names import LIVE, warn_unnamed
 from ..state import GatewayState
 from .config import LiveConfig, LiveConfigError, load_live_config
-from .policy import LivePolicy
+from .policy import ClosedPolicy, LivePolicy
 from .routes import router
 from .service import LiveService
 from .upstream import UpstreamConnector, connect_upstream
@@ -30,13 +31,17 @@ def mount_live(
     config: LiveConfig | None = None,
     connector: UpstreamConnector | None = None,
     policy: LivePolicy | None = None,
+    provider_name: str = "",
 ) -> LiveService | None:
     """Register the routes when the feature is on, under ``policy`` (the self-hosted one if none).
 
     A gateway with a hosted service bills its calls: without a policy that bills them the feature
     stays off, rather than run for nothing. A state with no such service is a self-hosted one.
+    ``provider_name`` is what the status reports the provider as (A65); without one, a gateway
+    with a hosted service reports the assistant off and lets nobody call.
     """
-    if getattr(state, "paid", None) is not None and policy is None:
+    hosted = getattr(state, "paid", None) is not None
+    if hosted and policy is None:
         return None
     try:
         resolved = config if config is not None else load_live_config()
@@ -45,8 +50,15 @@ def mount_live(
         return None
     if resolved is None:
         return None
+    if hosted and not provider_name:
+        warn_unnamed(LIVE)
+        policy = ClosedPolicy()
     service = LiveService(
-        state, resolved, connector if connector is not None else connect_upstream, policy=policy
+        state,
+        resolved,
+        connector if connector is not None else connect_upstream,
+        policy=policy,
+        provider_name=provider_name,
     )
     app.state.live = service
     app.include_router(router)

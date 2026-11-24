@@ -29,6 +29,9 @@ from typing import Any
 from ..migrations import Migration, apply_migrations
 from .merge import Item, item_from_stored
 
+#: The store's file under ``DATA_DIR``.
+STORE_FILE = "boards.sqlite3"
+
 #: Columns added since this table's first release; see rc_gateway/migrations.py.
 MIGRATIONS: tuple[Migration, ...] = ()
 
@@ -241,6 +244,15 @@ class BoardStore:
     def _delete_rows(self, column: str, value: str) -> None:
         with self._connect() as connection:
             connection.execute(f"DELETE FROM boards WHERE {column}=?", (value,))
+
+    async def clear(self) -> int:
+        """Delete every board, and say how many there were. The revision counter stays, so a
+        board made afterwards still reads as newer than any an app holds."""
+        return await asyncio.to_thread(self._clear)
+
+    def _clear(self) -> int:
+        with self._connect() as connection:
+            return int(connection.execute("DELETE FROM boards").rowcount)
 
     async def sweep(self, before: int, *, keep: Collection[str] = ()) -> list[str]:
         """Delete the boards nobody opened since ``before`` (ms) but those in ``keep``.

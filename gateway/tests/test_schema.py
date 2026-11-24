@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from rc_gateway.app import build_state, create_app
 from rc_gateway.badge import BadgeChange
+from rc_gateway.provider_names import ProviderNames
 from rc_gateway.push import PushService
 from rc_gateway.push_store import ApnsRegistration, PushStore
 from rc_gateway.state import GatewayState
@@ -195,6 +196,30 @@ def test_apps_minimums_match_the_schema_in_all_three_bodies(tmp_path: Path) -> N
         check(hello, "app_frames.json", "Hello")
     for body in (health, served, hello):
         assert set(body["apps"]) == {"ios", "macos", "android", "windows"}
+
+
+def test_named_providers_match_the_schema_in_the_configuration_and_the_hello(
+    tmp_path: Path,
+) -> None:
+    """A65: each name as the operator wrote it, up to the schema's 40 characters, any script."""
+    names = ProviderNames(stt="x" * 40, polish="示例语音服务", board="Board Co", live="Voice Co")
+    config = make_config(tmp_path, provider_names=names)
+    write_wheel(tmp_path)
+    with TestClient(create_app(build_state(config))) as configured:
+        token = configured.post(
+            "/api/login",
+            json={"username": "admin", "password": config.password},
+            headers={"Origin": config.public_origin},
+        ).json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+        served = configured.get("/api/config", headers=auth).json()
+        check(served, "http.json", "ConfigResponse")
+        with configured.websocket_connect("/ws/app", headers=auth) as app:
+            hello = drain_until(app, "hello")
+        check(hello, "app_frames.json", "Hello")
+    for body in (served, hello):
+        named = {feature: body[feature]["provider_name"] for feature in ("stt", "polish", "board")}
+        assert named == {"stt": "x" * 40, "polish": "示例语音服务", "board": "Board Co"}
 
 
 def test_pushed_app_frames_match_the_schema(client: TestClient, auth: dict[str, str]) -> None:

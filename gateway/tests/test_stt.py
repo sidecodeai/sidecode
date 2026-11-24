@@ -15,13 +15,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from rc_gateway.app import build_state, create_app
-from rc_gateway.config import ConfigError, SttConfig, load_config
+from rc_gateway.config import DEFAULT_STT_MODEL, ConfigError, SttConfig, load_config
 from rc_gateway.state import GatewayState
 from rc_gateway.stt import (
     MAX_BASE64_BYTES,
     MimoTranscriber,
     OpenAiTranscriber,
     SttError,
+    Transcript,
     Utterance,
     wav_from_pcm16,
 )
@@ -172,7 +173,7 @@ async def test_openai_transcriber_posts_multipart() -> None:
                 provider="openai",
                 base_url="https://stt.example/v1",
                 api_key="secret",
-                model="whisper-1",
+                model="gpt-transcribe",
             ),
             client=http,
         )
@@ -180,13 +181,13 @@ async def test_openai_transcriber_posts_multipart() -> None:
             wav_from_pcm16(SILENCE), filename="a.wav", content_type="audio/wav"
         )
     assert result.text == "transcribed"
-    # A server that names the language it detected is believed (A44).
+    # A server that names the language it detected in `language` is believed too (A44).
     assert result.language == "zh"
     assert seen["url"] == "https://stt.example/v1/audio/transcriptions"
     body = body_seen["body"]
     assert b'name="file"' in body
     assert b'name="model"' in body
-    assert b"whisper-1" in body
+    assert b"gpt-transcribe" in body
     assert b'name="language"' not in body
 
 
@@ -208,6 +209,37 @@ async def test_an_answer_that_names_no_language_reads_as_auto() -> None:
             b"RIFFdata", filename="a.wav", content_type="audio/wav"
         )
     assert result.language == "auto"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("answer", "language"),
+    [
+        ({"text": "ok", "languages": [{"code": "zh"}, {"code": "en"}]}, "zh"),
+        ({"text": "ok", "languages": []}, "auto"),
+        ({"text": "ok", "languages": [{"code": ""}]}, "auto"),
+    ],
+)
+async def test_gpt_transcribe_names_the_language_it_detected_in_a_list(
+    answer: dict[str, Any], language: str
+) -> None:
+    """OpenAI's ``gpt-transcribe`` lists what it detected; the first is the transcript's."""
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=answer))
+    ) as http:
+        transcriber = OpenAiTranscriber(
+            SttConfig(
+                provider="openai",
+                base_url="https://api.openai.com/v1",
+                api_key="",
+                model="gpt-transcribe",
+            ),
+            client=http,
+        )
+        result = await transcriber.transcribe(
+            wav_from_pcm16(SILENCE), filename="a.wav", content_type="audio/wav"
+        )
+    assert result == Transcript(text="ok", language=language)
 
 
 @pytest.mark.asyncio
@@ -462,6 +494,24 @@ def test_an_unknown_stt_provider_stops_the_gateway(
 
     monkeypatch.setenv("STT_PROVIDER", "MiMo")
     assert load_config(load_env_file=False).stt.enabled is True
+
+
+def test_openai_dictation_without_a_model_uses_gpt_transcribe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``whisper-1``, the default before it, shuts down on 2027-02-26."""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("PUBLIC_ORIGIN", "https://rc.example.com")
+    monkeypatch.setenv("RC_PASSWORD", "hunter2hunter2")
+    monkeypatch.delenv("WEB_PUSH_CONTACT", raising=False)
+    monkeypatch.setenv("STT_PROVIDER", "openai")
+    for name in ("STT_MODEL", "STT_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    stt = load_config(load_env_file=False).stt
+    assert (stt.base_url, stt.model) == ("https://api.openai.com/v1", "gpt-transcribe")
+    assert DEFAULT_STT_MODEL == "gpt-transcribe"
+    monkeypatch.setenv("STT_MODEL", "whisper-1")
+    assert load_config(load_env_file=False).stt.model == "whisper-1"
 
 
 def test_signing_out_closes_an_open_stt_socket(

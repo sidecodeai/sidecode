@@ -77,8 +77,9 @@ never reach the network: the STT backend, the Live API, Web Push and APNs sender
 | `rc_gateway/push*.py`, `apns.py` | Web Push and APNs |
 | `rc_gateway/badge.py` | the A47 badge-only APNs push, sent once an account's count has been still for 3 s |
 | `rc_gateway/stt.py` | OpenAI-compatible transcription client |
+| `rc_gateway/provider_names.py` | the name the apps show for each AI feature's provider (A65), read from `*_PROVIDER_NAME` and reported in `GET /api/config`, `hello` and `GET /api/live/status` |
 | `rc_gateway/live/` | the experimental voice assistant: `WS /ws/live`, the one WebSocket to the Live API, its tools, limits and policy (`docs/LIVE_ASSISTANT.md`) |
-| `rc_gateway/board/` | the task board (A62): `board.get` and `board.refresh`, the boards followed for seven days, the updates that read a session's history from its device and ask the operator's model, their pacing and policy, and `boards.sqlite3` (`docs/ARCHITECTURE.md` § "The task board") |
+| `rc_gateway/board/` | the task board (A62): `board.get` and `board.refresh`, the boards followed for seven days, the updates that read a session's history from its device and ask the operator's model, their pacing and policy, `boards.sqlite3`, and every account's board turned off when `BOARD_PROVIDER_NAME` changes (A65) (`docs/ARCHITECTURE.md` § "The task board") |
 
 ## Docker
 

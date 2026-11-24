@@ -133,13 +133,17 @@ names the missing one.
 | `STT_BASE_URL` | `https://api.openai.com/v1` | Base URL. `openai` posts to `{STT_BASE_URL}/audio/transcriptions`, `mimo` to `{STT_BASE_URL}/chat/completions`; `realtime` ignores it |
 | `STT_REALTIME_URL` | empty | The `wss://` endpoint of the `realtime` provider, required with it. The model goes in its query; a bare URL gets `?model={STT_MODEL}` appended |
 | `STT_API_KEY` | empty | Bearer token for that server. Not needed by most local servers |
-| `STT_MODEL` | `whisper-1` | Model name the backend expects |
+| `STT_MODEL` | `gpt-transcribe` | Model name the backend expects. The default is OpenAI's model for recorded speech; set it for any other backend |
 | `POLISH_BASE_URL` | empty | OpenAI-compatible base URL for dictation polish (A29); the gateway calls `{POLISH_BASE_URL}/models` and `{POLISH_BASE_URL}/chat/completions`. Empty leaves the feature off and the apps show the setting disabled |
 | `POLISH_API_KEY` | empty | Bearer token for that provider. Both this and the base URL are needed to enable polish |
 | `POLISH_MODELS` | empty | Optional comma-separated allowlist of model ids: it narrows and orders the list the apps offer, stands in for a provider that serves no `/models`, and makes `POST /api/polish` refuse any other model with `400` |
 | `POLISH_TIMEOUT_SECONDS` | `20` | How long one polish request may take before the gateway answers `502` |
 | `BOARD_MODEL` | empty | The model task boards are made by (A62), on the polish provider above; with the provider and this set, `GET /api/config` reports `board.enabled: true`. Empty leaves the feature off |
 | `LIVE_ASSISTANT_ENABLED` | `false` | Switches on the experimental voice assistant, which also needs `LIVE_OPENAI_API_KEY`, and `LIVE_ALLOWED_USERS` to name who may use it; these and the other `LIVE_*` settings are described under [Voice assistant](#voice-assistant-experimental) |
+| `STT_PROVIDER_NAME` | empty | The name the apps show for the speech provider before dictation through the gateway sends any audio (A65), reported as `stt.provider_name` by `GET /api/config` and `hello`. Plain text of at most 40 characters; a control character or a longer value stops the gateway. Unset, the apps use wording that names no provider: [AI provider names](#ai-provider-names) |
+| `POLISH_PROVIDER_NAME` | empty | The same for dictation polish, reported as `polish.provider_name` |
+| `BOARD_PROVIDER_NAME` | empty | The same for the task board, reported as `board.provider_name`. Setting, changing or clearing it turns every account's task board off at the next start |
+| `LIVE_PROVIDER_NAME` | empty | The same for the voice assistant, reported as `provider_name` by `GET /api/live/status` |
 | `IOS_MIN_APP_VERSION` | the build's own constant | Overrides the oldest iOS app this gateway supports (`major.minor.patch`, A31). Normally left unset: the constant `IOS_MINIMUM_APP_VERSION` in `rc_gateway/compat.py` is raised in the release that breaks compatibility |
 | `IOS_UPDATE_URL` | empty | Where the iPhone app's "Update required" screen sends people, such as the app's App Store page, `https://` only |
 | `MACOS_MIN_APP_VERSION` | the build's own constant | Overrides the oldest Mac app this gateway supports (`major.minor.patch`, A45). Normally left unset: the constant `MACOS_MINIMUM_APP_VERSION` in `rc_gateway/compat.py` is raised in the release that breaks the Mac app's compatibility, apart from the iOS one |
@@ -383,8 +387,16 @@ an older app still sends is ignored (A44).
 STT_PROVIDER=openai
 STT_BASE_URL=https://api.openai.com/v1
 STT_API_KEY=sk-…
-STT_MODEL=whisper-1
+STT_MODEL=gpt-transcribe
 ```
+
+`gpt-transcribe` is the model OpenAI recommends for transcribing recorded speech in the language
+it was spoken in, and the default of `STT_MODEL`; its answer lists the language it detected, and
+the gateway passes the first on to the app. A server that names the language in `language`
+instead is believed too. `whisper-1`, the default before it, is one of the transcription models
+OpenAI deprecated, which shut down on 26 February 2027 with `gpt-4o-transcribe`,
+`gpt-4o-mini-transcribe` and `gpt-4o-transcribe-diarize`: a gateway that sets `STT_MODEL=whisper-1`
+moves to `gpt-transcribe` by setting it, or by leaving it unset.
 
 **MiMo.** Xiaomi MiMo has no transcription endpoint: the gateway sends the utterance as a base64
 WAV data URL inside a chat completion and reads the transcript back out of the assistant's reply.
@@ -520,6 +532,36 @@ The reverse proxy needs nothing new: `/ws/live` is under `/ws/`, so the Websocke
 own: they read `GET /api/live/status`, so a gateway with the feature off shows no trace of it in an
 app, and an app asks the person's permission before the first call on any gateway, yours included,
 and keeps the conversations on its device.
+
+## AI provider names
+
+Before an AI feature sends anything, each app names the provider that receives it (A65): the
+speech provider for dictation the gateway transcribes, and the providers of dictation polish, the
+task board and the voice assistant. The operator gives the names:
+
+```
+STT_PROVIDER_NAME=Example AI
+POLISH_PROVIDER_NAME=Example AI
+BOARD_PROVIDER_NAME=Example AI
+LIVE_PROVIDER_NAME=Example AI
+```
+
+Each is plain text of at most 40 characters, trimmed: a control or other invisible character, or a
+longer value, stops the gateway at startup with the variable's name. `GET /api/config` and every
+app's `hello` report the first three as `stt.provider_name`, `polish.provider_name` and
+`board.provider_name`, and `GET /api/live/status` reports the fourth as `provider_name`. A name
+that is not set is left out, and the apps then use wording that names no provider. A gateway may
+leave every name unset and offers its features as before.
+
+A person turns the task board on after their app has named the board's provider, so the gateway
+records the `BOARD_PROVIDER_NAME` those permissions were given under, in
+`DATA_DIR/preferences.sqlite3`. A start under another name, setting it for the first time or
+clearing it included, turns every account's task board off before it serves anyone, the way each
+person turning it off would: the preference is written and the account's apps read it when they
+connect. Every board is deleted with them, also from a `boards.sqlite3` that no running board
+keeps. It logs `task boards turned off for a new provider` with the number of `accounts` it turned
+off, and each person decides again under the new name. A gateway that never set a name and still
+sets none keeps every board.
 
 ## App compatibility
 

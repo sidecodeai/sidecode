@@ -143,6 +143,20 @@ async def test_rows_leave_by_session_device_and_account(tmp_path: Path) -> None:
     assert await boards.get("s4") is not None
 
 
+async def test_every_board_is_deleted_at_once_and_the_counter_goes_on(tmp_path: Path) -> None:
+    """What a new board provider does (A65): no board is left, and none goes back in number."""
+    boards = store(tmp_path)
+    for session, user in (("s1", "ada"), ("s2", "grace")):
+        await boards.create(session, "d1", user, 1000)
+        assert await boards.write_board(BoardRow(session, "d1", user)) is not None
+    assert await boards.clear() == 2
+    assert await boards.get("s1") is None and await boards.get("s2") is None
+    assert await boards.clear() == 0
+    await boards.create("s1", "d1", "ada", 2000)
+    again = await boards.write_board(BoardRow("s1", "d1", "ada"))
+    assert again is not None and again.revision == 3
+
+
 async def test_the_sweep_deletes_what_nobody_opened_since_the_cutoff(tmp_path: Path) -> None:
     boards = store(tmp_path)
     await boards.create("old", "d1", "ada", 1000)

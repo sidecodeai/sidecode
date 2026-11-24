@@ -35,6 +35,7 @@ from rc_gateway.hub import (
 from rc_gateway.index import SessionIndex
 from rc_gateway.polish import PolishError, PolishModel
 from rc_gateway.polish_prompt import ContextMessage
+from rc_gateway.provider_names import ProviderNames
 from rc_gateway.push_store import WebPushSubscription
 from rc_gateway.state import GatewayState
 from rc_gateway.stt import SttError, Transcript
@@ -47,6 +48,10 @@ ORIGIN = "http://testserver"
 PASSWORD = "correct-horse-battery-staple"
 MEMBER_PASSWORD = "another-correct-horse-staple"
 FIXTURE_DIR = Path(__file__).resolve().parents[2] / "protocol" / "fixtures"
+#: A65: every AI feature's provider named, which a hosted gateway needs before it offers any.
+PROVIDER_NAMES = ProviderNames(
+    stt="Speech Co", polish="Polish Co", board="Board Co", live="Voice Co"
+)
 
 
 class FakeTranscriber:

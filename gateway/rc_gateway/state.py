@@ -22,6 +22,7 @@ from .index import SessionIndex
 from .pairing_requests import PairingRequests
 from .polish import Polisher
 from .preference_store import Preferences, PreferenceStore
+from .provider_names import named
 from .push import PushService
 from .push_store import PushStore
 from .ratelimit import RateLimiter
@@ -75,14 +76,16 @@ class GatewayState:
         # A44: the provider detects the language of every transcription, so there is nothing to
         # offer; the list stays on the wire, always `auto`, for the apps that read it. A57: an app
         # reads `streaming` to choose between live partials and a transcript shown when it is done.
-        return {"enabled": stt.enabled, "languages": ["auto"], "streaming": stt.streaming}
+        # A65: the provider's name, when the operator gave one.
+        view = {"enabled": stt.enabled, "languages": ["auto"], "streaming": stt.streaming}
+        return named(view, self.config.provider_names.stt)
 
     def polish_view(self) -> dict[str, Any]:
-        return {"enabled": self.config.polish.enabled}
+        return named({"enabled": self.config.polish.enabled}, self.config.provider_names.polish)
 
     def board_view(self) -> dict[str, Any]:
         """A62: the `board` object of `GET /api/config` and of the app `hello`."""
-        return {"enabled": self.board is not None}
+        return named({"enabled": self.board is not None}, self.config.provider_names.board)
 
     def apps_view(self) -> dict[str, Any]:
         """A31, A45: the oldest build of each separately installed app this gateway works with."""

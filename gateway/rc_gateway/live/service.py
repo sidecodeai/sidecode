@@ -13,6 +13,7 @@ from typing import Any
 from fastapi import WebSocket
 
 from ..logging import logger
+from ..provider_names import named
 from ..ratelimit import RateLimiter
 from ..rejects import RejectionLog
 from ..security import Credential
@@ -46,6 +47,7 @@ class LiveService:
         clock: Callable[[], float] = time.monotonic,
         policy: LivePolicy | None = None,
         close_timeout: float = CLOSE_TIMEOUT_SECONDS,
+        provider_name: str = "",
     ) -> None:
         if policy is None and getattr(state, "paid", None) is not None:
             raise ValueError("a gateway that bills its calls needs a policy that bills them")
@@ -55,6 +57,8 @@ class LiveService:
         self._clock = clock
         self._policy = policy if policy is not None else AllowlistPolicy(config)
         self._close_timeout = close_timeout
+        #: A65: who the call's voice and the session details go to, as the apps name it.
+        self._provider_name = provider_name
         self.rejects = RejectionLog()
         self.upgrade_limiter = RateLimiter(max_per_ip=UPGRADES_PER_MINUTE)
         self._calls: dict[str, LiveCall] = {}
@@ -63,7 +67,8 @@ class LiveService:
         self._lock = asyncio.Lock()
 
     async def status(self, username: str) -> dict[str, Any]:
-        return (await self._policy.status(username)).view()
+        """The policy's answer, with the provider's name when the operator gave one (A65)."""
+        return named((await self._policy.status(username)).view(), self._provider_name)
 
     async def run_call(self, ws: WebSocket, credential: Credential) -> None:
         """Serve one accepted browser socket: refuse it, or run a call on it to the end."""
