@@ -85,10 +85,14 @@ async def queue_one(bench: Bench) -> None:
 
 
 async def deny(bench: Bench, entry: SessionEntry) -> None:
-    """Refuse the card, which ends the turn, and wait for the device to give the session up."""
+    """Refuse the card, which ends the turn, and wait for the device to give the session up.
+
+    Given up is what the apps are told, `terminal`: the device drops its runner first and says so
+    only once its `agy` has exited, which a loaded machine makes take a while.
+    """
     assert entry.runner is not None
     await entry.runner.approve(pending(bench)[0]["request_id"], "deny", None)
-    await wait_for(lambda: not running(entry))
+    await wait_for(lambda: not running(entry) and control(entry) == "terminal")
 
 
 def naming_it(bench: Bench) -> Holders:

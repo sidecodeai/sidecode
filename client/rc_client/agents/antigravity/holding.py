@@ -44,6 +44,13 @@ class Holding:
         self._places = places
         # The sessions told once that an `agy` may have them open while a turn of the device's ran.
         self._warned: set[str] = set()
+        # The sessions the latest look found an `agy` the device did not start may have open.
+        self._elsewhere: set[str] = set()
+
+    def open_elsewhere(self, session_id: str) -> bool:
+        """Whether, by the latest look, an `agy` the device did not start may have the session
+        open, whether or not the device could give the session up yet."""
+        return session_id in self._elsewhere
 
     async def scan(self, binary: str | None) -> None:
         """The ten-second look at every Antigravity session the device knows."""
@@ -67,6 +74,7 @@ class Holding:
         verdict = self._verdict(entry, holders)
         if verdict is None:
             raise errors.scan_failed()
+        self._note(entry, verdict)
         if verdict:
             if self.hub is not None and entry.runner is None:
                 await self.hub.terminal_holds(entry, True)
@@ -94,10 +102,17 @@ class Holding:
             session.session_id, self._places(entry), holders, exempt=exempt(entry)
         )
 
+    def _note(self, entry: SessionEntry, held: bool) -> None:
+        if held:
+            self._elsewhere.add(entry.session.session_id)
+        else:
+            self._elsewhere.discard(entry.session.session_id)
+
     async def apply(self, entry: SessionEntry, held: bool) -> None:
         hub = self.hub
         if hub is None or entry.ending:
             return
+        self._note(entry, held)
         session_id = entry.session.session_id
         if not held:
             self._warned.discard(session_id)

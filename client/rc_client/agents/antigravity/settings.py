@@ -3,7 +3,9 @@
 The model goes first, because `agy` puts the thinking level back to the new model's own default
 when it changes; then the level the session asked for, kept while the model offers it and otherwise
 the nearest one below; then the mode. Each answer is `agy`'s whole option list, which says what the
-session now runs with, and that is what the apps are told (A17).
+session now runs with, and that is what the apps are told (A17). A session in the device's own
+Bypass permissions runs `agy` in `accept-edits`, and is said to be in Bypass permissions while `agy`
+runs it so (A67).
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from ...errors import ErrorCode, RcError
 from ...sessions.channel import SessionChannel
 from . import errors
 from .acp import AgyConnection, AgyError
-from .options import MODE, MODEL, THOUGHT_LEVEL, Running, clamp, running
+from .options import BYPASS, MODE, MODEL, THOUGHT_LEVEL, Running, agy_mode, clamp, running
 from .turns import REFUSED
 
 
@@ -35,8 +37,9 @@ async def apply(agy: AgyConnection, session_id: str, now: Running, wanted: Wante
     level = clamp(wanted.effort, now.levels)
     if level is not None and level != now.effort:
         now = await _option(agy, session_id, now, THOUGHT_LEVEL, level)
-    if wanted.mode and wanted.mode != now.mode:
-        now = await _mode(agy, session_id, now, wanted.mode)
+    mode = agy_mode(wanted.mode)
+    if mode and mode != now.mode:
+        now = await _mode(agy, session_id, now, mode)
     return now
 
 
@@ -59,13 +62,13 @@ async def _mode(agy: AgyConnection, session_id: str, now: Running, mode: str) ->
     return after
 
 
-async def publish(channel: SessionChannel, now: Running) -> None:
-    """What `agy` runs the session with, as `meta` (A17); no levels means no effort."""
+async def publish(channel: SessionChannel, now: Running, mode: str | None) -> None:
+    """What the session runs with, as `meta` (A17); no levels means no effort."""
     fields: dict[str, Any] = {"effort": now.effort if now.levels else None}
     if now.model:
         fields["model"] = now.model
-    if now.mode:
-        fields["permission_mode"] = now.mode
+    if mode:
+        fields["permission_mode"] = mode
     await channel.set_meta(**fields)
 
 
@@ -110,5 +113,14 @@ class SessionSettings:
             self.now.mode = mode
         await self.publish()
 
+    @property
+    def bypassing(self) -> bool:
+        """Whether the device approves the session's tools itself (A67).
+
+        Bypass permissions, while `agy` runs the session in the mode it runs that in; asking for
+        another mode ends it at once.
+        """
+        return self.wanted.mode == BYPASS.id and self.now.mode == agy_mode(BYPASS.id)
+
     async def publish(self) -> None:
-        await publish(self.channel, self.now)
+        await publish(self.channel, self.now, BYPASS.id if self.bypassing else self.now.mode)

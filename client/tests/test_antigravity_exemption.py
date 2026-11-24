@@ -233,8 +233,8 @@ async def test_a_hand_off_whose_turn_runs_is_given_up_when_the_turn_ends(
         assert control(entry) == "remote" and running(entry)
         assert entry.runner is not None
         await entry.runner.approve(pending()[0]["request_id"], "allow", None)
-        await wait_for(lambda: not running(entry))
-        assert control(entry) == "terminal", "given up as the turn ended"
+        # Given up as the turn ended: the runner goes first, `terminal` once `agy` has exited.
+        await wait_for(lambda: not running(entry) and control(entry) == "terminal")
         assert (await refused(bench.hub, "More.")).code == "conflict"
     finally:
         await bench.stop()

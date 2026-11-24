@@ -103,6 +103,51 @@ def test_text_runs_until_a_tool_begins_and_each_tool_is_its_own_block() -> None:
     assert opened and after[0].fields["block_id"] != first[0].fields["block_id"]
 
 
+def test_a_reply_after_a_tool_finished_is_a_new_block() -> None:
+    """agy 1.5.15: a background command's result, and the reply to it, come inside the prompt."""
+    translator = Translator()
+    started = {**WRITE, "toolCallId": "bg", "name": "run_command", "kind": "execute"}
+    translator.tool(started)
+    first, _ = translator.text("assistant_text", "I started it in the background.")
+    emits, _ = translator.tool(
+        {**started, "sessionUpdate": "tool_call_update", "status": "completed"}
+    )
+    assert [emit.kind for emit in emits] == ["tool_call"], "the words wait for what comes next"
+    after, opened = translator.text("assistant_text", "\n\nThe command printed `slept`.")
+    assert after[0].fields == {
+        "block_id": first[0].fields["block_id"],
+        "text": "I started it in the background.",
+        "done": True,
+    }, "the words before the result are finished first"
+    assert opened and after[1].fields["block_id"] != first[0].fields["block_id"]
+
+
+def test_a_thought_between_a_result_and_the_reply_leaves_the_reply_its_own_block() -> None:
+    translator = Translator()
+    started = {**WRITE, "toolCallId": "bg", "name": "run_command", "kind": "execute"}
+    translator.tool(started)
+    first, _ = translator.text("assistant_text", "I started it in the background.")
+    translator.tool({**started, "sessionUpdate": "tool_call_update", "status": "completed"})
+    translator.text("thinking", "It printed slept.")
+    reply, opened = translator.text("assistant_text", "\n\nThe command printed `slept`.")
+    assert reply[0].fields["block_id"] == first[0].fields["block_id"] and reply[0].fields["done"]
+    assert opened and reply[-1].fields["block_id"] != first[0].fields["block_id"]
+
+
+def test_words_still_being_written_as_a_tool_finished_stay_one_block() -> None:
+    """A sub-agent's tool, or a quick command, can finish while `agy` is mid-sentence."""
+    translator = Translator()
+    started = {**WRITE, "toolCallId": "quick", "name": "run_command", "kind": "execute"}
+    translator.tool(started)
+    first, _ = translator.text("assistant_text", "Listing the files")
+    translator.tool({**started, "sessionUpdate": "tool_call_update", "status": "completed"})
+    more, opened = translator.text("assistant_text", " in the folder now.")
+    assert not opened and more[0].fields["block_id"] == first[0].fields["block_id"]
+    later, opened_later = translator.text("assistant_text", "\n\nDone.")
+    assert not opened_later, "only the words right after the tool can begin a block"
+    assert later[0].fields["block_id"] == first[0].fields["block_id"]
+
+
 def test_a_background_command_or_a_schedule_lingers_and_a_daemon_does_not() -> None:
     translator = Translator()
     background = {

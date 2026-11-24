@@ -4,7 +4,8 @@
 the last also reachable through `session/set_mode`. The thinking levels depend on the model: some
 offer four, some three, some none, and `agy` puts the level back to the model's own default when
 the model changes. In a new process it starts every conversation on the account's defaults, so the
-device sets a session's own again each time (A64).
+device sets a session's own again each time (A64). After `agy`'s modes comes one of the device's,
+Bypass permissions, which runs `agy` in `accept-edits` and approves what `agy` asks about (A67).
 """
 
 from __future__ import annotations
@@ -26,12 +27,19 @@ EFFORTS = [
     Choice("high", "High"),
     Choice("xhigh", "Extra"),
 ]
+# The device's own mode (A67). `agy`'s ids never begin with `device-`, so none of its modes can
+# take this one's place; one it offered under this id would not be listed.
+BYPASS = Choice("device-bypass-permissions", "Bypass permissions")
+# The mode `agy` runs a session in Bypass permissions in: every account has it, and `agy` approves
+# the workspace's edits in it by itself, so fewer requests reach the device.
+BYPASS_BASE = "accept-edits"
 # What `permission_modes` says until the device has opened a session (4.3).
 FALLBACK_MODES = [
     Choice("default", "Default"),
     Choice("accept-edits", "Accept edits"),
     Choice("auto", "Auto"),
     Choice("plan", "Plan"),
+    BYPASS,
 ]
 
 
@@ -130,6 +138,16 @@ def _choices(entries: Any, key: str, label: str) -> list[Choice]:
         if isinstance(value, str) and value:
             found.append(Choice(value, str(entry.get(label) or value)))
     return found
+
+
+def offered_modes(modes: Sequence[Choice]) -> list[Choice]:
+    """The modes a session may run in: `agy`'s own as it offered them, then the device's (A67)."""
+    return [choice for choice in modes if choice.id != BYPASS.id] + [BYPASS]
+
+
+def agy_mode(mode: str | None) -> str | None:
+    """The mode `agy` itself runs a session in that asked for `mode`."""
+    return BYPASS_BASE if mode == BYPASS.id else mode
 
 
 def clamp(effort: str | None, levels: Sequence[str] | None) -> str | None:

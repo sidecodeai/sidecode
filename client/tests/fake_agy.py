@@ -470,6 +470,8 @@ class Fake:
         self.used(sid, 9659)
         self.tool(sid, "tool_call", "in_progress", call)
         self.tool(sid, "tool_call_update", "pending", call)
+        # A test that needs the turn running before agy asks names a file agy waits for first.
+        self.wait_for_file(self.config.get("ask_after"))
         self.awaiting_answer = True
         answer = self.ask(
             "session/request_permission",
@@ -619,6 +621,121 @@ class Fake:
         self.tool(sid, "tool_call_update", "completed", call)
         self.chunks(sid, "\n\nPING")
         self.used(sid, 15556)
+
+    def turn_long(self, request_id: Any, sid: str, params: dict[str, Any]) -> None:
+        """agy 1.5.15 and later: a background command keeps the prompt open until its result.
+
+        As agy sends it: its first words, the command's result, then about 30 seconds later its
+        reply to it, and only then the answer to the prompt, with every token of it.
+        """
+        call = _command("call_17734012458337888", "sleep 15 && echo slept")
+        self.used(sid, 10740)
+        self.tool(sid, "tool_call", "in_progress", call)
+        self.tool(sid, "tool_call_update", "pending", call)
+        if self.permission(sid, call) != "allow":
+            self.tool(sid, "tool_call_update", "failed", call, rawOutput={"output": ""})
+            self.end(request_id, "cancelled" if self.cancel.is_set() else "end_turn")
+            return
+        self.tool(sid, "tool_call_update", "in_progress", call)
+        self.chunks(sid, "I", " have started running the command in the background.")
+        self.used(sid, 10939)
+        if self.cancel.wait(float(self.config.get("background_delay", 0.3))):
+            self.tool(sid, "tool_call_update", "failed", call, rawOutput={"output": ""})
+            self.end(request_id, "cancelled")
+            return
+        self.tool(
+            sid,
+            "tool_call_update",
+            "completed",
+            call,
+            rawOutput={"output": "Command exited with code 0.\n\nslept\n", "exit_code": 0},
+        )
+        if self.cancel.wait(float(self.config.get("wake_delay", 0.3))):
+            self.end(request_id, "cancelled")
+            return
+        self.chunks(sid, "\n\nThe command", " printed `slept`.")
+        self.used(sid, 11175)
+        self.end(request_id, tokens=15249)
+
+    def turn_subagent(self, request_id: Any, sid: str, params: dict[str, Any]) -> None:
+        """agy 1.5.16: a sub-agent's request reaches the client under the parent's session id.
+
+        As agy sends it: the sub-agent starts at once, its command and its permission request
+        come in the parent session, and the prompt answers after a silent tail.
+        """
+        spawn = {
+            "toolCallId": "call_11825326914422831773",
+            "name": "invoke_subagent",
+            "kind": "other",
+            "title": "Run invoke_subagent",
+            "rawInput": {"Prompt": "Run exactly this shell command: echo sub-ok > sub.txt"},
+        }
+        self.used(sid, 11979)
+        self.tool(sid, "tool_call", "in_progress", spawn)
+        self.tool(sid, "tool_call_update", "completed", spawn)
+        self.chunks(sid, "I have", " started a subagent to run the command.")
+        child = _command("call_3209823881229263751", "echo sub-ok > sub.txt", wait=5000)
+        self.tool(sid, "tool_call", "pending", child)
+        chosen = self.permission(sid, child)
+        if chosen == "allow":
+            self.tool(sid, "tool_call_update", "in_progress", child)
+            self.tool(
+                sid,
+                "tool_call_update",
+                "completed",
+                child,
+                rawOutput={"output": "Command exited with code 0.\n", "exit_code": 0},
+            )
+        else:
+            self.tool(sid, "tool_call_update", "failed", child, rawOutput={"output": ""})
+        if self.cancel.is_set() or self.cancel.wait(float(self.config.get("wake_delay", 0.3))):
+            self.end(request_id, "cancelled")
+            return
+        tasks = {
+            "toolCallId": "call_9014473347655059",
+            "name": "manage_task",
+            "kind": "other",
+            "title": "Run manage_task",
+            "rawInput": {"Action": "list"},
+        }
+        self.used(sid, 12467)
+        self.tool(sid, "tool_call", "in_progress", tasks)
+        self.tool(sid, "tool_call_update", "completed", tasks)
+        self.chunks(sid, "\n\nThe ", "`manage_task` tool lists 0 tasks.")
+        self.used(sid, 12559)
+        # Nothing at all, then the answer: the real one came a minute after the last words.
+        if self.cancel.wait(float(self.config.get("tail_delay", 0.3))):
+            self.end(request_id, "cancelled")
+            return
+        self.end(request_id, tokens=8970)
+
+    def wait_for_file(self, name: str | None, timeout: float = 30.0) -> None:
+        """Hold the turn until the test creates `name` in the fake's directory, or Stop comes."""
+        if not name:
+            return
+        deadline = time.monotonic() + timeout
+        while not (self.directory / name).exists() and time.monotonic() < deadline:
+            if self.cancel.wait(0.02):
+                return
+
+    def permission(self, sid: str, call: dict[str, Any]) -> str | None:
+        """Ask the client about `call` as agy does; the option it chose, or None."""
+        self.awaiting_answer = True
+        answer = self.ask(
+            "session/request_permission",
+            {
+                "sessionId": sid,
+                "toolCall": {"sessionUpdate": "tool_call", "status": "pending", **call},
+                "options": [
+                    {"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+                    {"optionId": "deny", "name": "Deny", "kind": "reject_once"},
+                ],
+            },
+        )
+        self.awaiting_answer = False
+        if answer.get("cancelled") or self.cancel.is_set():
+            return None
+        return (answer.get("outcome") or {}).get("optionId")
 
     def turn_read(self, request_id: Any, sid: str, params: dict[str, Any]) -> None:
         """agy reads the file a prompt linked to, which the device allows itself."""

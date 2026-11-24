@@ -250,11 +250,20 @@ class Translator:
         self._count = 0
         self._open: dict[str, _Stream] = {}
         self._tools: dict[str, Tool] = {}
+        # Whether a tool finished since the last words: words then beginning a new line are a
+        # reply of their own, which since agy 1.5.15 a background command's result brings inside
+        # the prompt, after `agy`'s first words.
+        self._tool_ended = False
 
     def text(self, kind: str, text: str) -> tuple[list[Emit], bool]:
         """A chunk of `assistant_text` or `thinking`, and whether it began a new block."""
         if not text:
             return [], False
+        emits: list[Emit] = []
+        if kind == "assistant_text" and self._tool_ended:
+            # A thought between a result and the reply leaves the decision to the reply's words.
+            emits = self.close_streams() if text.startswith("\n") else []
+            self._tool_ended = False
         stream = self._open.get(kind)
         opened = stream is None
         if stream is None:
@@ -262,15 +271,17 @@ class Translator:
             stream = _Stream(f"{self._prefix}:{self._count}:{kind}")
             self._open[kind] = stream
         stream.text += text
-        return [Emit(kind, {"block_id": stream.block_id, "delta": text}, delta=True)], opened
+        emits.append(Emit(kind, {"block_id": stream.block_id, "delta": text}, delta=True))
+        return emits, opened
 
     def close_streams(self) -> list[Emit]:
-        """Finish every open text block: a tool began, or the turn ended."""
+        """Finish every open text block: a tool began, a reply followed a result, the turn ended."""
         emits = [
             Emit(kind, {"block_id": stream.block_id, "text": stream.text, "done": True})
             for kind, stream in self._open.items()
         ]
         self._open.clear()
+        self._tool_ended = False
         return emits
 
     def tool(self, update: dict[str, Any]) -> tuple[list[Emit], bool]:
@@ -287,6 +298,10 @@ class Translator:
             self._tools[call_id] = found
         else:
             found.apply(update)
+            # Words `agy` was still writing as the tool finished go on in their block; a reply
+            # to the result begins a new line (`text`).
+            if found.ended and self._open:
+                self._tool_ended = True
         emits.append(found.emit())
         if found.ended:
             self._tools.pop(call_id, None)

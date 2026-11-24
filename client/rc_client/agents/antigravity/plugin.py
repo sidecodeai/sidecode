@@ -10,7 +10,7 @@ from ..base import SessionRunner
 from ..registry import DetectContext, RunnerSpec
 from . import catalog, errors, opening, runtime
 from .commands import recall
-from .options import EFFORTS
+from .options import EFFORTS, offered_modes
 from .runner import AntigravityRunner
 from .service import AntigravityService
 
@@ -61,7 +61,7 @@ async def detect(context: DetectContext) -> AgentInfo:
         path=path,
         models=list(offered.models),
         default_model=offered.default_model,
-        permission_modes=list(offered.modes),
+        permission_modes=offered_modes(offered.modes),
         default_permission_mode=offered.default_mode,
         efforts=list(EFFORTS),
         default_effort=offered.default_effort,

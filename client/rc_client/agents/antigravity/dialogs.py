@@ -6,7 +6,8 @@ questions with an `elicitation/create` form, raised as one `question` block. `ag
 close a request that Stop or the end of the turn left open, and ignores an answer that comes after,
 so the device expires every card itself when the turn ends, whatever ended it. A read `agy` asks for
 of a file the device wrote for this session's own message is allowed by the device and raises no
-card (4.8, A49).
+card (4.8, A49), and so is every request of a session in the device's own Bypass permissions, a
+sub-agent's forwarded one included, while questions still go to the person (A67).
 """
 
 from __future__ import annotations
@@ -40,6 +41,10 @@ WAITING = frozenset({"needs_approval", "needs_input"})
 
 Respond = Callable[[Any, dict[str, Any]], Awaitable[None]]
 RespondError = Callable[[Any, int, str], Awaitable[None]]
+# Whether the session is in Bypass permissions now, asked as each request arrives (A67).
+Approves = Callable[[], bool]
+# The id `agy` knows the session by, once it has one: only a request naming it is approved.
+SessionId = Callable[[], str | None]
 
 
 @dataclass(slots=True)
@@ -61,11 +66,18 @@ class Dialogs:
     """The open approvals and questions of one Antigravity session."""
 
     def __init__(
-        self, channel: SessionChannel, respond: Respond, respond_error: RespondError
+        self,
+        channel: SessionChannel,
+        respond: Respond,
+        respond_error: RespondError,
+        approves: Approves = lambda: False,
+        session_id: SessionId = lambda: None,
     ) -> None:
         self._channel = channel
         self._respond = respond
         self._respond_error = respond_error
+        self._approves = approves
+        self._session_id = session_id
         self._cards: dict[str, _Card] = {}
         self._waits: set[asyncio.Task[None]] = set()
 
@@ -92,6 +104,12 @@ class Dialogs:
         allow = next((option["id"] for option in offered if option["style"] == "primary"), None)
         if allow is not None and self._reads_own_file(call):
             await self._respond(agy_id, {"outcome": {"outcome": "selected", "optionId": allow}})
+            return
+        once = _allow_once(params.get("options"))
+        if once is not None and self._names_this_session(params) and self._approves():
+            # A67: nobody is asked; the tool shows as its row as it always does.
+            log.debug("approved a tool for a session in Bypass permissions")
+            await self._respond(agy_id, {"outcome": {"outcome": "selected", "optionId": once}})
             return
         if not offered:
             log.warning("agy asked for an approval with no option the device offers")
@@ -225,6 +243,11 @@ class Dialogs:
             with contextlib.suppress(asyncio.CancelledError):
                 await wait
 
+    def _names_this_session(self, params: dict[str, Any]) -> bool:
+        """Whether a request is this session's by the id `agy` sent it under; none is no one's."""
+        session_id = self._session_id()
+        return session_id is not None and params.get("sessionId") == session_id
+
     def _reads_own_file(self, call: dict[str, Any]) -> bool:
         """Whether the call is `agy`'s own `read_file` of this session's files alone (A49)."""
         if call.get("kind") not in (None, "read") or call.get("name") not in (None, "read_file"):
@@ -238,6 +261,16 @@ class Dialogs:
             paths.append(place.get("path") if isinstance(place, dict) else None)
         session_id = self._channel.session.session_id
         return bool(paths) and all(is_session_file(session_id, path) for path in paths)
+
+
+def _allow_once(options: Any) -> str | None:
+    """The id of `agy`'s allow-once option, whatever else it offers."""
+    for option in options if isinstance(options, list) else []:
+        if not isinstance(option, dict) or option.get("kind") != "allow_once":
+            continue
+        if option.get("optionId"):
+            return str(option["optionId"])
+    return None
 
 
 def _options(options: Any) -> list[dict[str, str]]:

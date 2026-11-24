@@ -83,7 +83,13 @@ class AntigravityRunner:
         # Whether the conversation has taken a prompt: until then `agy` keeps nothing of it.
         self._prompted = opening.kind != "new"
         self._translator = Translator()
-        self._dialogs = Dialogs(self.channel, self._respond, self._respond_error)
+        self._dialogs = Dialogs(
+            self.channel,
+            self._respond,
+            self._respond_error,
+            approves=self._approves_itself,
+            session_id=lambda: self._session_id,
+        )
         self._record = Record(self.channel.registry, lambda: self._session_id)
         self._turns = TurnFlow(
             self.channel,
@@ -120,6 +126,13 @@ class AntigravityRunner:
         before the conversation took its first prompt: until then a new process could not open it.
         """
         return self._prompted and not self._translator.lingering()
+
+    def _approves_itself(self) -> bool:
+        """Bypass permissions (A67), unless an `agy` the device did not start may have the
+        conversation open (4.4): then the person is asked, whether or not the device has been able
+        to give the conversation up yet."""
+        held = self._service.holding.open_elsewhere(self.entry.session.session_id)
+        return self._settings.bypassing and not held
 
     @property
     def supports_steer(self) -> bool:

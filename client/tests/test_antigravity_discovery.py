@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from rc_client.agents.antigravity import catalog, plugin, runtime, usage
-from rc_client.agents.antigravity.options import FALLBACK_MODES, Running
+from rc_client.agents.antigravity.options import BYPASS, FALLBACK_MODES, Running
 from rc_client.agents.registry import DetectContext
 from rc_client.models import Choice
 from tests.agy_helpers import fake_agy
@@ -138,6 +138,7 @@ async def test_an_agy_too_old_is_still_available_with_its_version(
 async def test_a_device_agents_reply_matches_the_worked_example(
     agy: tuple[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    worked = load_fixture("objects/agent.antigravity.json")
     catalog.remember(
         Running(
             models=[
@@ -148,7 +149,7 @@ async def test_a_device_agents_reply_matches_the_worked_example(
             model="gemini-4-neon",
             levels=("low", "medium", "high", "xhigh"),
             effort="high",
-            modes=list(FALLBACK_MODES),
+            modes=[Choice(mode["id"], mode["label"]) for mode in worked["permission_modes"]],
             mode="default",
         )
     )
@@ -156,9 +157,9 @@ async def test_a_device_agents_reply_matches_the_worked_example(
     info = await plugin.detect(QUOTA)
     produced = info.to_dict()
     produced["path"] = "/Users/me/.local/bin/agy"
-    assert_round_trip(
-        produced, load_fixture("objects/agent.antigravity.json"), OPTIONAL_AGENT_FIELDS
-    )
+    # The example is A64's: the device's own Bypass permissions follows `agy`'s modes (A67).
+    modes = [*worked["permission_modes"], BYPASS.to_dict()]
+    assert_round_trip(produced, {**worked, "permission_modes": modes}, OPTIONAL_AGENT_FIELDS)
 
 
 async def test_a_reading_is_held_a_minute_and_never_taken_on_a_timer(
