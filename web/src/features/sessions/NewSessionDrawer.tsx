@@ -196,7 +196,12 @@ function NewSessionForm({ devices, presetDeviceId, onClose }: FormProps) {
           align="start"
           disabled={devices.length === 0}
           value={deviceId}
+          // Another device starts the agent and its options over, and an
+          // untouched path with them. The device already chosen changes
+          // nothing: the path its home listing filled in stays, since that
+          // listing is not asked for again.
           onSelect={(id) => {
+            if (id === deviceId) return;
             setDeviceId(id);
             setPickedAgent(null);
             setOptions({});

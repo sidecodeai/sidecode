@@ -5,7 +5,7 @@
  * with it when the user clicks inside it.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { NewSessionDrawer } from '../src/features/sessions/NewSessionDrawer';
@@ -82,6 +82,33 @@ describe('NewSessionDrawer', () => {
 
     await userEvent.click(rows[1]!);
     expect(trigger).toHaveAccessibleName('Device, ci-runner-01, online');
+  });
+
+  it('changes nothing when the device it is on is picked again', async () => {
+    renderDrawer();
+    const path = screen.getByRole('textbox', { name: strings.newSession.workingDirectory });
+    // The home listing fills the path in; the reader has not touched it.
+    await waitFor(() => expect(path).toHaveValue('/Users/me'));
+    const codex = screen.getByRole('button', { name: /Codex/ });
+    await userEvent.click(codex);
+    await userEvent.click(screen.getByRole('switch', { name: strings.newSession.speed }));
+
+    const trigger = screen.getByRole('button', { name: labelled(strings.newSession.device) });
+    await userEvent.click(trigger);
+    await userEvent.click(screen.getByRole('option', { name: /mac-studio-office/ }));
+
+    // No listing is asked for again, so the path stays, and so do the agent
+    // and its options.
+    expect(path).toHaveValue('/Users/me');
+    expect(codex).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('switch', { name: strings.newSession.speed })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('button', { name: new RegExp(strings.newSession.start) })).toBeEnabled();
+
+    // Another device starts them over, from its own listing.
+    await userEvent.click(trigger);
+    await userEvent.click(screen.getByRole('option', { name: /ci-runner-01/ }));
+    expect(screen.queryByRole('switch', { name: strings.newSession.speed })).not.toBeInTheDocument();
+    expect(vi.mocked(rpc)).toHaveBeenCalledWith('device.dirs', { device_id: 'dev-ci' });
   });
 
   it('closes an open list alone on Escape, keeping the drawer, the choice and the focus', async () => {
