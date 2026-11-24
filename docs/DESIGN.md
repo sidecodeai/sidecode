@@ -436,7 +436,9 @@ Build (`grok`), pi (`pi`) and Antigravity (`antigravity`, A64), and the apps nam
 an id nobody knows renders as itself. Cursor was withdrawn (protocol A26) until it can be exercised
 against a signed-in Cursor. Antigravity is the one agent supported without terminal takeover
 ([ANTIGRAVITY.md](ANTIGRAVITY.md)): it has no Take over, no Rename, no plan card and no todos, its
-plan mode is only a permission mode, and its titles are the ones `agy` writes.
+plan mode is only a permission mode, and its titles are the ones `agy` writes. After `agy`'s own
+permission modes comes the device's Bypass permissions (A67), in which the device approves every
+tool itself and no approval card is shown, as in Claude Code's.
 
 **The mark is the agent's own logo.** Where an agent is shown by something smaller than its name
 — the agent control of the new-session form, the filter menu, the chip on a session row, a
@@ -1225,7 +1227,7 @@ view the same way.
   a Codex prompt on the shared daemon can offer four — Allow, Allow for this session, Always allow
   commands like this, Deny — and they stack between the primary and the danger button, wrapping
   inside the card on a phone; an Antigravity prompt offers Allow and Deny, and Deny ends the turn
-  (A64). Nothing in the UI counts them.
+  (A64), and none is shown in its Bypass permissions (A67). Nothing in the UI counts them.
 - Questions support several questions at once, single or multiple choice, free text, and secret
   fields. A secret field says "Value is not stored or logged".
 - **A question is answered where you are.** On an attached Claude Code session the terminal shows

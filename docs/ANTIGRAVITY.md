@@ -25,6 +25,19 @@ PROTOCOL.md wins.
   the usage query afresh; only a window it reports used up ends the turn with `limit`, and the
   resume then goes as it does for Claude Code and Codex, off until the person turns the account's
   switch on.
+- **Bypass permissions (A67), the device's own mode.** `agy`'s only switch for a mode that asks
+  nobody, `--dangerously-skip-permissions`, is a flag of the whole `agy acp` process, which the
+  device does not use. After `agy`'s own modes the device offers `device-bypass-permissions`
+  "Bypass permissions": the session runs `agy` in `accept-edits`, and the device answers every
+  permission request of the session, a sub-agent's forwarded one included, with `agy`'s allow-once
+  option, raising no card, as Claude Code's Bypass permissions shows none. Questions still go to
+  the person, a card open when the session switches stays for the person, and switching to another
+  mode ends it at once. The mode is kept across new processes and is never a default. Unlike
+  `agy`'s own flag, it approves whatever `agy` asks about; only the person's own deny rules in
+  `agy` still refuse first. It approves only a request naming the session, and asks the person
+  while an `agy` the device did not start may have the conversation open. A request without
+  `agy`'s allow-once option is answered cancelled with no card, as A64 answers it in every mode: the
+  device never picks an option that grants more, such as always-allow.
 - **No terminal takeover.** `agy` offers a client no way into a terminal and tells it nothing about
   another holder, so the device errs towards holding: a conversation that an `agy` it did not start
   names, or whose directory such an `agy` runs in, is read-only until that `agy` quits. One known
@@ -58,9 +71,9 @@ generic letter stays for an agent nobody knows.
 | Send, Up next, editing a queued message (A43) | Rename: `/title` and `/rename` reach the model as text |
 | Steering a running turn, except while one of its approvals or questions is open, when the message is queued | Close for an `agy` running in a terminal (`close_terminal`) |
 | Attachments: images, text files and any other file | Plan cards: plan mode is a permission mode, and `agy` writes its plan as a file |
-| Approvals with Allow and Deny only; Deny ends the turn | Todos: `agy` sends no plan updates |
+| Approvals with Allow and Deny only; Deny ends the turn; none in Bypass permissions (A67) | Todos: `agy` sends no plan updates |
 | Questions: one card of up to four, each answered by its options or by words | Speed tiers |
-| Stop; model, effort (set per model) and permission mode, as `agy` offered them to the newest session the device opened | |
+| Stop; model, effort (set per model) and permission mode, as `agy` offered them to the newest session the device opened, and the device's own Bypass permissions (A67) | |
 | `agy`'s slash commands, with name and description | |
 | Titles `agy` writes, history, tokens and context, quota meters on the device page, the A35 resume | |
 | Close for a session the device drives, unread marks and pushes, the task board, dictation | |
@@ -87,8 +100,8 @@ gateway it enrols with. A test account on the gateway does not protect those con
   session's queue while a terminal holds it, accepts edits to it and drains it once the device
   holds the session again (`sessions/hub.py`, `sessions/idle.py`,
   `client/tests/test_queue_while_held.py`).
-- **Protocol.** A64 in `protocol/PROTOCOL.md` and the sections it names;
-  `protocol/fixtures/objects/agent.antigravity.json` and
+- **Protocol.** A64 and A67's Bypass permissions in `protocol/PROTOCOL.md` and the sections they
+  name; `protocol/fixtures/objects/agent.antigravity.json` and
   `protocol/fixtures/app/reply.error.antigravity-signed-out.json`; the `antigravity` and `google`
   examples in `protocol/schema/objects.json`; the fixture's entry in
   `protocol/scripts/validate_fixtures.py`.
@@ -110,8 +123,8 @@ gateway it enrols with. A test account on the gateway does not protect those con
    delete each one nobody else uses, with the daemon's and the hub's calls into it. The release that
    does so withdraws, with `session.removed`, the Antigravity conversations a device still has, so
    no client keeps a row nothing can open.
-2. **Protocol.** Withdraw the id in a new amendment, as A26 withdrew Cursor, and delete the two
-   fixtures with their schema and validator entries.
+2. **Protocol.** Withdraw the id in a new amendment, as A26 withdrew Cursor (A64 and A67 stay as
+   history), and delete the two fixtures with their schema and validator entries.
 3. **Web.** Delete the name, the vendor label, the mark, the demo entries and their tests.
 4. **Docs.** The passages above, this file last. `rg -il 'antigravity|\bagy\b'` should then find
    only the amendment history in `protocol/PROTOCOL.md`.
