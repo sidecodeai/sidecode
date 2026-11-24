@@ -100,7 +100,12 @@ refused with). With the default policy that is `not_allowed` for an account that
 where `enabled` is `false` too, so the entry stays hidden. A policy that bills its calls can say
 `enabled` for every signed-in account and give `subscription_required`, `quota_exceeded` or
 `billing_not_configured` as the reason, so that the panel can tell the account why instead of
-offering Start. The status is for the panel; the check at the socket is what enforces.
+offering Start. The status is for the panel; the check at the socket is what enforces. Since A65
+it also carries `provider_name`, from `LIVE_PROVIDER_NAME` in the gateway's `.env`: the name of the
+third-party AI speech service, plain text of at most 40 characters, absent when unset, which the
+apps put into the permission screen and the Settings sentence. A gateway that bills its calls
+offers no assistant whose provider has no name: `ClosedPolicy` then answers `enabled: false`,
+`available: false`, `reason: "not_allowed"`.
 
 ### Gateway to the Live API
 
@@ -501,6 +506,13 @@ says `enabled`. The status (`useLiveStatus.ts`) is asked once per page load for 
 answer that was a failure is not kept, one account's answer is never taken for another's, and a
 call is offered only by an answer that says `available: true`: one with `enabled` alone gets the
 generic note, "not enabled for this account", and no Start.
+
+Before its first call for each gateway and account the web asks the person's permission, in the
+words frozen in `protocol/PROTOCOL.md` 8.1 (A1 to A11), naming the service the status names, and
+Settings › Voice gains the **Voice assistant** switch that withdraws it and ends an open call (A65);
+the permission lives in the browser's local storage under the account, as `<text version>|<provider
+name>`, and goes at sign-out. The screen comes back when its words change and when the gateway
+reports another provider name.
 
 An account that is offered the assistant but cannot have a call now (`enabled`, not `available`,
 which only a policy that bills its calls says) gets the panel with the reason in place of Start (and

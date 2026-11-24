@@ -12,7 +12,10 @@ a sentence, without the native apps' internals.
 
 ## The three screens
 
-**Add device.** A modal over the Devices list: one sentence of explanation, the full one-liner in a
+**Add device.** A modal over the Devices list: one sentence of explanation, then the line about
+where messages go (PROTOCOL.md 8.1, X2: the coding agent sends them to its own AI provider under the
+person's account, and SideCode sends them to an AI service only for the AI features the person turns
+on, each of which asks first, A65), the full one-liner in a
 monospace block with a Copy button, and below it the pairing code marked "single use" with its
 expiry countdown. There is no platform to choose: the installer tells macOS from Linux itself
 (`uname`), so the command is the same on both, and a control whose answer changes nothing is a
@@ -282,8 +285,8 @@ caption:
 | --- | --- |
 | **Account** (its section's rows) | **Users** (admin role) — "Accounts on this gateway, and whether anyone can create one." · **Change password** (every account but the built-in `admin`) — "The current password and the new one." · **Sign out** — "Cached sessions and drafts leave this device. Nothing changes on your machines." |
 | **While you're away** | **Notify me** — "Which device and session needs you, and nothing else." · **Resume after the limit resets** (A35) — "When Claude Code, Codex or Antigravity stops at a usage limit, the device continues the session a minute after the limit resets." |
-| **Voice** | **Transcribe** — on the phone a menu, On this iPhone or Gateway, with the chosen backend's own sentence ("Audio is streamed to your gateway, which recognises the language itself." for Gateway); on the web, which only transcribes on the gateway, the word Gateway and "Your gateway transcribes and recognises the language itself.", or "This gateway has no transcription service configured." · **Dictation language** (the phone, only while it recognises speech itself, A44) — "The language you speak. The recogniser on this iPhone listens for one at a time." · **Polish dictation with AI** — "Sends what you dictated and the last few messages to this gateway's model. Nothing is sent while it is off." · while it is on, **Model** — "From the list this gateway serves." and **Strength** — "Moderate cleans up. Strong also restructures and resolves references." |
-| **Reading** | **Language** — "The app's own words only; what the agent wrote stays as written." · **Detail** — "Simple shows only what is written to you. Detailed adds thinking, tool calls and the task list." · **Task board** (where the gateway reports `board`, A62) — a switch under "Lists what you asked for in each conversation, what is being done and what is left. For conversations you opened in the last 7 days, recent messages go through this gateway to a third-party AI model after each round and when you open them. Tool output is not sent. Nothing is sent while it is off, and turning it off deletes every board." It shows the account's stored `task_board`; turning it off is always possible while it is on, whatever `board.enabled` says, and asks nothing; turning it on shows the disclosure first and happens only when the account can use the board (§ "The task board") |
+| **Voice** | Every sentence below that names a recipient has the named form of PROTOCOL.md 8.1, with the gateway's `provider_name`, and the unnamed form, quoted here, where the gateway names none (A65). **Transcribe** (the phones) — a menu, On this iPhone or Gateway, with the chosen backend's own sentence ("Audio is streamed to the gateway you connect to and passed to a third-party speech recognition service, which recognises the language itself." for Gateway, D12/D13); choosing Gateway shows the dictation permission first, and choosing the device withdraws it · **Dictation** (the web, which only transcribes on the gateway, in place of a Transcribe row that offers no choice there) — a switch that reads the dictation permission, under "Sends the audio of each dictation through this gateway to a third-party speech recognition service. Nothing is sent while it is off." (D15/D16); turning it on shows the permission first, off withdraws it; where the gateway does not transcribe and no permission is held it is drawn disabled with "This gateway has no transcription service configured." · **Dictation language** (the phone, only while it recognises speech itself, A44) — "The language you speak. The recogniser on this iPhone listens for one at a time." · **Polish dictation with AI** — "Sends what you dictated and the last few messages through this gateway to a third-party AI model. Nothing is sent while it is off." (P9/P10); the switch reads on only while this device holds the polish permission, and turning it on shows the permission first · **Voice assistant** (drawn while the gateway offers the assistant to the account and while the permission is held, so it can always be withdrawn) — a switch under "Talk to an assistant about your sessions. Sends your voice and what the assistant reads from your sessions through this gateway to a third-party AI speech service during a call. Nothing is sent while it is off." (A10/A11) · while polish is on, **Model** — "From the list this gateway serves." and **Strength** — "Moderate cleans up. Strong also restructures and resolves references." |
+| **Reading** | **Language** — "The app's own words only; what the agent wrote stays as written." · **Detail** — "Simple shows only what is written to you. Detailed adds thinking, tool calls and the task list." · **Task board** (where the gateway reports `board`, A62) — a switch under "Lists what you asked for in each conversation, what is being done and what is left. For conversations you opened in the last 7 days, recent messages go through this gateway to a third-party AI model after each round and when you open them. Tool output is not sent. Nothing is sent while it is off, and turning it off deletes every board." (B8/B9: named with the gateway's `provider_name`, A65) It shows the account's stored `task_board`; turning it off is always possible while it is on, whatever `board.enabled` says, and asks nothing; turning it on shows the disclosure first and happens only when the account can use the board (§ "The task board") |
 
 The versions close the caption that closes Settings (below), in the tertiary ink, and are not a
 group: `SideCode 1.5.1 · Gateway 1.5.0 · Protocol v1` on the phone, which is installed apart from
@@ -794,7 +797,8 @@ the permission-mode picker. The dictation language is offered only where the pho
 speech itself — Transcribe set to On this iPhone, or Gateway on a gateway with no transcription
 service, which falls back to the phone. There the list is the recogniser's languages with no
 Automatic, because the phone's recogniser cannot detect a language and listens for the one it is
-given; Chinese until the person picks another. The gateway's providers detect the language
+given; the language of the app's interface until the person picks another (A66), which the app
+writes up to the account on its first connect. The gateway's providers detect the language
 themselves, so gateway dictation — the web always, the phone set to Gateway — has nothing to
 choose and draws no language control, in the composer or in Settings.
 
@@ -1670,6 +1674,31 @@ The conversation the model sees is what the app already shows — the last few u
 messages, trimmed — and it goes to the operator's provider only when the switch is on, which the
 row's own sentence says in plain words.
 
+**Asking before anything leaves for an AI service (A65).** Gateway transcription, polish, the voice
+assistant and the task board each ask once per gateway and account, on a screen of their own, before
+they first send anything, and the screen names the recipient the gateway reports. The words are
+frozen in PROTOCOL.md 8.1 (D, P, A and B lines) and every client draws them as they are: a title, a
+one-sentence lead, three bullets — what is sent and when, who receives it, what comes back — how to
+stop, and **Agree and continue** over **Not now**. The web draws the screen as a dialog, as it draws
+the voice assistant's. The screen appears where the person asks for the feature — choosing Gateway
+under Transcribe on a phone, turning polish on, the first press of the microphone on the web, the
+first call, enabling the board — and, for a phone upgraded with Gateway already chosen or a device
+that meets polish turned on elsewhere, at the next dictation, before anything is recorded or
+polished; Not now there switches Transcribe back to the device, or keeps the words as dictated.
+Withdrawing is the same control turned back: Transcribe to the device, a switch off. Signing out
+clears what the device agreed; the board's permission is the account's and stays.
+
+**A dictation that cannot start says why, and stays (A66).** On a phone a press of the microphone
+always answers: it records, asks for a permission, or shows a notice above the composer that keeps
+its reason on screen until the person closes it or uses its action — never a toast that fades. A
+language the device cannot recognise names the language and offers **Change language**, and **Use
+gateway transcription** beside it where the gateway transcribes; dictation turned off on the device,
+or a permission refused, offers **Open Settings**; an unavailable recogniser offers **Retry**. On
+every client a press during a voice assistant call says the call holds the microphone and offers
+**Hang up**. The words are PROTOCOL.md 8.1's N lines. While the account has no dictation language,
+the phone listens for the language of the app's interface, so a person who reads the app in English
+is heard in English from the first press.
+
 ### The screen stays awake in a conversation
 
 On the phone, while a conversation is on screen and the app is in the foreground, the idle timer is
@@ -1774,17 +1803,20 @@ only when the account can use the board, which is when the gateway reports `boar
 gateway without boards the off switch is drawn disabled with the unsupported note, and nothing ever
 writes `task_board: true` there.
 
-**The disclosure.** Before the board is turned on, from Enable or from the switch, one sheet with one
-wording for every gateway: **Turn on the task board?**, the lead "The task board lists what you
-asked for in a conversation, what is being done and what is left, so you don't have to read it all
-again.", three bullets — what it sends ("For conversations you opened in the last 7 days, recent
-messages (yours, the agent's replies, the names of the tools it ran and its errors) go through this
-gateway to a third-party AI model after each round and when you open them. Tool output is not
-sent."), what it keeps ("The gateway keeps the task list, not the messages. It deletes the list
-when the conversation, the device or the account is deleted, when you turn the board off, or when
-the conversation has not been opened for 30 days.") and a caution ("Replies can include anything an
-agent printed, such as secrets. The list is made by AI and can be wrong.") — and **Agree and
-continue** and **Not now**.
+**The disclosure.** Before the board is turned on, from Enable or from the switch, one sheet in the
+words of PROTOCOL.md 8.1 (B1 to B7): **Turn on the task board?**, the lead "The task board lists
+what you asked for in a conversation, what is being done and what is left, so you don't have to
+read it all again.", four bullets — what it sends and to whom ("For conversations you opened in the
+last 7 days, recent messages (yours, the agent's replies, the names of the tools it ran and its
+errors) go through this gateway to a third-party AI model chosen by this gateway's operator after
+each round and when you open them. Tool output is not sent.", or the named form with the gateway's
+`provider_name`, A65), what it keeps ("The gateway keeps the task list, not the messages. It
+deletes the list when the conversation, the device or the account is deleted, when you turn the
+board off, or when the conversation has not been opened for 30 days."), a caution ("Replies can
+include anything an agent printed, such as secrets. The list is made by AI and can be wrong.") and
+whose permission it is ("This permission is your account's, on every device, because the gateway
+makes the boards. Signing out does not withdraw it; turning the board off in Settings does, and
+deletes every board.") — and **Agree and continue** and **Not now**.
 
 **On each app.** The web draws the panel as a popover from the chip, aligned to its end, about
 360 px wide and at most 60 % of the window's height, scrolling, and full width under the header on a
